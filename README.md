@@ -98,7 +98,8 @@ say so. Create the branch, compute the deadline, write `run.json`, report the pl
    exactly one change, so a red gate is never ambiguous.
 4. **Verify** - see below. This is most of the skill.
 5. **Report** on the hour.
-6. **Re-arm** for the next cycle, or, at the deadline, write the final summary and stop.
+6. **Re-arm** for the next cycle - whatever the backlog looks like - or, once the clock
+   says the deadline has passed, write the final summary and stop.
 
 ## How a change is proven
 
@@ -209,8 +210,23 @@ same depth. It escalates one tier at a time, announcing each escalation in the r
 | **T3 Structure** | coupling hotspots, oversized files, dead code, drift from documented conventions |
 | **T4 Refactors** | deeper structural change, with a ~400-line diff ceiling above which the work is written up as a proposal instead of applied |
 
-Genuinely dry at T4 means the run has done its job. It says so and idles; it does not
-manufacture work.
+Running out of queued work is never the end of a run - only the clock is. When T4 is dry,
+the loop keeps the same bar and changes where it looks: the files its own commits touched,
+then directories no finder has been aimed at, then lanes preflight switched off on a guess,
+then the proposed pile. Only when all of that finds nothing does it say the run is dry, and
+even then it keeps re-arming and sweeping until the deadline rather than writing its final
+report early. It never manufactures work.
+
+## Time
+
+The model running the loop cannot tell how much time has passed; left to itself it counts
+cycles and calls them hours. (A 2h run once wrote "hour 2 of 2 (final)" seventeen minutes
+in.) So `scripts/improve-clock.sh` is the only thing that decides: it reads `run.json` and
+the system clock and prints elapsed, remaining, the hour label, whether a report is due,
+and exits `10` once the deadline has passed. Every cycle runs it first; every report copies
+its hour; nothing but that exit status ends a run on time. The other ways a run ends - you
+say stop, or a halt condition fires - write a `HALTED` report with the time left, never a
+`FINAL` one.
 
 ## Reports
 
@@ -447,6 +463,7 @@ See `max/SKILL.md`, `max/references/bets.md` and `max/references/characterizatio
     references/finder-briefs.md     per-lane, per-tier briefs for the read-only finders
     references/ledger.md            .improve/ schema and jq recipes
     references/report-format.md     the hourly and final report
+    scripts/improve-clock.sh        the only authority on elapsed and remaining time
     scripts/improve-daemon.sh       the out-of-session runner (--skill improve | improve-max, --args for skill parameters)
     max/SKILL.md                   the /improve-max contract - what it may do beyond /improve, and the proof each needs
     max/references/bets.md         the bet schema, spike protocol, kill criteria
