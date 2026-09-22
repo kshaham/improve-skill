@@ -34,6 +34,10 @@ Same content, three deliveries: terminal block, `PushNotification` headline, and
 
 Rules for this block:
 
+- The `hour 3 of 4` in the header is the `hour` line of `improve-clock.sh`, copied, never
+  counted. A report is written only when the clock says `report ... is due`; cycles in
+  between write nothing but a one-line journal entry at most.
+
 - Rejections and benched areas are as prominent as successes. If the hour landed nothing,
   the report says "landed nothing this hour" as its first line and explains why.
 - Rejection reasons quote the gate's actual output, never a paraphrase.
@@ -67,6 +71,16 @@ restart or a context compaction, and it is what the human reads afterwards to de
 the branch is worth merging.
 
 ## The final report
+
+Written only when `improve-clock.sh` exits `10`, and it opens with the clock's output so the
+reader can see the deadline had passed:
+
+    IMPROVE - FINAL - improve/2026-09-05 - tier 2
+    deadline 2026-09-05T18:03:00Z, now 2026-09-05T18:04:12Z, ran 4h01m of 4h
+
+A run that ends for any other reason writes a `HALTED` report instead, never `FINAL`, and
+leads with how much time was left and why: `HALTED at 16:41Z, 1h22m before the deadline:
+the iOS simulator stopped booting (gate unavailable)`.
 
 At the deadline, add: total commits, the branch name, the one-line diffstat, every `proposed`
 item in full, and the exact commands to review or discard:
