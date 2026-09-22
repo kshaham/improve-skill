@@ -91,6 +91,10 @@ The parent's rules split into two groups here. These stay, without exception:
   under the same mutation that made the original go red - and the ledger records the
   mapping. This is the rule most tempting to bend during a rewrite and it is the one that
   keeps a rewrite honest.
+- **The clock decides when the run ends.** The parent's `scripts/improve-clock.sh` and its
+  exhaustive stop list apply unchanged over days: a bet killed, a queue emptied, or a
+  target met without `--stop-at-target` is a reason to run the parent's cycle, never to
+  write the final report with time on the clock.
 
 These are lifted, each with the condition that replaces it:
 

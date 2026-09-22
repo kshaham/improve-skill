@@ -6,8 +6,9 @@ metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus) in plan mode
   created: 2026-09-05
   origin: Designed to spec in the ~/Code/bonsai session (plan shimmying-roaming-goose.md); daemon added 2026-09-06 after the first 6h run hit ENOSPC
-  version: 1.2.0
+  version: 1.3.0
   changelog: |
+    1.3.0 (2026-09-22) - the run lasts until the deadline: scripts/improve-clock.sh is the only authority on time, an empty backlog is a refill not a finish, an exhaustive list of stop conditions, dry-at-T4 keeps sweeping new ground instead of idling out
     1.2.0 (2026-09-17) - six new lanes (gate-speed, concurrency, resilience, docs always; accessibility, contracts when detected), lane rotation under the finder cap, benchmark-harness-first rule for performance
     1.1.0 (2026-09-17) - gate signal counts, counter-scenario check, interleaved performance measurement, scanner baseline in the security lane, usage-limit backoff in the daemon
 ---
@@ -36,6 +37,12 @@ and they outrank throughput:
 2. **Every report is honest.** A cycle that found nothing says so. Padding an hourly report
    with cosmetic churn to look productive is the defining failure mode of this skill, and it
    is worse than an idle hour because it costs review attention and buries the real work.
+3. **The run lasts until the deadline.** The duration is the user's instruction, not an
+   estimate. An empty backlog is a reason to look harder, not a reason to stop, and a run
+   that writes its final report early has failed at the one thing it was asked to do - as
+   surely as one that commits an unverified change. This has happened: a 2h run wrote
+   "hour 2 of 2 (final)" seventeen minutes in, and a 3h run wrote FINAL fifty minutes early
+   with "tier 1 throughout", both because the queue they started with had run out.
 
 ## Hard rules
 
@@ -70,6 +77,51 @@ Read `run.json` and `backlog.jsonl` at the start of **every** cycle. Never carry
 only in your context - assume you will be compacted mid-run. See `references/ledger.md` for
 the schema and the jq recipes.
 
+**Entry is resumption first.** Every invocation, including every wakeup, starts by checking
+for `.improve/run.json` with no `outcome`. If there is one, this is the same run: skip
+preflight, keep the recorded deadline, and go to the cycle - whose first step is the clock,
+so a run whose deadline passed while nobody was looking gets its final report there.
+Never recompute a deadline from the duration in the prompt when a run is in progress - the
+wakeup prompt repeats the original duration verbatim, and recomputing from it silently turns
+a 2h run into an unbounded one.
+
+## The clock
+
+You cannot tell how much time has passed. You will count cycles, reports, or items and call
+the result hours, and you will be wrong by a large factor - the run that wrote "hour 2 of 2"
+after seventeen minutes had done exactly that. So nothing in this loop reasons about time.
+It asks:
+
+    ~/.claude/skills/improve/scripts/improve-clock.sh <repo>
+
+It prints now, elapsed, remaining, the wall-clock hour, whether an hourly report is due,
+and exits `0` while the deadline is in the future and `10` once it has passed. Run it:
+
+- at the start of **every** cycle,
+- before writing any report, hourly or final - the hour label is the one it prints,
+- before deciding an item is too large for the time left,
+- before deciding whether to re-arm.
+
+**Only exit `10` ends the run on time.** Writing "final", "at the deadline", "N minutes
+left" or "hour N of M" without the script's output in front of you is the failure this
+section exists to prevent. If the script is unavailable, compute the same numbers with
+`date -u` against `run.json` and show the arithmetic; never estimate.
+
+## When the run stops
+
+This list is exhaustive. Anything not on it is a reason to keep working.
+
+1. **The clock says the deadline has passed** (`improve-clock.sh` exits `10`).
+2. **The user says stop.**
+3. **A halt condition fires:** a gate becomes unavailable, or three consecutive rejections
+   across all areas (see Stop-loss). A halt is reported as a halt, with the time remaining -
+   `HALTED at 22:41Z, 1h24m before the deadline, because ...` - never as a finished run.
+
+Not on the list, and each one has ended a run early before: the backlog is empty; the items
+seeded at launch are all done; every lane in the user's scope has been scanned once; the
+remaining item looks too large; the hour's report has been written; the work so far feels
+like a complete story.
+
 ## Preflight - once, at launch
 
 1. Resolve the target repo and confirm it is a git repository.
@@ -86,17 +138,32 @@ the schema and the jq recipes.
    holds both a server and a client of it, or a client of a server whose schema is in the
    tree (an OpenAPI file, generated types, a shared models package). Record the active list
    and the reason for each conditional one in `run.json`; a lane switched off is stated
-   once in the first report and not revisited.
+   once in the first report and not revisited, except by the dry sweep (see Escalation).
+   Record whether each was switched off by the user or by your own judgement - the sweep
+   treats them differently.
 5. **Establish a green baseline by running them.** If the repo is already red, stop and
    report. You cannot attribute a failure to your change if it was failing before you
    started, and a loop that begins on red will thrash.
 6. Create `improve/<YYYY-MM-DD>`, record the baseline commit SHA.
-7. Compute the deadline from the duration. Write `run.json`.
-8. Report the plan: gates discovered, baseline state, deadline. Then begin cycle 1.
+7. Compute the deadline from the duration with `date -u`, not in your head. Write
+   `run.json`, then run `improve-clock.sh` and check it prints the duration you were given.
+8. Report the plan: gates discovered, baseline state, deadline (as the clock prints it).
+   Then begin cycle 1.
 
 ## The cycle
 
+### 0. Read the clock
+
+Run `improve-clock.sh`. Exit `10`: go to the final report. Otherwise carry its `remaining`
+and `report` lines through the cycle.
+
 ### 1. Refill, when fewer than 5 items are `ready`
+
+Check the count after **every** item, not once per cycle: the moment it drops below 5,
+dispatch the finders. A queue seeded at launch - from a previous run's `proposed` pile, from
+the user's list - does not count as a refill and does not exempt the run from one. It is
+the most common way a run reaches an empty queue with no finders in flight and mistakes
+that for being finished.
 
 **Dispatch the finders in the background and keep fixing while they run.** They are read-only,
 so they cannot collide with the serial edit in the main session, and blocking on them is the
@@ -271,6 +338,11 @@ producing nothing.
 
 ### 5. Report on the hour
 
+"The hour" is a wall-clock hour since `started_at`, as the clock prints it. A cycle whose
+clock says `report not due` writes no hourly report, however much it landed - it appends a
+one-line entry to `journal.md` at most. When a report is written, set `last_report_hour` in
+`run.json` to the hour it covers, so the next cycle's clock knows it is done.
+
 **Lead with landed versus proposed.** An item moved to `proposed` is honest work, but a run can
 satisfy every rule in this skill while landing nothing at all - hours of scanning that produce
 only recommendations. That is a legitimate outcome for a hardened codebase and a failure mode
@@ -283,16 +355,26 @@ See `references/report-format.md`. Three deliveries of the same content: termina
 
 ### 6. Re-arm
 
-If now is before the deadline, call `ScheduleWakeup` with `prompt` set to the original
-`/improve <duration> [path]` invocation verbatim, so the next firing re-enters here, and
-`noop: false` if anything landed (`true` if the cycle was genuinely quiet).
+Run the clock. If it exits `0`, **re-arm - whatever the backlog looks like.** Call
+`ScheduleWakeup` with `prompt` set to the original `/improve <duration> [path]` invocation
+verbatim, so the next firing re-enters here (and resumes, per State), and `noop: false` if
+anything landed (`true` if the cycle was genuinely quiet). A cycle that ends with the clock
+at `0` and no wakeup armed has ended the run early, silently, which is worse than ending it
+early with a report.
 
-`delaySeconds` is the minimum the runtime allows (60) whenever items are `ready` - the queue is
-full and every second of delay is a second not spent fixing. Back off to 300 or more only when
-the backlog is dry and a refill is in flight, since there is nothing to do until it lands.
+`delaySeconds`:
 
-At the deadline: final summary, stop, and **do not** re-arm. Tell the user the branch name,
-the commit count, and how to review or discard it.
+- **60** (the minimum) whenever items are `ready` - every second of delay is a second not
+  spent fixing.
+- **300** when the queue is empty and a refill is in flight, since there is nothing to do
+  until it lands.
+- **1200** when the run is in the dry sweep (see Escalation) and the last sweep found
+  nothing - the next one should see a tree that has had time to be looked at differently.
+- Never longer than the clock's `remaining`; if remaining is shorter than the delay, set
+  the delay to remaining so the final report fires on time.
+
+When the clock exits `10`: final summary, stop, and **do not** re-arm. Tell the user the
+branch name, the commit count, and how to review or discard it.
 
 ## Escalation - when the backlog runs dry
 
@@ -309,8 +391,34 @@ skip a tier, and announce every escalation in the hourly report.
   above roughly 400 changed lines is written up as a proposal in the report and left for the
   human rather than applied.
 
-Genuinely dry at T4 means the run has done its job. Say that plainly and idle - do not
-manufacture work.
+**Dry is measured, not felt.** A tier is dry when a full refill at that tier - all four
+finder slots, rotated as step 1 says - returns nothing that survives ranking. Having worked
+through the items you started with is not dry; you have not looked yet.
+
+**Dry at T4 is not the end of the run - change the ground, not the bar.** The quality bar
+does not drop: a finding still needs a file, a line, and what breaks. What changes is where
+the finders look, in this order, one step per dry refill:
+
+1. **The run's own commits.** `git diff <baseline>..HEAD --stat` - every file this run
+   touched has new edges, new callers, and tests that now make neighbouring gaps visible.
+   Point every finder at those files and their direct callers.
+2. **Unscanned ground.** Record each finder's scanned directories in `run.json` under
+   `scanned_paths`. Aim the next refill at the largest directories not yet in that list -
+   by line count, not name. A repo with a scope from the user still has unscanned ground
+   inside the scope.
+3. **Lanes switched off by preflight's guess rather than by the user.** A lane turned off
+   because it "looked irrelevant" (not because the user excluded it, and not because the
+   repo lacks what it needs) gets one scan. Say so in the report.
+4. **The proposed pile.** Re-read every `proposed` item. One that was deferred only for
+   lack of time, or for a gate that has since got faster, is `ready` again; one that
+   needed a human decision stays proposed.
+
+Only when a full pass of all four finds nothing is the run genuinely dry. Say that plainly
+in the report, with the pass as evidence - do not manufacture work - and **keep re-arming**
+at the dry-sweep delay until the clock exits `10`, running one more sweep per wakeup. Code
+you landed an hour ago is ground you have not yet looked at with fresh eyes; a dry sweep
+that turns up one real item in the last hour of a run has paid for every empty one.
+Stopping early is never the honest alternative to padding - idling on the clock is.
 
 ## Cost, and where it goes
 
@@ -349,6 +457,13 @@ build a real coverage profile) can miss the deadline entirely. So:
   Never abandon a change half-applied - an unverified working tree is the one state the
   human cannot cheaply reason about.
 - **Deadline mid-refill:** discard the findings, write nothing, stop.
+- **Backlog empty before the deadline:** refill, then escalate, then sweep (see
+  Escalation). Never a final report.
+- **An item too large for the time left:** read the clock first - the "twenty minutes left"
+  that deferred an item once was really an hour and forty-three. If the clock agrees it is
+  too large (more than about half of `remaining` once its gate cycles are counted), take a
+  smaller item from the queue, or propose it and go to the next. Either way keep working;
+  a large item is never a reason to stop.
 - **User sends a message mid-run:** they outrank the loop. Answer them, do what they ask, and
   only then decide whether to resume. If they say stop, call `ScheduleWakeup` with
   `stop: true` and give the final report.
@@ -360,6 +475,7 @@ build a real coverage profile) can miss the deadline entirely. So:
 
 ## References
 
+- `scripts/improve-clock.sh` - elapsed, remaining, hour label, report due, deadline passed
 - `references/finder-briefs.md` - the per-lane subagent briefs, by tier
 - `references/verification.md` - discovering and recording this repo's gates
 - `references/ledger.md` - `.improve/` schema and jq recipes
@@ -393,8 +509,11 @@ is small but total:
 - **Nothing carries over except `.improve/`.** The next cycle starts with no memory of this
   one and does not see what you printed. This is the arrangement the state files were written
   for; it is the normal case here rather than recovery from compaction.
-- **Past the deadline**, write the final summary, set `outcome` in `run.json`, and stop
-  without starting new work. The daemon stops on its own clock too, but the ledger is what a
+- **Past the deadline** - as `improve-clock.sh` says, not as it feels - write the final
+  summary, set `outcome` in `run.json`, and stop without starting new work. Before the
+  deadline, an empty backlog means this cycle refills or sweeps; it does not write a final
+  summary, because the daemon will launch another cycle and a ledger that says `completed`
+  with time on the clock is a lie the human reads first. The daemon stops on its own clock too, but the ledger is what a
   human reads.
 
 The daemon owns when a cycle starts, when to stop, and what happens when a cycle dies - a
