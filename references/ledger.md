@@ -10,6 +10,9 @@
       "deadline":   "2026-09-05T18:03:00Z",
       "cycle": 7,
       "tier": 2,
+      "last_report_hour": 3,
+      "dry_sweep": 0,
+      "scanned_paths": ["backend/internal/quest", "ios/Bonsai/Feed"],
       "benched_areas": ["performance"],
       "lanes": {
         "active": ["quality","coverage","security","performance","concurrency","resilience","gate-speed","docs","accessibility"],
@@ -29,8 +32,21 @@
       "gate_seconds": { "go.fast": 12, "swift.fast": 95, "swift.batch": 140 },
       "scanners": { "gitleaks": { "cmd": "gitleaks detect ...", "baseline": 0, "seconds": 3 } },
       "guardrails": ["no-migrations", "no-dep-bumps", "no-test-deletion", "no-invariant-rewrite"],
-      "counts": { "done": 11, "rejected": 3, "proposed": 2 }
+      "counts": { "done": 11, "rejected": 3, "proposed": 2 },
+      "outcome": null
     }
+
+`started_at` and `deadline` are ISO-8601 UTC with a `Z`, written from `date -u`, because
+`scripts/improve-clock.sh` reads them and nothing else decides what time it is.
+`last_report_hour` is the wall-clock hour the latest hourly report covered (0 before the
+first); the clock compares it with elapsed time to say whether a report is due.
+`scanned_paths` is every directory a finder has been aimed at this run, which is what the
+dry sweep uses to find ground nobody has looked at. `dry_sweep` is which step of the sweep
+(0 = not dry, 1-4 = the step in SKILL.md's Escalation) the next refill runs.
+
+`outcome` stays `null` while the run is live - that is what marks a run as resumable. It is
+set exactly once: `completed` when the clock has exited `10`, `halted: <reason>` for a halt
+condition, `stopped by user`. Never `completed` while the clock still says `RUNNING`.
 
 ## backlog.jsonl
 
