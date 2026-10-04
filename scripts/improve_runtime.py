@@ -18,7 +18,10 @@ import sys
 import tempfile
 import time
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
+HOST_MARKERS = {"codex": ("CODEX_THREAD_ID", "CODEX_CI"),
+                "claude": ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
+SANDBOX_MODES = ("read-only", "workspace-write", "danger-full-access")
 INTAKE_KEYS = ("outcomes", "features", "ui", "assets", "performance", "bugs",
                "security", "quality", "boundaries", "success")
 LIMIT_PATTERN = re.compile(r"hit your (usage )?limit|usage limit reached|rate_limit_error|"
@@ -27,6 +30,53 @@ LIMIT_PATTERN = re.compile(r"hit your (usage )?limit|usage limit reached|rate_li
 
 class StateError(ValueError):
     pass
+
+
+def resolve_engine(requested="auto", control=None, environ=None):
+    """Pin the provider for a run; never guess from CLI installation order."""
+    if requested not in ("auto", "codex", "claude"):
+        raise StateError("--engine / IMPROVE_ENGINE must be auto, codex, or claude")
+    if control is not None:
+        # Supervisors written before 1.6 always launched Claude.
+        saved = control.get("engine", "claude")
+        if saved not in ("codex", "claude"):
+            raise StateError("supervisor engine must be codex or claude")
+        if requested not in ("auto", saved):
+            raise StateError(f"this run uses {saved}; use --engine auto to keep it, or --new-run to change engines")
+        return saved
+    if requested != "auto":
+        return requested
+    env = os.environ if environ is None else environ
+    hosts = [engine for engine, markers in HOST_MARKERS.items() if any(env.get(key) for key in markers)]
+    if len(hosts) == 1:
+        return hosts[0]
+    reason = "conflicting host markers" if hosts else "cannot detect the current assistant"
+    raise StateError(f"{reason}; pass --engine codex or --engine claude")
+
+
+def resolve_sandbox(engine, requested=None, control=None):
+    saved = control.get("codex_sandbox") if control is not None else requested
+    for value in (requested, saved):
+        if value is not None and value not in SANDBOX_MODES:
+            raise StateError("invalid Codex sandbox mode")
+    if engine != "codex" and (requested is not None or saved is not None):
+        raise StateError("--codex-sandbox is only valid with the codex engine")
+    if control is not None and requested is not None and requested != saved:
+        raise StateError("resume keeps the saved Codex sandbox; use --new-run to change it")
+    return saved
+
+
+def agent_command(engine, prompt, model=None, codex_sandbox=None):
+    if engine == "codex":
+        # Keep the user's sandbox/rules; unattended work must not request approvals.
+        command = ["codex", "--no-daemon", "--ask-for-approval", "never", "exec", "--ephemeral", "--color", "never"]
+        if codex_sandbox is not None:
+            command += ["--sandbox", codex_sandbox]
+    else:
+        command = ["claude", "--permission-mode", "bypassPermissions", "--output-format", "text"]
+    if model:
+        command += ["--model", model]
+    return command + ([prompt] if engine == "codex" else ["-p", prompt])
 
 
 def read_json(path):
@@ -318,7 +368,8 @@ class Supervisor:
                 raise StateError("no supervised run exists to recover")
             started = int(time.time())
             self.control = dict(started_at=stamp(started), deadline=stamp(started + duration(self.args.duration)))
-        self.control.update(skill=self.args.skill, args=self.args.args, repo=str(self.repo))
+        self.control.update(skill=self.args.skill, args=self.args.args, repo=str(self.repo),
+                            engine=self.engine, codex_sandbox=self.codex_sandbox)
         timing(self.control)
         for key in ("consecutive_failures", "next_limit_wait", "limit_waited_seconds"):
             value = self.control.get(key, 0)
@@ -370,7 +421,8 @@ class Supervisor:
     def prompt(self, final=False):
         remaining = max(0, epoch(self.control["deadline"]) - int(time.time()))
         skill_path = Path(__file__).resolve().parent.parent / ("max/SKILL.md" if self.args.skill == "improve-max" else "SKILL.md")
-        return f"""/{self.args.skill} {remaining}s {shlex.quote(str(self.repo))} {self.args.args}
+        prefix = "$" if self.engine == "codex" else "/"
+        return f"""{prefix}{self.args.skill} {remaining}s {shlex.quote(str(self.repo))} {self.args.args}
 
 You are ONE CYCLE of an externally supervised improvement run. Read {skill_path}.
 Use the saved ten-question intake in .improve/intake.json. Do not ask it again.
@@ -394,10 +446,12 @@ Previous cycle correction, if any: {self.control.get('last_error', 'none')}.
 """
 
     def launch(self, final=False):
-        command = ["claude", "-p", self.prompt(final), "--permission-mode", "bypassPermissions"]
-        if self.args.model:
-            command += ["--model", self.args.model]
-        command += ["--output-format", "text"]
+        command = agent_command(self.engine, self.prompt(final), self.args.model, self.codex_sandbox)
+        env = os.environ.copy()
+        # Each cycle is a fresh process, not a nested interactive Claude session.
+        # Keep auth/config variables; discard only inherited session identity.
+        for key in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_THREAD_ID"):
+            env.pop(key, None)
         started = time.monotonic()
         cutoff = started + (self.final_timeout if final else self.timeout)
         if not final:
@@ -405,8 +459,8 @@ Previous cycle correction, if any: {self.control.get('last_error', 'none')}.
         log_path = self.state / "daemon.log"
         offset = log_path.stat().st_size if log_path.exists() else 0
         with log_path.open("ab", buffering=0) as output:
-            child = subprocess.Popen(command, cwd=self.repo, stdout=output, stderr=subprocess.STDOUT,
-                                     start_new_session=True)
+            child = subprocess.Popen(command, cwd=self.repo, env=env, stdin=subprocess.DEVNULL,
+                                     stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
             timed_out = False
             try:
                 self.save_control(phase="finalize" if final else "working", child_pid=child.pid,
@@ -542,6 +596,8 @@ def daemon(args):
             if recorded:
                 print(f"deadline={recorded['deadline']} remaining={human(info['clock']['remaining_seconds'])} outcome={recorded.get('outcome')}")
                 print(f"phase={recorded.get('phase', 'unknown')} child_pid={recorded.get('child_pid')} retry_at={recorded.get('retry_at')}")
+                if "supervisor" in info:
+                    print(f"engine={info['supervisor'].get('engine', 'claude')}")
                 run = info.get("run", {})
                 print(f"cycle={run.get('cycle', 0)} next_action={run.get('next_action', 'not yet recorded')}")
         return 0
@@ -561,20 +617,28 @@ def daemon(args):
     if dirty(repo):
         raise StateError("working tree is dirty; commit or stash your changes before starting")
     if args.dry_run:
+        control_path = state / "supervisor.json"
+        control = read_json(control_path) if control_path.exists() and not args.new_run else None
+        engine = resolve_engine(args.engine, control)
+        sandbox = resolve_sandbox(engine, args.codex_sandbox, control)
         existing = state / "supervisor.json" if (state / "supervisor.json").exists() else state / "run.json"
         deadline = stamp(int(time.time()) + seconds)
         if existing.exists() and not args.new_run:
             saved = read_json(existing)
             timing(saved)
             deadline = saved["deadline"]
-        print(f"Would run /{args.skill} in {repo} until {deadline}.")
-        print("Requires ten-question intake; uses claude -p --permission-mode bypassPermissions.")
+        print(f"Would run {args.skill} with {engine} in {repo} until {deadline}.")
+        print("Requires ten-question intake; command: " + shlex.join(agent_command(engine, "<cycle prompt>", args.model, sandbox)))
         print(f"Cycle timeout: {supervisor.timeout}s; final-report timeout: {supervisor.final_timeout}s.")
         return 0
-    if not shutil.which("claude"):
-        raise StateError("the claude CLI is not on PATH")
     state.mkdir(exist_ok=True)
     with repo_lock(lock):
+        control_path = state / "supervisor.json"
+        control = read_json(control_path) if control_path.exists() and not args.new_run else None
+        supervisor.engine = resolve_engine(args.engine, control)
+        supervisor.codex_sandbox = resolve_sandbox(supervisor.engine, args.codex_sandbox, control)
+        if not shutil.which(supervisor.engine):
+            raise StateError(f"the selected {supervisor.engine} CLI is not on PATH; no other engine will be used")
         if args.intake:
             validate_intake(read_json(Path(args.intake).expanduser()))
         if args.new_run:
@@ -592,6 +656,7 @@ def daemon(args):
             args.intake = None
         supervisor.stop_path.unlink(missing_ok=True)
         supervisor.prepare()
+        supervisor.log(f"using {supervisor.engine}; engine and deadline are fixed for this run")
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, supervisor.request_stop)
         try:
@@ -617,6 +682,11 @@ def main(argv=None):
     runner.add_argument("--for", "--duration", dest="duration")
     runner.add_argument("--skill", choices=("improve", "improve-max"), default="improve")
     runner.add_argument("--args", default="")
+    runner.add_argument("--engine", choices=("auto", "codex", "claude"),
+                        default=os.environ.get("IMPROVE_ENGINE", "auto"),
+                        help="assistant for new runs (default: detect host); saved engine wins on restart")
+    runner.add_argument("--codex-sandbox", choices=SANDBOX_MODES,
+                        help="carry over the current Codex session's mode; default: CLI configuration")
     runner.add_argument("--model", default=os.environ.get("IMPROVE_MODEL"))
     runner.add_argument("--intake", help="JSON file with ten intake answers")
     recovery = runner.add_mutually_exclusive_group()

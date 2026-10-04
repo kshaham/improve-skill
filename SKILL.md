@@ -6,8 +6,9 @@ metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus) in plan mode
   created: 2026-09-05
   origin: Designed to spec in the ~/Code/bonsai session (plan shimmying-roaming-goose.md); daemon added 2026-09-06 after the first 6h run hit ENOSPC
-  version: 1.5.0
+  version: 1.6.0
   changelog: |
+    1.6.0 (2026-10-04) - host-aware Codex/Claude daemon routing, persisted engine across recovery, native skill invocation, isolated cycle input and engine regression tests
     1.5.0 (2026-10-04) - evidence-based progress detection, bounded deadline cleanup, recoverable halts and final reports, verification-aware work selection, persistent retry counters and live status
     1.4.0 (2026-10-04) - ten-question intake, persistent user priorities, feature/UI/asset lanes, active discovery without dry sleeps, verified continuation, portable deadline supervisor and regression tests
     1.3.0 (2026-09-22) - the run lasts until the deadline: scripts/improve-clock.sh is the only authority on time, an empty backlog is a refill not a finish, an exhaustive list of stop conditions, dry-at-T4 keeps sweeping new ground instead of idling out
@@ -25,7 +26,7 @@ working until the deadline.
     /improve <duration> [path]
 
 `/improve 4h`, `/improve 90m ~/Code/api`. Duration is required; path defaults to the
-current working directory.
+current working directory. In Codex, invoke `$improve` with the same arguments.
 
 ## Intake - first, before the timer
 
@@ -489,12 +490,21 @@ or `/loop` only when it is actually available and has confirmed re-entry. Save i
 in the ledger. A session ending without such a mechanism ends the work; do not imply it is
 still running.
 
-For an external supervisor, finish the ten-question intake first, then run:
+For an external supervisor, finish the ten-question intake first. Launch the script from
+this skill's directory, passing the current host explicitly: `--engine codex` from Codex,
+`--engine claude` from Claude Code. Do not ask the user to choose when the host is known.
+For example, from Codex:
 
-    scripts/improve-daemon.sh --repo ~/Code/thing --for 6h --intake /path/to/intake.json
+    scripts/improve-daemon.sh --engine codex --repo ~/Code/thing --for 6h --intake /path/to/intake.json
 
-The runner requires Python 3.9+ and the Claude CLI, uses the skill files beside itself, and
-works on macOS/Linux without jq or GNU timeout. Each launch is one cycle with durable
-state, a fixed deadline, bounded retries, and a finalization pass. It invokes Claude with
-`--permission-mode bypassPermissions`; launch it only within the user-authorized unattended
-scope. See `references/continuation.md` and README for restart, stop, and new-run behavior.
+The runner requires Python 3.9+ and the selected CLI, uses the skill files beside itself,
+and works on macOS/Linux without jq or GNU timeout. Each launch is one cycle with durable
+state, a fixed deadline, bounded retries, and a finalization pass. The saved engine is fixed
+for the run, including restarts from another host; omit `--engine` on recovery to keep it.
+For Codex, also pass `--codex-sandbox` with the current session's mode (`read-only`,
+`workspace-write`, or `danger-full-access`); never broaden the session's permissions. If the
+mode is unknown, omit this option to inherit CLI configuration. The daemon saves the choice;
+omit it on recovery. Codex uses noninteractive `exec`, retains rules, and requests no approvals;
+Claude retains `--permission-mode bypassPermissions`. Ensure the selected CLI is authenticated
+and configured for the authorized unattended work. See `references/continuation.md` and README
+for engine detection, permissions, restart, stop, and new-run behavior.
