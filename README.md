@@ -1,13 +1,13 @@
 # /improve
 
-An autonomous improvement skill for Claude Code. It asks ten questions about what matters,
+An autonomous improvement skill for Codex and Claude Code. It asks ten questions about what matters,
 then discovers and implements verified improvements for the requested duration. The focus
 can be features, UI, graphics/assets, performance, bugs, security, or supporting code quality.
 An empty backlog starts another discovery pass; it does not finish the run.
 
 ```text
-/improve 4h
-/improve 90m ~/Code/api
+Codex:       $improve 4h
+Claude Code: /improve 90m ~/Code/api
 ```
 
 ## Start with the user's priorities
@@ -150,17 +150,47 @@ A finalization failure records `summary_pending: true`, never invented verificat
 For work that should survive terminal closure, complete the interactive intake first:
 
 ```sh
-scripts/improve-daemon.sh --repo ~/Code/api --for 6h --intake /path/to/intake.json
-scripts/improve-daemon.sh --repo ~/Code/api --for 90m --dry-run
+scripts/improve-daemon.sh --engine codex --repo ~/Code/api --for 6h --intake /path/to/intake.json
+scripts/improve-daemon.sh --engine claude --repo ~/Code/api --for 90m --dry-run
 scripts/improve-daemon.sh --status --repo ~/Code/api
 scripts/improve-daemon.sh --stop --repo ~/Code/api
-nohup scripts/improve-daemon.sh --repo ~/Code/api --for 6h --intake /path/to/intake.json >improve-launch.log 2>&1 &
+nohup scripts/improve-daemon.sh --engine codex --repo ~/Code/api --for 6h --intake /path/to/intake.json >improve-launch.log 2>&1 &
 ```
 
-Requires **Python 3.9+, Git, and the Claude CLI** on macOS/Linux; no jq or GNU timeout is
-needed by the runner. It invokes `claude -p --permission-mode bypassPermissions` for each
-cycle, so launch only for an authorized unattended run. It loads the skill beside the runner,
-which permits development checkouts and installations in other locations.
+Requires **Python 3.9+, Git, and the selected assistant's authenticated CLI** on macOS/Linux;
+no jq or GNU timeout is needed. The skill passes `--engine codex` when running in Codex,
+or `--engine claude` when running in Claude Code. Both `improve` and `improve-max` use the
+same routing. The location of the installed script does not determine the engine.
+
+With `--engine auto` (the default), a new run detects Codex from `CODEX_THREAD_ID` or
+`CODEX_CI`, and Claude Code from `CLAUDECODE` or `CLAUDE_CODE_ENTRYPOINT`. A plain shell
+or conflicting markers requires an explicit engine; it never guesses from PATH order.
+`IMPROVE_ENGINE` sets the default, and `--engine` overrides it. A saved run always keeps
+its engine across restarts, `--resume`, and `--finalize`; a conflicting explicit choice
+is rejected. Pre-1.6 supervisor files keep Claude, their original engine. Change providers
+with a new intake and `--new-run`. A missing selected CLI never falls back to another provider.
+
+Codex cycles use `codex --no-daemon --ask-for-approval never exec --ephemeral --color never`.
+When launching from Codex, the skill carries over its current session's sandbox with
+`--codex-sandbox read-only`, `workspace-write`, or `danger-full-access`, within the existing
+authorization. The choice is saved for restarts. Without this option, Codex uses its CLI
+configuration, which may differ from the interactive session and default to read-only.
+Repository edits, tests, and commits need corresponding permissions; the runner never
+retries with broader access. User rules remain in force. `--no-daemon` keeps cycle processes
+outside Codex's shared server so stop/timeouts can
+terminate their process group. These flags were checked with Codex CLI 0.160.0.
+See the official [noninteractive execution guide](https://learn.chatgpt.com/docs/non-interactive-mode).
+Claude cycles retain `claude -p --permission-mode bypassPermissions --output-format text`;
+the inherited interactive-session marker is cleared for each independent cycle. Both use
+existing CLI authentication/configuration and accept `--model` for that engine. No default
+model is forced. Launch only within the user-authorized unattended scope.
+
+If `IMPROVE_ENGINE` names a different provider when recovering an existing run, use
+`--engine auto` to keep the saved provider. Omit `--codex-sandbox` on recovery to reuse its
+saved choice. Changing either explicit setting requires a new run.
+
+Each cycle reads the skill beside the runner, so development checkouts and installations in
+other locations work. Child stdin is closed, keeping terminal input out of agent prompts.
 
 The daemon preserves one deadline in `supervisor.json` across restarts and preflight failures.
 It restores an agent-reset deadline and rejects premature completion. A fast empty scan is
@@ -183,7 +213,7 @@ To resume an unfinished clean run, repeat its command; the recorded deadline win
 `--for`. To start again after reviewing a finished run, collect a new intake and use:
 
 ```sh
-scripts/improve-daemon.sh --repo ~/Code/api --for 4h --new-run --intake /path/to/new-intake.json
+scripts/improve-daemon.sh --engine codex --repo ~/Code/api --for 4h --new-run --intake /path/to/new-intake.json
 ```
 
 After resolving a halt, resume the same run without extending its deadline:
@@ -205,7 +235,7 @@ scripts/improve-daemon.sh --repo ~/Code/api --status --json
 
 A report retry preserves the original stop reason and end time, writes `final-report.md`,
 and checks that no work-tree changes or new commits occurred. Status JSON includes the
-saved phase, current child process, retry time, clock, and next action.
+saved engine, phase, current child process, retry time, clock, and next action.
 
 `--new-run` archives the previous state under `.improve/history/`. It does not discard code or
 reset branches. Status and dry-run do not create state or launch a paid agent.
@@ -220,7 +250,7 @@ reset branches. Status and dry-run do not create state or launch a paid agent.
 | `discovery.jsonl` | Scoped scans and their results, including empty/failed passes |
 | `journal.md` | Reports, steering, recovery and account-limit gaps |
 | `final-report.md` | Durable final handover; retryable independently of work |
-| `supervisor.json` | Daemon-owned timestamps and finalization status |
+| `supervisor.json` | Daemon-owned engine, timestamps, and finalization status |
 | `daemon.log` | Timestamped supervisor and cycle output |
 | `daemon.lock` | OS-held exclusive lock; file presence alone does not mean running |
 | `history/` | Explicitly archived previous run state |
@@ -237,6 +267,7 @@ git diff <baseline_commit>..<run_branch>
 
 | Environment variable | Default | Purpose |
 |---|---|---|
+| `IMPROVE_ENGINE` | `auto` | Detect the host for a new run; `--engine codex` / `claude` overrides |
 | `IMPROVE_CYCLE_TIMEOUT` | `3600` (`14400` for max) | Maximum seconds per working cycle |
 | `IMPROVE_FINAL_TIMEOUT` | `300` | Maximum seconds for finalization |
 | `IMPROVE_FINISH_GRACE` | `120` | Maximum cleanup seconds after deadline or stop |
@@ -260,7 +291,7 @@ Only its explicit rules permit dependency, schema, wire, framework, or stack cha
 ```
 
 ```sh
-scripts/improve-daemon.sh --skill improve-max --repo ~/Code/api --for 3d \
+scripts/improve-daemon.sh --engine codex --skill improve-max --repo ~/Code/api --for 3d \
   --args "--target 5x --kinds design,data" --intake /path/to/intake.json
 ```
 
@@ -277,10 +308,11 @@ python3 -B -m unittest discover -s tests -v
 bash -n scripts/improve-clock.sh scripts/improve-daemon.sh
 ```
 
-The regression suite uses temporary git repositories and a fake Claude CLI. It tests intake,
+The regression suite uses temporary git repositories and fake Codex and Claude CLIs. It tests intake,
 deadlines, early completion, discovery continuity, restart, rate limits, lock ownership,
 timeouts, dirty state, recovery, repeated-scan detection, stop/deadline cleanup, report-only
-retries, and finalization without launching a real model or editing a real app.
+retries, engine detection/persistence, missing CLI failures, and finalization without
+launching a real model or editing a real app.
 It does not establish that every model will find useful changes for a multi-hour run.
 
 Licensed under [MIT](LICENSE).

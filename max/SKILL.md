@@ -6,8 +6,8 @@ metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus)
   created: 2026-09-17
   parent: improve
-  version: 0.3.0
-  install: symlink ~/.claude/skills/improve-max -> improve/max (this directory lives inside the improve skill's repo)
+  version: 0.4.0
+  install: symlink improve-max -> improve/max inside ~/.claude/skills or ~/.codex/skills (this directory lives inside the improve skill's repo)
 ---
 
 # The courageous loop
@@ -266,9 +266,12 @@ The parent's boundaries, plus:
 ## Launching
 
     /improve-max 3d ~/Code/thing --target 5x --kinds design,data
-    ../scripts/improve-daemon.sh --skill improve-max --repo ~/Code/thing --for 3d \
+    ../scripts/improve-daemon.sh --engine codex --skill improve-max --repo ~/Code/thing --for 3d \
         --args "--target 5x --kinds design,data" --intake /path/to/intake.json
 
+In Codex, invoke `$improve-max` with the same arguments. When starting the daemon, pass
+`--engine codex` from Codex or `--engine claude` from Claude Code, as in the parent skill.
+Recovering an existing run keeps its saved engine; omit `--engine` to preserve it.
 Under the daemon, use `--skill improve-max` and expect long cycles; the daemon's default
 cycle timeout is raised for this skill. Everything the parent says about being one cycle of
 an externally paced loop applies, and matters more, because a bet spans cycles.
