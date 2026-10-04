@@ -1,6 +1,7 @@
 """Control and request UI checks called by browser_board.py; no model launches."""
 import json
 from pathlib import Path
+import shutil
 import time
 import uuid
 
@@ -39,6 +40,10 @@ def check_controls(page, repo, tasks, write_tasks, artifacts):
     expect(page.locator(".request-badge")).to_have_text("Applied")
     page.locator(".request-item summary").click()
     expect(page.locator(".request-body")).to_contain_text("keyboard acceptance checks")
+    page.locator(".request-task-link").click()
+    expect(page.locator("#detail-title")).to_have_text("Add keyboard shortcuts")
+    expect(page.locator("#detail-meta")).to_contain_text("Queued")
+    page.keyboard.press("Escape")
     page.locator("#send-guidance").click()
     page.locator("#request-text").fill("Prioritize mobile usability.\n<img src=x onerror=alert(1)>")
     page.evaluate("refresh()")
@@ -162,3 +167,105 @@ def check_controls(page, repo, tasks, write_tasks, artifacts):
     page.locator("#request-status").select_option("applied")
     expect(page.locator(".request-item")).to_have_count(1)
     expect(page.locator("#request-prev")).to_be_disabled()
+    check_archived_requests(page, repo, artifacts)
+
+
+def check_archived_requests(page, repo, artifacts):
+    state = repo / ".improve"
+    archive = state / "history" / "archive-browser"
+    archive.mkdir(parents=True, exist_ok=True)
+    for name in ("operator.json", "board-receipts.json", "backlog.jsonl", "final-report.md"):
+        shutil.copy2(state / name, archive / name)
+    (archive / "final-report.md").write_text("# Archived keyboard results\n<script>plain text</script>")
+    archived = [json.loads(line) for line in (archive / "backlog.jsonl").read_text().splitlines()]
+    for row in archived:
+        row.update(status="done", title="Archived " + row["title"])
+    (archive / "backlog.jsonl").write_text("".join(json.dumps(row) + "\n" for row in archived))
+    receipts = json.loads((archive / "board-receipts.json").read_text())
+    next(iter(receipts.values()))["note"] = "Archived keyboard decision"
+    board.atomic_json(archive / "board-receipts.json", receipts)
+    page.locator("#refresh").click()
+    page.locator("#run").select_option("all")
+    expect(page.locator(".request-item")).to_have_count(2)
+    # A response-only match searches archived receipts and exports that same subset.
+    page.locator("#search").fill("Archived keyboard decision")
+    expect(page.locator(".request-item")).to_have_count(1)
+    page.locator(".request-item summary").click()
+    expect(page.locator(".request-task-link")).to_have_text("Done · Archived Add keyboard shortcuts")
+    with page.expect_download() as download:
+        page.locator("#export").click()
+    exported = json.loads(Path(download.value.path()).read_text())["requests"]
+    assert len(exported) == 1 and exported[0]["source_run"] == "archive-browser"
+    page.locator(".request-task-link").click()
+    expect(page.locator("#detail-title")).to_have_text("Archived Add keyboard shortcuts")
+    expect(page.locator("#task-controls")).not_to_be_visible()
+    page.keyboard.press("Escape")
+    page.locator("#search").fill("")
+    page.locator("#run").select_option("archive-browser")
+    expect(page.locator(".request-item")).to_have_count(1)
+    page.locator("#request-status").select_option("pending")
+    expect(page.locator(".request-item")).to_have_count(20)
+    page.locator(".request-item summary").first.click()
+    expect(page.locator(".request-body").first).to_contain_text("will not be applied to the current run")
+    page.locator("#request-status").select_option("all")
+    page.locator("#request-next").click()
+    first = page.locator(".request-item").first.get_attribute("data-id")
+    page.locator(".request-item summary").first.click()
+    # Refresh keeps both the anchored page and expanded row even after a new arrival.
+    saved_requests = json.loads((archive / "operator.json").read_text())
+    saved_requests["requests"].append(dict(id=str(uuid.uuid4()), type="guidance", text="Arrived later", created_at=board.stamp(time.time() + 10)))
+    board.atomic_json(archive / "operator.json", saved_requests)
+    page.locator("#refresh").click()
+    expect(page.locator(".request-item").first).to_have_attribute("data-id", first)
+    expect(page.locator(".request-item").first).to_have_attribute("open", "")
+    page.locator("#search").fill("no matching phrase")
+    expect(page.locator("#requests-empty")).to_contain_text("No requests match")
+    expect(page.locator("#request-prev")).to_be_disabled()
+    page.locator("#search").fill("Archived keyboard decision")
+    page.set_viewport_size({"width": 1600, "height": 1050})
+    page.screenshot(path=str(artifacts / "archived-requests-desktop.png"), full_page=True)
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.screenshot(path=str(artifacts / "archived-requests-mobile.png"), full_page=True)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.locator("#open-report").click()
+    expect(page.locator("#report-run")).to_have_value("archive-browser")
+    expect(page.locator("#report-text")).to_contain_text("Archived keyboard results")
+    assert page.locator("#report-text script").count() == 0
+    with page.expect_download() as download:
+        page.locator("#download-report").click()
+    assert download.value.suggested_filename == "improve-archive-browser-report.md"
+    assert "Archived keyboard results" in Path(download.value.path()).read_text()
+    page.locator("#report-run").select_option("current")
+    expect(page.locator("#report-text")).to_contain_text("Keyboard task queued")
+    # A late response from a previous selection must not replace the selected report.
+    delayed = []
+    page.route("**/api/report?run=archive-browser", lambda route: delayed.append(route))
+    page.locator("#report-run").select_option("archive-browser")
+    expect(page.locator("#report-text")).to_have_text("Loading report…")
+    page.locator("#report-run").select_option("current")
+    expect(page.locator("#report-text")).to_contain_text("Keyboard task queued")
+    assert delayed
+    delayed[0].fulfill(json={"text": "Late archive", "run_id": "archive-browser"})
+    page.unroute("**/api/report?run=archive-browser")
+    page.wait_for_timeout(100)
+    expect(page.locator("#report-text")).to_contain_text("Keyboard task queued")
+    page.keyboard.press("Escape")
+    # Submitting from an archive is explicitly current-run work and reveals the new request.
+    page.locator("#send-guidance").click()
+    page.locator("#request-text").fill("Submitted while browsing an archive")
+    page.locator("#request-submit").click()
+    expect(page.locator("#request-dialog")).not_to_be_visible()
+    expect(page.locator("#run")).to_have_value("current")
+    expect(page.locator("#search")).to_have_value("")
+    expect(page.locator(".request-item").first).to_contain_text("Submitted while browsing an archive")
+    assert len(controls.request_view_at(archive)) == 27
+    # Archives remain accessible even if the current run has no report.
+    (state / "final-report.md").unlink()
+    page.locator("#refresh").click()
+    expect(page.locator("#open-report")).to_be_enabled()
+    page.locator("#open-report").click()
+    expect(page.locator("#report-run")).to_have_value("archive-browser")
+    expect(page.locator("#report-text")).to_contain_text("Archived keyboard results")
+    page.screenshot(path=str(artifacts / "archived-report-mobile.png"), full_page=True)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.keyboard.press("Escape")

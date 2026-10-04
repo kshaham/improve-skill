@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
 from improve_runtime import StateError, atomic_json, git, lock_active, read_json, recorded_timing, repo_lock, stamp
-from improve_control import operator_lock, pause_requested, queue_request, read_local, request_view, require_run, set_pause
+from improve_control import operator_lock, pause_requested, queue_request, read_local, request_view, request_view_at, require_run, set_pause
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets/board"
 SERVICE_FILES = {"board.json", "board.lock", "board.log", "operator.lock"}
@@ -139,18 +139,25 @@ def normalize_bets(rows, run, run_id, warnings):
     return tasks
 
 
-def board_snapshot(repo, selected="current"):
+def run_directories(repo):
     state = state_directory(repo)
-    warnings = []
     directories = {"current": state}
     history = state / "history"
     if history.is_dir() and not history.is_symlink():
         for path in sorted(history.iterdir(), reverse=True):
-            if path.is_dir() and not path.is_symlink() and re.fullmatch(r"[\w.-]+", path.name):
+            if (path.name not in ("current", "all") and path.is_dir() and
+                    not path.is_symlink() and re.fullmatch(r"[\w.-]+", path.name)):
                 directories[path.name] = path
+    return directories
+
+
+def board_snapshot(repo, selected="current"):
+    state = state_directory(repo)
+    warnings = []
+    directories = run_directories(repo)
     if selected != "all" and selected not in directories:
         raise StateError("unknown run")
-    runs, tasks, discovery = [], [], []
+    runs, tasks, discovery, requests = [], [], [], []
     current = {}
     for run_id, directory in directories.items():
         notices = []
@@ -172,6 +179,8 @@ def board_snapshot(repo, selected="current"):
                 notices.append(f"Clock: {exc}")
         summary = {"id": run_id, "label": "Current run" if run_id == "current" else run_id,
                    "outcome": outcome,
+                   "report_available": (directory / "final-report.md").is_file() and not (directory / "final-report.md").is_symlink(),
+                   "summary_pending": control.get("summary_pending", run.get("summary_pending")),
                    "started_at": (control if control else run).get("started_at"),
                    "deadline": (control if control else run).get("deadline")}
         runs.append(summary)
@@ -190,6 +199,12 @@ def board_snapshot(repo, selected="current"):
                 with contextlib.suppress(OSError):
                     current["daemon_running"] = lock_active(state / "daemon.lock")
         if selected in ("all", run_id):
+            if run_id != "current":
+                try:
+                    requests.extend({**row, "source_run": run_id, "key": f"{run_id}:{row['id']}"}
+                                    for row in request_view_at(directory))
+                except (StateError, OSError) as exc:
+                    notices.append(f"Requests: {exc}")
             rows = load_file(directory, "backlog.jsonl", notices, jsonl=True)
             effective_run = {**run, "outcome": summary["outcome"]}
             tasks.extend(normalize_tasks(rows, effective_run, run_id, notices))
@@ -208,6 +223,9 @@ def board_snapshot(repo, selected="current"):
     try:
         controls["pause_requested"] = pause_requested(repo, current.get("control_id"))
         controls["requests"] = request_view(repo)
+        if selected in ("current", "all"):
+            requests.extend({**row, "source_run": "current", "key": f"current:{row['id']}"}
+                            for row in controls["requests"])
         if current.get("outcome"):
             controls["reason"] = "This run has ended. Resume or start a new run from your assistant."
             controls["requests_available"] = (current["outcome"] == "stopped by user" or
@@ -230,9 +248,23 @@ def board_snapshot(repo, selected="current"):
     except (StateError, OSError) as exc:
         controls.update(reason=str(exc), requests_available=False)
         warnings.append(f"Board controls: {exc}")
+    by_request = {}
+    task_keys = {task["key"] for task in tasks}
+    for task in tasks:
+        request_id = task.get("board_request_id")
+        if isinstance(request_id, str):
+            by_request.setdefault((task["run_id"], request_id), []).append(task["key"])
+    for row in requests:
+        links = list(by_request.get((row["source_run"], row["id"]), []))
+        target = row.get("task_key")
+        if isinstance(target, str) and target.startswith("current:"):
+            target = row["source_run"] + target[len("current"):]
+            if target in task_keys and target not in links:
+                links.append(target)
+        row["task_keys"] = links
     return {"repo": repo.name, "selected_run": selected, "runs": runs, "current": current,
             "columns": [{"id": key, "label": label} for key, label in COLUMNS],
-            "tasks": tasks, "counts": counts, "discovery": discovery[:24],
+            "tasks": tasks, "requests": requests, "counts": counts, "discovery": discovery[:24],
             "controls": controls, "warnings": warnings, "updated_at": stamp()}
 
 
@@ -304,11 +336,16 @@ class BoardHandler(BaseHTTPRequestHandler):
             return self.reply(200, {"token": self.server.ui_token})
         if target.path == "/api/report":
             try:
-                report = read_local(state_directory(self.server.repo) / "final-report.md", limit=512 * 1024)
+                selected = parse_qs(target.query, max_num_fields=8).get("run", ["current"])[0]
+                with operator_lock(self.server.repo):
+                    directory = run_directories(self.server.repo).get(selected)
+                    if directory is None:
+                        raise StateError("unknown run")
+                    report = read_local(directory / "final-report.md", limit=512 * 1024)
                 if report is None:
                     return self.reply(404, {"error": "No saved final report yet."})
-                return self.reply(200, {"text": report})
-            except (StateError, OSError) as exc:
+                return self.reply(200, {"text": report, "run_id": selected})
+            except (StateError, OSError, ValueError) as exc:
                 return self.reply(400, {"error": str(exc)})
         if target.path == "/api/health":
             return self.reply(200, {"service": "improve-board", "instance": self.server.instance,
@@ -316,7 +353,9 @@ class BoardHandler(BaseHTTPRequestHandler):
         if target.path == "/api/board":
             try:
                 selected = parse_qs(target.query, max_num_fields=8).get("run", ["current"])[0]
-                return self.reply(200, board_snapshot(self.server.repo, selected))
+                with operator_lock(self.server.repo):
+                    snapshot = board_snapshot(self.server.repo, selected)
+                return self.reply(200, snapshot)
             except (StateError, OSError, ValueError) as exc:
                 return self.reply(400, {"error": str(exc)})
         assets = {"/": ("index.html", "text/html; charset=utf-8"),
