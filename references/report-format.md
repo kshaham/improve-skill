@@ -1,7 +1,7 @@
 # The hourly report
 
-Same content, three deliveries: terminal block, `PushNotification` headline, and an append to
-`.improve/journal.md`.
+Write to the terminal and `.improve/journal.md`. Send a notification only when an
+available tool and existing authorization support it; this is optional.
 
 ## Terminal
 
@@ -34,8 +34,9 @@ Same content, three deliveries: terminal block, `PushNotification` headline, and
 
 Rules for this block:
 
-- The `hour 3 of 4` in the header is the `hour` line of `improve-clock.sh`, copied, never
-  counted. A report is written only when the clock says `report ... is due`; cycles in
+- The `hour 3 of 4` in the header uses the completed `report_hour` from `improve-clock.sh --json`, never
+  its current `hour` interval. At 1h05m elapsed, report hour 1, although the current interval
+  is hour 2. If several hours were missed, say which interval this report covers. A report is written only when the clock says `report ... is due`; cycles in
   between write nothing but a one-line journal entry at most.
 
 - Rejections and benched areas are as prominent as successes. If the hour landed nothing,
@@ -58,7 +59,7 @@ Rules for this block:
 - Time the daemon spent waiting on an account limit appears in the journal as its own
   entry, not folded into an hour's totals.
 
-## PushNotification
+## Optional notification
 
 One line, under ~120 characters:
 
@@ -72,19 +73,37 @@ the branch is worth merging.
 
 ## The final report
 
+Save the report to `.improve/final-report.md` as well as the journal. Report-only retries
+keep the original stop reason and `ended_at`; they never imply a new working interval.
+
 Written only when `improve-clock.sh` exits `10`, and it opens with the clock's output so the
 reader can see the deadline had passed:
 
     IMPROVE - FINAL - improve/2026-09-05 - tier 2
     deadline 2026-09-05T18:03:00Z, now 2026-09-05T18:04:12Z, ran 4h01m of 4h
 
-A run that ends for any other reason writes a `HALTED` report instead, never `FINAL`, and
-leads with how much time was left and why: `HALTED at 16:41Z, 1h22m before the deadline:
+An environmental failure writes `HALTED`, a user stop writes `STOPPED`, and an explicitly
+allowed improve-max target stop writes `TARGET REACHED`. Each leads with time left and why: `HALTED at 16:41Z, 1h22m before the deadline:
 the iOS simulator stopped booting (gate unavailable)`.
 
 At the deadline, add: total commits, the branch name, the one-line diffstat, every `proposed`
 item in full, and the exact commands to review or discard:
 
-    git log --oneline main..improve/2026-09-05
-    git diff main..improve/2026-09-05
-    git branch -D improve/2026-09-05     # discard everything
+    git log --oneline <baseline_commit>..improve/2026-09-05
+    git diff <baseline_commit>..improve/2026-09-05
+
+Use the recorded baseline rather than assuming the source branch was main. Discard commands
+are suggestions for the human after review; never run branch deletion automatically.
+
+
+## Focus and continuity
+
+Each report includes progress against the user's top priorities, the actual screens/features
+or paths examined, the number of completed discovery passes, and the next concrete action.
+Separate investigated, proposed, and committed work. For UI/assets include locations of
+before/after captures and the states inspected. Never claim a visual result you did not see.
+
+Hourly reports are progress updates. Continue immediately while the clock is running.
+If the user stops, label the report `STOPPED`; a measured, explicitly permitted improve-max
+target stop is `TARGET REACHED`. Neither is deadline completion. An unavailable finalization
+agent leaves `summary_pending: true` and a factual daemon journal entry for later handover.

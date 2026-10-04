@@ -122,10 +122,23 @@ because in this loop the count can only go up.
 How to read the count is per toolchain - `go test -v` lines beginning `--- PASS`/`--- FAIL`,
 `pytest`'s summary line, `xcodebuild`'s "Executed N tests", `cargo test`'s "N passed". Record
 the extraction alongside the command so it is not re-derived mid-run. If a gate offers no
-count, record `null` and treat empty output as red for that gate.
+count, record `null` and identify another observable signal (built artifact, diagnostics,
+or a runner-specific completion marker). A known silent-success linter/build is not red
+just for being quiet. Compare test counts only across identical commands and filters;
+a focused test has its own baseline, not the whole suite’s count.
 
 ## Establish the baseline by running them
 
 Run every recorded gate once at preflight. Green is the baseline. Red means stop and report:
 a loop that starts on red cannot attribute failures to its own changes, and will thrash
 reverting work that was never the problem.
+
+
+## Feature and visual acceptance
+
+The intake's success criteria supplement the repository gates. For behavior changes,
+execute the requested journey and test its failure/boundary cases. For UI and assets,
+render before and after in matching states and viewports, inspect the actual result, and
+check interaction, accessibility, and asset-loading behavior. A build alone cannot prove
+a layout improved. Record artifact paths and what was observed. Pure text/asset changes
+need a relevant observable check, not an artificial mutation of unrelated code.
