@@ -5,8 +5,11 @@ let connected = false,
   requestDraft = null,
   requestRetry = null,
   requestOffset = 0,
+  requestAnchor = null,
   requestSignature = "",
-  stopRunId = null;
+  stopRunId = null,
+  reportLoad = 0,
+  loadedReportRun = null;
 const requestLabels = {
   task: "New task",
   guidance: "Guidance",
@@ -83,7 +86,8 @@ function renderControls() {
     "reject-proposal",
   ])
     $(id).disabled = !connected || sending || !controls.requests_available;
-  $("open-report").disabled = !connected || !controls.report_available;
+  $("open-report").disabled =
+    !connected || !snapshot?.runs.some((run) => run.report_available);
   $("control-state").textContent = !connected
     ? "Disconnected"
     : run.outcome
@@ -101,31 +105,45 @@ function renderControls() {
     ? "Reconnecting… Your saved requests and task history are preserved."
     : controls.reason ||
       "Restart the board service to load its updated controls.";
-  const pending = (controls.requests || []).filter(
+  const pending = (snapshot?.requests || []).filter(
     (row) => row.status === "pending",
   ).length;
   $("requests-count").textContent = countText(pending);
-  $("requests-tab").title = countText(pending) + " pending requests";
+  $("requests-tab").title =
+    countText(pending) + " pending requests in selected runs";
 }
 
 function filteredRequests() {
-  return [...(snapshot?.controls?.requests || [])]
+  const query = $("search").value.trim().toLowerCase();
+  return [...(snapshot?.requests || [])]
     .reverse()
+    .sort(
+      (a, b) =>
+        (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0),
+    )
     .filter(
       (row) =>
-        $("request-status").value === "all" ||
-        row.status === $("request-status").value,
+        ($("request-status").value === "all" ||
+          row.status === $("request-status").value) &&
+        (!query || readable(row).toLowerCase().includes(query)),
     );
 }
 
 function renderRequests() {
   const rows = filteredRequests();
+  if (requestAnchor) {
+    const anchored = rows.findIndex((row) => row.key === requestAnchor);
+    if (anchored >= 0) requestOffset = anchored;
+  }
   if (requestOffset >= rows.length)
     requestOffset = Math.max(
       0,
       Math.floor((rows.length - 1) / REQUEST_PAGE_SIZE) * REQUEST_PAGE_SIZE,
     );
   const page = rows.slice(requestOffset, requestOffset + REQUEST_PAGE_SIZE);
+  requestAnchor = requestOffset > 0 ? page[0]?.key : null;
+  $("visible-count").textContent =
+    countText(rows.length) + " matching requests";
   $("request-range").textContent = rows.length
     ? `${countText(requestOffset + 1)}–${countText(requestOffset + page.length)} of ${countText(rows.length)} requests`
     : "0 requests";
@@ -133,10 +151,13 @@ function renderRequests() {
   $("request-next").disabled = requestOffset + page.length >= rows.length;
   $("requests-empty").hidden = !!rows.length;
   $("requests-empty").textContent =
-    $("request-status").value === "all"
-      ? "No requests yet. Add a task or send guidance above."
-      : "No requests with this status.";
-  const signature = JSON.stringify(page);
+    $("request-status").value === "all" && !$("search").value.trim()
+      ? "No requests in these runs. New tasks and guidance are saved to the current run."
+      : "No requests match these filters.";
+  const taskMap = new Map(snapshot.tasks.map((task) => [task.key, task]));
+  const linkedTasks = (row) =>
+    (row.task_keys || []).map((key) => taskMap.get(key)).filter(Boolean);
+  const signature = JSON.stringify(page.map((row) => [row, linkedTasks(row)]));
   if (signature === requestSignature) return;
   requestSignature = signature;
   const opened = new Set(
@@ -150,12 +171,18 @@ function renderRequests() {
   $("request-list").replaceChildren(
     ...page.map((row) => {
       const item = element("details", "request-item");
-      item.dataset.id = row.id;
-      item.open = opened.has(row.id);
+      item.dataset.id = row.key;
+      item.open = opened.has(row.key);
       const summary = element("summary");
       const title = element("span", "request-heading");
       title.append(
-        element("span", "request-kind", requestLabels[row.type]),
+        element(
+          "span",
+          "request-kind",
+          requestLabels[row.type] +
+            " · " +
+            (row.source_run === "current" ? "Current run" : row.source_run),
+        ),
         element("strong", "", row.title || row.task_title || row.text),
       );
       summary.append(
@@ -182,9 +209,29 @@ function renderRequests() {
         element(
           "p",
           "request-message",
-          row.response || "Waiting for the next skill checkpoint.",
+          row.response ||
+            (row.source_run === "current"
+              ? "Waiting for the next skill checkpoint."
+              : "Archived without a recorded response. This request will not be applied to the current run."),
         ),
       );
+      const linked = linkedTasks(row);
+      if (linked.length) {
+        body.append(element("strong", "", "Related work"));
+        const links = element("div", "request-task-links");
+        for (const task of linked) {
+          const button = element(
+            "button",
+            "request-task-link",
+            labels[task.status] + " · " + task.title,
+          );
+          button.type = "button";
+          button.dataset.taskKey = task.key;
+          button.addEventListener("click", () => openTask(task));
+          links.append(button);
+        }
+        body.append(links);
+      }
       item.append(summary, body);
       return item;
     }),
@@ -255,7 +302,10 @@ async function submitRequest(event) {
     const result = await boardAction("/api/requests", payload);
     $("request-dialog").close();
     requestOffset = 0;
+    requestAnchor = null;
     $("request-status").value = "all";
+    $("search").value = "";
+    $("run").value = "current";
     selectView("requests");
     $("requests-tab").focus();
     feedback(result.message);
@@ -300,6 +350,32 @@ function taskControls(task) {
   $("reject-proposal").onclick = () => openRequest("decision", task, "reject");
 }
 
+async function loadReport() {
+  const load = ++reportLoad;
+  const runId = $("report-run").value;
+  const run = snapshot.runs.find((item) => item.id === runId);
+  loadedReportRun = null;
+  $("report-text").textContent = "Loading report…";
+  $("download-report").disabled = true;
+  $("report-note").textContent =
+    (run?.label || runId) +
+    " · " +
+    (run?.summary_pending
+      ? "A report retry is pending. This is the last saved report."
+      : "Saved from this run’s recorded work.");
+  try {
+    const report = await boardJSON(
+      "/api/report?run=" + encodeURIComponent(runId),
+    );
+    if (load !== reportLoad) return;
+    $("report-text").textContent = report.text;
+    loadedReportRun = report.run_id;
+    $("download-report").disabled = false;
+  } catch (error) {
+    if (load === reportLoad) $("report-text").textContent = error.message;
+  }
+}
+
 function initControls() {
   for (const area of [
     "general",
@@ -327,6 +403,7 @@ function initControls() {
   $("requests-tab").addEventListener("click", () => selectView("requests"));
   $("request-status").addEventListener("change", () => {
     requestOffset = 0;
+    requestAnchor = null;
     renderRequests();
   });
   for (const [id, direction] of [
@@ -338,6 +415,7 @@ function initControls() {
         0,
         requestOffset + direction * REQUEST_PAGE_SIZE,
       );
+      requestAnchor = null;
       renderRequests();
     });
   $("pause-run").addEventListener("click", () =>
@@ -359,22 +437,25 @@ function initControls() {
     .forEach((button) =>
       button.addEventListener("click", () => $(button.dataset.close).close()),
     );
-  $("open-report").addEventListener("click", async () => {
-    $("report-text").textContent = "Loading report…";
-    $("download-report").disabled = true;
-    $("report-note").textContent = snapshot.current.summary_pending
-      ? "A report retry is pending. This is the last saved report."
-      : "Saved from this run’s recorded work.";
+  $("open-report").addEventListener("click", () => {
+    const reports = snapshot.runs.filter((run) => run.report_available);
+    options(
+      $("report-run"),
+      reports.map((run) => [run.id, run.label]),
+    );
+    $("report-run").value =
+      reports.find((run) => run.id === $("run").value)?.id ||
+      reports[0]?.id ||
+      "";
     $("report-dialog").showModal();
-    try {
-      const report = await boardJSON("/api/report");
-      $("report-text").textContent = report.text;
-      $("download-report").disabled = false;
-    } catch (error) {
-      $("report-text").textContent = error.message;
-    }
+    loadReport();
+  });
+  $("report-run").addEventListener("change", loadReport);
+  $("report-dialog").addEventListener("close", () => {
+    reportLoad++;
   });
   $("download-report").addEventListener("click", () => {
+    if (!loadedReportRun) return;
     const url = URL.createObjectURL(
       new Blob([$("report-text").textContent], {
         type: "text/markdown;charset=utf-8",
@@ -382,7 +463,7 @@ function initControls() {
     );
     const link = element("a");
     link.href = url;
-    link.download = "improve-final-report.md";
+    link.download = "improve-" + loadedReportRun + "-report.md";
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });

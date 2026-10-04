@@ -73,7 +73,11 @@ def operator_lock(repo):
 
 
 def operator_state(repo):
-    value = local_json(state_path(repo) / "operator.json", {"requests": []})
+    return request_state(state_path(repo))
+
+
+def request_state(directory):
+    value = local_json(directory / "operator.json", {"requests": []})
     rows = value.get("requests", [])
     if (not isinstance(rows, list) or len(rows) > 1000 or
             any(not isinstance(row, dict) or not isinstance(row.get("id"), str) or
@@ -109,11 +113,16 @@ def set_pause(repo, run_id, paused):
 
 
 def request_view(repo):
-    value = operator_state(repo)
-    receipts = local_json(state_path(repo) / "board-receipts.json")
+    return request_view_at(state_path(repo))
+
+
+def request_view_at(directory):
+    """Read requests from a trusted current or archived run directory."""
+    value = request_state(directory)
+    receipts = local_json(directory / "board-receipts.json")
     result = []
     fields = ("id", "type", "created_at", "title", "text", "area", "priority",
-              "task_key", "task_title", "decision", "run_id")
+              "task_key", "task_title", "decision", "run_id", "expected_status")
     for row in value["requests"]:
         receipt = receipts.get(row["id"], {})
         if not isinstance(receipt, dict):
@@ -224,10 +233,13 @@ def main(argv=None):
         if args.action == "ack":
             result = acknowledge(repo, args.id, args.status, args.note)
         else:
-            identity = run_identity(repo)
-            result = dict(run_id=identity, pause_requested=pause_requested(repo, identity),
-                          stop_requested=(state_path(repo) / "stop.request").exists(),
-                          requests=[row for row in request_view(repo) if row["status"] == "pending"])
+            # New-run archival uses this same lock. Never combine an old run's
+            # identity with the replacement run's requests or control flags.
+            with operator_lock(repo) as state:
+                identity = run_identity(repo)
+                result = dict(run_id=identity, pause_requested=pause_requested(repo, identity),
+                              stop_requested=(state / "stop.request").exists(),
+                              requests=[row for row in request_view(repo) if row["status"] == "pending"])
         print(json.dumps(result, ensure_ascii=True))
         return 0
     except (StateError, OSError) as exc:

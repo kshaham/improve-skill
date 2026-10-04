@@ -24,7 +24,7 @@ import uuid
 if __name__ == "__main__":
     sys.modules.setdefault("improve_runtime", sys.modules[__name__])
 
-VERSION = "1.11.0"
+VERSION = "1.12.0"
 HOST_MARKERS = {"codex": ("CODEX_THREAD_ID", "CODEX_CI"),
                 "claude": ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
 SANDBOX_MODES = ("read-only", "workspace-write", "danger-full-access")

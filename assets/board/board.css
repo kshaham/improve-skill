@@ -927,7 +927,8 @@ dialog h2 {
   color: var(--muted);
   font-size: 12px;
 }
-.outcome-filter select {
+.outcome-filter select,
+.report-picker select {
   padding: 8px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -1317,6 +1318,32 @@ button.danger {
 }
 #report-dialog {
   width: min(860px, calc(100% - 32px));
+}
+.request-task-links {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+}
+.request-task-link {
+  max-width: 100%;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.report-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+.report-picker select {
+  min-width: 0;
+  max-width: 100%;
+}
+.request-kind {
+  overflow-wrap: anywhere;
 }
 #report-text {
   white-space: pre-wrap;

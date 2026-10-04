@@ -108,9 +108,13 @@ The board includes:
 - **New tasks and guidance:** send desired outcomes, acceptance checks, or updated focus
   directly from the board. Change a current task's priority or approve/decline a proposal
   from its details.
-- **Requests:** track pending, applied, and declined requests with the skill's response.
-  Twenty per page, status filters, and JSON export keep the request history manageable.
-- **Final report:** read and download the saved report without leaving the board.
+- **Requests:** search current and archived requests, including the skill's responses.
+  Filter by run and status, browse twenty rows per page, and export every matching page.
+  Live updates preserve your place on older pages.
+- **Related work:** open a request's resulting tasks or target bet to see its status,
+  evidence, and verification. Links stay within their original run when IDs are reused.
+- **Reports:** browse and download saved final reports across runs. The selected run's
+  report opens first when available; the picker lets you switch without leaving the board.
 - **Export:** download matching tasks as JSON. History includes all matching pages and
   respects the outcome filter; Board exports all matching tasks, including finished work.
 
@@ -135,6 +139,10 @@ leaves the board online; restarting an ended/halted run uses the existing CLI re
 checks. The board never launches a model or changes its saved engine, model, or sandbox.
 Foreground sessions can read the same task/guidance requests through the skill's helper.
 Requests apply to the current run; new-run archival preserves them with that run's files.
+Archived pending requests stay in history and are never automatically applied to a new run.
+Submitting a task or guidance while browsing an archive saves it to the current run and
+returns the Requests view there. Search includes receipt text as well as request details.
+The worker reads its pending requests and run identity together under the archival lock.
 See [request handling and controls](references/board-control.md) for the checkpoint contract.
 
 The current run panel flags an inactive daemon and missing final report, and shows when a
@@ -539,6 +547,9 @@ keyboard navigation, date fallbacks, and position preservation during live updat
 Control checks cover pause/resume/stop with fake Codex and Claude workers, unchanged
 deadlines, stale tabs, concurrent submissions, same-origin capabilities, request
 acknowledgments, lost-response retries, preserved drafts, and saved-report downloads.
+Archive checks cover request search/export, links with reused IDs, task/bet status,
+damaged archives, safe report selection, late report responses, and request reads during
+run archival. Browser checks also verify archived views on mobile and stable pagination.
 Screenshots are written to a temporary directory
 unless `--artifacts PATH` is supplied. Playwright is only a development dependency.
 

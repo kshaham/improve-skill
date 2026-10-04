@@ -109,6 +109,11 @@ An active supervisor's null outcome takes precedence over an unconfirmed worker 
 Foreground completion recorded before its deadline is flagged without modifying the ledger.
 The panel remains about the current run when filtering archived task history.
 
+The Requests tab shares the run selector and text search, including archived skill
+responses. Its related-work buttons open matching tasks and bets from that same run.
+Use **Reports** to browse and download saved final reports from any run, even if the
+current run has no report yet. Reports render as plain text, up to 512 KiB each.
+
 An ended run with **Final report pending** still needs its report-only retry. During a
 live report retry the board says **Writing final report** while retaining the original
 outcome in stored history. Viewer warnings and pending reports never approve unverified work.
@@ -124,7 +129,9 @@ actions are available only for unfinished current tasks. A replacement run has a
 identity, so forms opened before it started are rejected with their drafts intact.
 Requests have stable IDs for safe retry after a lost response. The board shows their
 pending/applied/declined responses in a separate tab. `operator.lock` serializes submissions
-and acknowledgments and stays in place during new-run archival.
+and acknowledgments, worker request reads, and board/report snapshots against new-run
+archival. The lock stays in place across runs. Archived pending requests do not become
+current work; a new submission always goes to the current run.
 
 The server binds only `127.0.0.1`, validates local Host headers, and serves allowlisted
 board assets, ledger fields, user requests/responses, and the bounded saved final report.

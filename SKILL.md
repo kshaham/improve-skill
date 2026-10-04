@@ -5,8 +5,9 @@ license: MIT
 metadata:
   author: Kamal Shaham
   created: 2026-09-05
-  version: 1.11.0
+  version: 1.12.0
   changelog: |
+    1.12.0 (2026-10-04) - searchable archived requests, links to resulting tasks and bets, report browsing across runs, stable request pagination, and consistent request checkpoints during archival
     1.11.0 (2026-10-04) - cooperative board pause/resume/stop, durable task and guidance requests, proposal decisions, priorities, request receipts, saved reports, and authenticated local controls
     1.10.0 (2026-10-04) - compact completed-history rows, four working columns, paginated searchable history, stable live browsing, keyboard navigation, and large-history browser checks
     1.9.0 (2026-10-04) - experiment-aware progress checks, lifecycle-only churn detection, preserved intake authorization, completed-intake validation, and truthful board run health
@@ -72,6 +73,10 @@ the resulting plan/ledger change. Follow [references/board-control.md](reference
 for request handling, idempotent recovery, and cooperative pause/resume. If pause is
 requested during a supervised cycle, settle current work and return a clean checkpoint;
 the supervisor waits without resetting the deadline.
+
+Preserve `board_request_id` on work created from a request so the board can link it to
+its status and evidence across archived runs. Read only the current run's pending helper
+output when applying requests; archived pending requests are history, not a new work queue.
 
 ## What makes this different from ordinary work
 
