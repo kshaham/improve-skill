@@ -1,7 +1,8 @@
 # Finder briefs
 
-Dispatch these as **read-only** subagents, four per refill by the rotation in SKILL.md (`Explore`,
-or a reviewer agent with no write tools). They search and report. They never edit - editing
+Use these as read-only briefs, with up to four concurrent finders within available slots,
+or directly in the main session when subagents are unavailable. Follow the intake focus
+plan and the rotation/checkpoint rules in `continuation.md`. They search and report. They never edit - editing
 happens serially in the main session, so that one gate run maps to exactly one change.
 
 ## Rules that apply to every brief
@@ -10,9 +11,9 @@ Append this to each:
 
 > Return findings as a JSON array matching `.improve/backlog.jsonl`'s schema. Every finding
 > MUST carry: the file path, the line, a one-sentence claim, the evidence you actually read,
-> and a concrete failure scenario - specific inputs or state leading to a specific wrong
-> outcome. A finding that cannot name what breaks and when is a preference, not a finding;
-> drop it rather than padding the list.
+> and a concrete failure scenario, measurement, or unmet user acceptance criterion. For
+> features/UI/assets, name the requested outcome and observable before/after evidence.
+> Drop unsupported preferences rather than padding the list.
 >
 > Do not report style nits the repo's own linter would already catch, and do not report
 > anything that contradicts a documented decision in CLAUDE.md, AGENTS.md, or a comment that
@@ -22,10 +23,12 @@ Append this to each:
 > Here are the findings already in the ledger, including dismissed ones. Do not repeat any of
 > them: <paste the deduped claim list>
 >
+> Include your assigned focus priority, paths examined, hypothesis, revision, and next
+> unscanned scope, even for an empty result. Do not call an interrupted scan complete.
 > Return at most 8 findings. Fewer real ones beats more padded ones. Returning an empty array
 > is a valid and useful answer.
 
-## security - always dispatched, always preempts
+## security - prioritized by user focus and concrete risk
 
 **The scanner baseline is already in the ledger; do not redo it.** At preflight the loop ran
 whatever scanners this machine has (see `verification.md`) and seeded the security backlog
@@ -91,6 +94,8 @@ worse than no test, because it reports success.
 
 ## performance - what the user feels, from the journey down
 
+Read `performance.md` when this lane is active.
+
 You are given the journeys in `run.json` with their current numbers, and the profiler
 invocation recorded at preflight. Your brief is not to read the code for slow-looking
 things. It is to run the slowest journey under the profiler and report what its time is
@@ -123,7 +128,7 @@ would be measured in this toolchain. Those become the lane's first items.
 ## gate-speed - the loop's own lever
 
 Make this repo's gates faster without making them prove less. Every second saved here is
-paid back on every cycle of the rest of the run, which is why this lane is always on.
+paid back on later cycles; consider it when it supports the user’s focus.
 
 - T1: a cache that is configured but missing (`DerivedData`, `GOCACHE`, `node_modules`,
   `~/.cargo`) on the path the gate takes; a test suite that runs its slowest package first
@@ -232,3 +237,44 @@ round-trip test: the server's actual response shape decoded by the client's actu
 or the schema file validated against both. Never change the wire format to fix a client -
 that is a migration by another name and it is the human's; fix the side that is wrong, and
 if both could be, the item is `proposed`.
+
+
+## features - only when requested in the intake
+
+Translate the user's desired feature behavior into an acceptance gap. Follow a real journey
+through its entry point, state transitions, error handling, and persistence. Name the
+current behavior, desired behavior, bounded implementation, and executable acceptance check.
+Do not invent product requirements or treat a new feature as a defect in existing behavior.
+
+At higher tiers, inspect interactions with adjacent features, empty data, retries,
+cancellation, and interrupted flows. Propose changes requiring a schema, wire-format,
+dependency, or money-invariant exception. New functionality lands with a regression or
+acceptance test and the normal gates, including counter-scenario and mutation where applicable.
+
+## ui - only for requested screens or interactions
+
+Inspect the rendered screen before proposing a change. Exercise the relevant states:
+loading, empty, populated, error, focus/keyboard, small viewport, and any user-named device.
+Check existing design tokens and reusable components before adding variants. A screenshot
+or interaction trace tied to the user's goal is evidence; “make it modern” is not.
+
+Find concrete gaps in visual hierarchy, spacing, legibility, selection/feedback, responsiveness,
+or interaction affordances against the intake. Validate after changes at the same viewport
+and state, using before/after captures plus functional and accessibility checks where relevant.
+Do not impose an unrelated redesign. If rendering cannot run, record the limitation and
+propose visual changes instead of declaring an unseen screen improved.
+
+## assets - only for requested graphics, images, icons, or animation
+
+Inventory where the requested asset is used, its format, dimensions, size, theme variants,
+and existing licensing/provenance. Identify an evidenced mismatch: blurry scaling, wrong
+cropping, inconsistent icons, excessive transfer/decode cost, unreadable animation, or a
+specific user-requested style change.
+
+Preserve editable originals and the existing asset pipeline. Use installed, authorized
+creation tools that fit the asset format and the user's cost constraints. Never substitute
+placeholder graphics and call them finished. Verify the asset in the actual screen at its
+intended display size, including transparency, light/dark variants, reduced motion when
+relevant, and loading behavior. Report actual rendered comparisons; compression/performance
+claims also need before/after measurements. If generation or rendering is unavailable,
+continue other eligible work and record the asset task with the precise missing capability.
