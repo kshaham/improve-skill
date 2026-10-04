@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Improve · Task board</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/board.css" />
+    <script src="/board.js" defer></script>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="Improve board"
+        ><span class="brand-mark" aria-hidden="true">↗</span>improve<span
+          class="brand-dot"
+          >.</span
+        ></a
+      >
+      <div class="workspace-label">YOUR WORKSPACE</div>
+      <div id="repo" class="repo-name">Local project</div>
+      <div class="nav-item">
+        <span aria-hidden="true">▥</span> Task board
+        <span class="nav-dot"></span>
+      </div>
+      <div class="sidebar-note">
+        <span class="small-dot"></span> Local to this computer
+        <p>Your task ledger, updated as work happens.</p>
+      </div>
+    </aside>
+    <main>
+      <header class="topbar">
+        <span class="breadcrumb">Workspace <span>/</span> Task board</span
+        ><span id="connection" role="status" class="connection"
+          >Connecting…</span
+        >
+      </header>
+      <section class="page-heading">
+        <div>
+          <div class="eyebrow">CONTINUOUS IMPROVEMENT</div>
+          <h1>Work in progress.<span class="heading-dot">●</span></h1>
+          <p>A live view of what’s next, what’s moving, and what’s done.</p>
+        </div>
+        <div class="actions">
+          <button id="refresh" type="button">↻ <span>Refresh</span></button
+          ><button id="export" type="button" class="primary">
+            Export tasks <span aria-hidden="true">↗</span>
+          </button>
+        </div>
+      </section>
+      <section class="stats" aria-label="Task summary">
+        <div class="stat">
+          <span>Total tasks</span><strong id="total">0</strong
+          ><small id="run-count">All recorded work</small>
+        </div>
+        <div class="stat">
+          <span>In progress <i class="dot purple"></i></span
+          ><strong id="working">0</strong
+          ><small>Currently being worked on</small>
+        </div>
+        <div class="stat">
+          <span>Completed <i class="dot green"></i></span
+          ><strong id="completed">0</strong><small>Recorded as done</small>
+        </div>
+        <div class="stat">
+          <span>Needs attention <i class="dot amber"></i></span
+          ><strong id="blocked">0</strong
+          ><small>Blocked or awaiting a decision</small>
+        </div>
+      </section>
+      <section class="run-strip" aria-label="Current run">
+        <span id="run-state" class="run-badge">No active run</span
+        ><span id="run-detail">The board is ready for your first task.</span
+        ><span id="remaining" class="remaining"></span>
+      </section>
+      <div id="warning" class="warning" role="status" hidden></div>
+      <section class="toolbar" aria-label="Board filters">
+        <label class="search"
+          ><span aria-hidden="true">⌕</span
+          ><input
+            id="search"
+            type="search"
+            placeholder="Search tasks, files, evidence…"
+            aria-label="Search tasks"
+        /></label>
+        <div class="filters">
+          <label
+            >Run
+            <select id="run">
+              <option value="all">All runs</option>
+              <option value="current">Current run</option>
+            </select></label
+          ><label
+            >Area
+            <select id="area">
+              <option value="all">All areas</option>
+            </select></label
+          ><span id="visible-count" class="visible-count">0 tasks</span>
+        </div>
+      </section>
+      <div id="empty" class="empty-state" hidden>
+        <span aria-hidden="true">▥</span>
+        <h2>Your next improvement starts here.</h2>
+        <p>
+          Tasks appear as the skill records them. This page refreshes
+          automatically.
+        </p>
+      </div>
+      <section id="board" class="board" aria-label="Kanban board"></section>
+      <section id="discovery-section" class="discovery-section" hidden>
+        <div class="section-heading">
+          <h2>Recent investigations</h2>
+          <span>Discovery is work, too.</span>
+        </div>
+        <div id="discovery" class="discovery-list"></div>
+      </section>
+      <footer>
+        <span>Reading your project’s improvement ledger · View only</span
+        ><span id="updated">Waiting for data</span>
+      </footer>
+    </main>
+    <dialog id="task-dialog" aria-labelledby="detail-title">
+      <div class="dialog-top">
+        <span id="detail-meta" class="eyebrow"></span
+        ><button
+          id="close-dialog"
+          aria-label="Close task details"
+          type="button"
+        >
+          ✕
+        </button>
+      </div>
+      <h2 id="detail-title"></h2>
+      <div id="detail-content"></div>
+    </dialog>
+  </body>
+</html>

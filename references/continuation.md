@@ -34,6 +34,12 @@ later environment defaults; an explicit different `--model` requires `--new-run`
 selection leaves the model to the CLI configuration. Legacy supervisors without a model
 field adopt the supplied selection on their first upgraded launch.
 
+The supervisor also starts the local Kanban board unless `--no-board` is set. Child
+cycles only maintain the ledger; never start or stop a board from those cycles. Foreground
+and scheduler runs use the installed `scripts/improve-board.sh --start` once and reuse
+its URL. Keep each task's `in_progress`/settled status and evidence current at checkpoints.
+Board availability does not prove the daemon is running. See [board.md](board.md).
+
 ## Checkpoint a useful cycle
 
 Atomically update `run.json` after each item or completed discovery pass:

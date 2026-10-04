@@ -4,6 +4,8 @@ An autonomous improvement skill for Codex and Claude Code. It asks ten questions
 then discovers and implements verified improvements for the requested duration. The focus
 can be features, UI, graphics/assets, performance, bugs, security, or supporting code quality.
 An empty backlog starts another discovery pass; it does not finish the run.
+Every run also gets a local Kanban board showing queued, active, completed, blocked,
+proposed, and rejected tasks, with live updates and searchable history.
 
 ```text
 Codex:       $improve 4h
@@ -69,6 +71,49 @@ compaction reuse that plan. A fresh run gets a fresh intake.
 Most discovery effort goes to the highest-priority unfinished outcomes. Other lanes support
 those goals; easy cleanup cannot crowd out a requested feature or visual improvement.
 Explicit exclusions apply throughout. User steering updates the plan without resetting time.
+
+## Local Kanban board
+
+The skill creates a board and shares its local URL when a run starts. Daemon runs start
+it automatically with either Codex or Claude; foreground runs launch the same helper.
+You can also open a board for any repository with an existing improvement ledger:
+
+```sh
+improve_board="$HOME/Code/improve-skill/scripts/improve-board.sh"
+improve_repo="$HOME/Code/my-app"
+"$improve_board" --repo "$improve_repo" --start
+# Prints the actual URL, normally http://127.0.0.1:8765
+"$improve_board" --repo "$improve_repo" --status --json
+"$improve_board" --repo "$improve_repo" --stop
+```
+
+The board includes:
+
+- **Six columns:** Queued, In progress, Done, Blocked, Proposed, and Rejected.
+- **Task details:** evidence, acceptance checks, verification, files, notes, and commits.
+- **Search and filters:** find tasks by text, area, or run, including archived history.
+- **Live progress:** task counts, deadline, latest checkpoint, and recent investigations.
+- **Export:** download the filtered task list as JSON.
+
+It reads `.improve/backlog.jsonl` directly, includes `improve-max` experiments from
+`bets.jsonl`, and refreshes every three seconds while visible.
+There is no second task database to maintain. The skill records tasks before starting,
+updates their status as work progresses, and retains finished/rejected work. Existing
+ledgers work without migration; older work that was never recorded cannot be reconstructed.
+The view is read-only; proposals and blocked items do not become approved by opening them.
+
+The board stays available after the improvement run ends. Stopping it does not stop the
+daemon, and daemon `--stop` leaves the board available. Restarting the computer stops the
+service; `--start` brings the saved history back. Daemon `--new-run` archives old tasks
+without changing a running board's URL. Multiple repositories receive separate ports;
+if 8765 is busy the helper chooses a free port. Use helper `--port 9000` or daemon
+`--board-port 9000` for a specific port, or `0` to choose any free port. Repeated starts
+reuse the existing board. Daemon `--no-board` skips startup; an unavailable board never
+prevents improvement work.
+
+Only Python 3.9+ is required. The server binds to `127.0.0.1` and uses local assets, with
+no npm setup or hosted service. Keep `.improve/` untracked. See
+[board lifecycle and task schema](references/board.md) for details and remote-host access.
 
 ## Lanes and evidence
 
@@ -320,6 +365,7 @@ reset branches. Status and dry-run do not create state or launch a paid agent.
 | `--codex-sandbox MODE` | Carry over the current Codex session's permitted mode; saved on recovery |
 | `--model NAME` | Save an explicit model for the run; otherwise use the initial environment or CLI default |
 | `--intake FILE` | JSON with all ten answers; required before new improvement work |
+| `--no-board` / `--board-port PORT` | Skip automatic board startup, or select its local port; `0` chooses a free port |
 | `--skill improve-max --args "..."` | Select the max variant and its parameters; repeat these on recovery |
 | `--new-run` | Archive old state; requires a new duration and completed intake |
 | `--resume` | Continue a recovered halt/stop with the original deadline and saved settings |
@@ -341,6 +387,7 @@ the final narrative report was generated. These differ from the clock's `0`/`10`
 | `phase: account-limit` after a restart | Check `retry_at`; the daemon deliberately waits for the saved retry time |
 | Halt after failed/uncheckpointed cycles | Read `daemon.log`, `last_error`, and discovery evidence; resolve the blocker before `--resume` |
 | `summary_pending: true` | Restore the required CLI/environment, then `--finalize`; the original reason and end time remain intact |
+| Board unavailable | Read `.improve/board.log`, check the helper's `--status`, and retry `--start`; use `--port 0` if your explicit port is occupied |
 | Skill not appearing or appearing twice | Check the installed link and skill name; keep one installation per host, reload if needed |
 
 ## State on disk
@@ -350,6 +397,7 @@ the final narrative report was generated. These differ from the clock's `0`/`10`
 | `intake.json` | All ten user answers |
 | `run.json` | Focus, authorization, deadline, gates, cycle, next action, active item, outcome |
 | `backlog.jsonl` | Candidates, evidence, acceptance checks, status, commit SHA |
+| `bets.jsonl` | Improve-max experiments, phases, measurements, and implementation pieces; also shown on the board |
 | `discovery.jsonl` | Scoped scans and their results, including empty/failed passes |
 | `journal.md` | Reports, steering, recovery and account-limit gaps |
 | `final-report.md` | Durable final handover; retryable independently of work |
@@ -357,6 +405,7 @@ the final narrative report was generated. These differ from the clock's `0`/`10`
 | `daemon.log` | Timestamped supervisor and cycle output |
 | `launcher.log` | Optional `nohup` output, kept out of the work tree |
 | `daemon.lock` | OS-held exclusive lock; file presence alone does not mean running |
+| `board.json`, `board.lock`, `board.log` | Local board identity/URL/private stop token, exclusive lock, and startup log; retained across new runs |
 | `history/` | Explicitly archived previous run state |
 
 The primary session owns atomic state updates. See [references/ledger.md](references/ledger.md).
@@ -411,15 +460,27 @@ From the skill checkout:
 
 ```sh
 python3 -B -m unittest discover -s tests -v
-bash -n scripts/improve-clock.sh scripts/improve-daemon.sh
+bash -n scripts/improve-clock.sh scripts/improve-daemon.sh scripts/improve-board.sh
 ```
 
 The regression suite uses temporary git repositories and fake Codex and Claude CLIs. It tests intake,
 deadlines, early completion, discovery continuity, restart, rate limits, lock ownership,
 timeouts, dirty state, recovery, repeated-scan detection, stop/deadline cleanup, report-only
 retries, engine/model persistence, authoritative clocks, rate-limit restart accounting,
-failed-success claims, stale reports, missing CLI failures, and finalization without
+failed-success claims, stale reports, missing CLI failures, board startup/stop/history,
+malformed ledgers, HTTP boundaries, live task data, and finalization without
 launching a real model or editing a real app.
 It does not establish that every model will find useful changes for a multi-hour run.
+
+Optional browser checks use Playwright with an installed Chrome executable (the macOS
+default is detected), or a Playwright-managed Chromium installation:
+
+```sh
+uv run --with playwright python tests/browser_board.py --chrome /path/to/chrome
+```
+
+These exercise filtering, task details, automatic refresh, export, escaped task text,
+connection recovery, and mobile overflow. Screenshots are written to a temporary directory
+unless `--artifacts PATH` is supplied. Playwright is only a development dependency.
 
 Licensed under [MIT](LICENSE).

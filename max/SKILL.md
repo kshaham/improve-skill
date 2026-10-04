@@ -6,7 +6,7 @@ metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus)
   created: 2026-09-17
   parent: improve
-  version: 0.4.0
+  version: 0.5.0
   install: symlink improve-max to this directory beside the improve skill in the host's skills folder
 ---
 
@@ -122,6 +122,11 @@ Everything in `/improve`'s `.improve/` plus:
 `run.json` gains `mode: "max"`, `target_stack` (null until a stack bet lands), and the
 journey table is the run's scoreboard. See `references/bets.md` and
 `references/characterization.md`.
+
+The parent's local Kanban board includes `bets.jsonl` alongside ordinary tasks. Keep bet
+phases, measurements, and implementation-piece statuses current; do not duplicate bets in
+`backlog.jsonl` for visibility. Share the verified board URL in daily/hourly/final reports.
+See `../references/board.md` for startup and status mappings.
 
 ## Preflight - the first day is mostly this
 
