@@ -108,6 +108,7 @@ state = pathlib.Path('.improve')
 prompt = sys.argv[-1]
 with (state / 'launches.jsonl').open('a') as stream:
     stream.write(json.dumps({'prompt': prompt, 'engine': pathlib.Path(sys.argv[0]).name,
+                            'started_epoch': time.time(),
                             'argv': sys.argv[1:], 'nested_claude': os.environ.get('CLAUDECODE'),
                             'config_home': os.environ.get('CODEX_HOME'),
                             'stdin': sys.stdin.read()}) + '\n')
@@ -153,10 +154,16 @@ else:
     elif mode == 'dirty':
         pathlib.Path('uncommitted.txt').write_text('unverified work')
         run['outcome'] = 'completed'
-    elif mode == 'target':
+    elif mode in ('target', 'failed_target'):
         run['outcome'] = 'target reached'
+    elif mode in ('completed_at_deadline', 'failed_completion'):
+        deadline = __import__('datetime').datetime.fromisoformat(control['deadline'].replace('Z', '+00:00')).timestamp()
+        time.sleep(max(0, deadline - time.time()))
+        run['outcome'] = 'completed'
     print('Found missing rate limiting on auth endpoints; scanned a new scope.')
 path.write_text(json.dumps(run))
+if mode in ('failed_target', 'failed_completion'):
+    sys.exit(1)
 '''
 
 
@@ -213,6 +220,121 @@ class DaemonTests(unittest.TestCase):
                    deadline=runtime.stamp(int(time.time()) + remaining), cycle=7, outcome=None)
         runtime.atomic_json(self.state / "run.json", run)
         return run
+
+    def seed_control(self, **changes):
+        run = self.seed()
+        control = {**run, 'skill': 'improve', 'args': '', 'engine': 'claude', **changes}
+        runtime.atomic_json(self.state / 'supervisor.json', control)
+        return control
+
+    def test_clock_uses_supervisor_before_first_checkpoint(self):
+        control = self.seed_control()
+        (self.state / 'run.json').unlink()
+        command = [str(ROOT / 'scripts/improve-clock.sh'), '--json', str(self.repo)]
+        result = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['deadline'], control['deadline'])
+
+    def test_clock_and_status_ignore_agent_deadline_reset_but_keep_report_progress(self):
+        control = self.seed_control(started_at=runtime.stamp(time.time() - 7205))
+        run = self.load()
+        run.update(deadline='2099-01-01T00:00:00Z', last_report_hour=2)
+        runtime.atomic_json(self.state / 'run.json', run)
+        commands = ([str(ROOT / 'scripts/improve-clock.sh'), '--json', str(self.repo)],
+                    self.command('--status', '--json'))
+        for command in commands:
+            result = subprocess.run(command, env=self.env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            info = json.loads(result.stdout)
+            info = info.get('clock', info)
+            self.assertEqual(info['deadline'], control['deadline'])
+            self.assertEqual(info['started_at'], control['started_at'])
+            self.assertIsNone(info['report_hour'])
+        self.assertEqual(self.load()['deadline'], '2099-01-01T00:00:00Z')  # Read-only clock.
+
+    def test_resume_keeps_explicit_model_even_when_environment_changes(self):
+        self.assertEqual(self.invoke('halt', '--model', 'original-model').returncode, 1)
+        self.env['IMPROVE_MODEL'] = 'different-model'
+        result = self.invoke('early', '--resume', intake=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for row in self.launches():
+            self.assertEqual(row['argv'][row['argv'].index('--model') + 1], 'original-model')
+        self.assertEqual(self.load('supervisor.json')['model'], 'original-model')
+
+    def test_explicit_model_change_requires_new_run(self):
+        self.assertEqual(self.invoke('halt', '--model', 'original-model').returncode, 1)
+        old = (self.state / 'supervisor.json').read_bytes()
+        result = self.invoke('early', '--resume', '--model', 'different-model')
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual((self.state / 'supervisor.json').read_bytes(), old)
+        self.assertEqual(len(self.launches()), 1)
+
+    def test_restart_waits_for_recorded_rate_limit_retry(self):
+        now = int(time.time())
+        retry = now + 3
+        self.seed_control(phase='account-limit', retry_at=runtime.stamp(retry),
+                          limit_wait_started_at=runtime.stamp(now - 2),
+                          limit_waited_seconds=4, next_limit_wait=10)
+        result = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertGreaterEqual(self.launches()[0]['started_epoch'], retry)
+        control = self.load('supervisor.json')
+        self.assertGreaterEqual(control['limit_waited_seconds'], 9)
+        self.assertIsNone(control['retry_at'])
+
+    def test_expired_retry_accounts_downtime_without_sleeping_again(self):
+        now = int(time.time())
+        self.seed_control(phase='account-limit', retry_at=runtime.stamp(now - 1),
+                          limit_wait_started_at=runtime.stamp(now - 6), limit_waited_seconds=7)
+        result = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.load('supervisor.json')['limit_waited_seconds'], 12)
+        self.assertIsNone(self.load('supervisor.json')['retry_at'])
+
+    def test_restart_after_deadline_accounts_pending_wait_before_final_report(self):
+        now = int(time.time())
+        self.seed_control(deadline=runtime.stamp(now - 1), phase='account-limit',
+                          retry_at=runtime.stamp(now - 1), limit_wait_started_at=runtime.stamp(now - 6),
+                          limit_waited_seconds=4)
+        result = self.invoke('empty')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.load('supervisor.json')['limit_waited_seconds'], 9)
+        self.assertIsNone(self.load('supervisor.json')['retry_at'])
+        self.assertEqual(len(self.launches()), 1)
+        self.assertIn('FINALIZATION ONLY', self.launches()[0]['prompt'])
+
+    def test_invalid_saved_retry_does_not_launch_or_erase_state(self):
+        self.seed_control(phase='account-limit', retry_at='not-a-timestamp')
+        old = (self.state / 'supervisor.json').read_bytes()
+        result = self.invoke()
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse((self.state / 'launches.jsonl').exists())
+        self.assertEqual((self.state / 'supervisor.json').read_bytes(), old)
+
+    def test_failed_cycle_cannot_claim_target_success(self):
+        result = self.invoke('failed_target', '--skill', 'improve-max', '--args=--stop-at-target')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertTrue(self.load()['outcome'].startswith('halted:'))
+        self.assertTrue(self.load()['summary_pending'])
+
+    def test_failed_cycle_cannot_claim_deadline_success(self):
+        result = self.invoke('failed_completion', duration='2s')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertTrue(self.load()['outcome'].startswith('halted:'))
+
+    def test_cycle_completion_at_deadline_still_gets_final_report(self):
+        result = self.invoke('completed_at_deadline', duration='2s')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.launches()), 2)
+        self.assertIn('FINALIZATION ONLY', self.launches()[-1]['prompt'])
+        self.assertFalse(self.load()['summary_pending'])
+
+    def test_resumed_halt_does_not_reuse_a_stale_report(self):
+        self.assertEqual(self.invoke('halt').returncode, 1)
+        self.assertEqual(self.invoke('empty', '--finalize').returncode, 1)
+        self.assertFalse(self.load()['summary_pending'])
+        self.assertEqual(self.invoke('halt', '--resume').returncode, 1)
+        self.assertTrue(self.load()['summary_pending'])
 
     def test_codex_host_launches_codex_and_relaunches_until_stopped(self):
         self.env.update(IMPROVE_ENGINE="auto", CODEX_THREAD_ID="test-thread")

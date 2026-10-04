@@ -9,6 +9,7 @@
       "started_at": "2026-09-05T14:03:00Z",
       "deadline":   "2026-09-05T18:03:00Z",
       "focus": { "source": "intake.json", "priorities": [], "excluded": [] },
+      "authorization": { "grants": [], "exclusions": [] },
       "phase": "discover",
       "preflight_complete": true,
       "last_activity_at": "2026-09-05T17:03:00Z",
@@ -52,12 +53,14 @@ first); the clock compares it with elapsed time to say whether a report is due.
 dry sweep uses to find ground nobody has looked at. `dry_sweep` is which step of the sweep
 (0 = not dry, 1-4 = the step in SKILL.md's Escalation) the next refill runs.
 
-`outcome` stays `null` while the run is live - that is what marks a run as resumable. It is
-set exactly once: `completed` when the clock has exited `10`, `halted: <reason>` for a halt
+`outcome` stays `null` while the run is live - that is what marks a run as resumable. At the
+end it becomes `completed` when the clock has exited `10`, `halted: <reason>` for a halt
 condition, `stopped by user`, or `target reached` for improve-max with explicit
 `--stop-at-target`. Never `completed` while the clock still says `RUNNING`. The supervisor
 repairs an agent’s premature completion and records it in the journal. `summary_pending`
 means the narrative final report still needs writing; it does not claim verification.
+Explicit `--resume` after recovery clears a halt/stop marker while preserving the deadline
+and journaling the previous outcome. A plain restart never clears terminal state.
 
 ## backlog.jsonl
 
@@ -125,6 +128,9 @@ keeps its runs.
 `intake.json` preserves all ten answers before any new run starts; see `intake.md`. Keep
 `run.json.focus` alongside it as the interpreted, ordered plan. User steering changes that
 plan with a dated journal note, never silently restarts the duration.
+`run.json.authorization` records explicit user grants, their source and conditions, and
+remaining exclusions. Carry it across cycles; neither a finder proposal nor a new priority
+silently grants permission to publish, spend, or expand the requested scope.
 
 `discovery.jsonl` records one row per scan:
 
@@ -137,6 +143,9 @@ ledger and do not edit it. It preserves the deadline even if preflight never fin
 Its `engine` is `codex` or `claude`, selected before the first cycle and kept on recovery.
 Older supervisor files lacking `engine` are migrated to `claude`, the historical provider.
 `codex_sandbox` saves an explicit Codex mode, or null to use the CLI's configuration.
+`model` saves the initial explicit model selection, or null for the CLI default. Recoveries
+reuse it even if `IMPROVE_MODEL` changes. The clock uses these supervisor timestamps and
+the agent's `last_report_hour`; it works before the first agent checkpoint.
 `daemon.lock` is an OS-held exclusive lock; its file may remain when no process is running.
 Use `--status` to inspect liveness. `stop.request` asks the supervisor to stop after the
 current cycle. `history/` contains state archived explicitly with `--new-run`.
@@ -149,5 +158,7 @@ and this record before recovery. Never use the record as permission to erase unr
 `final-report.md` is the durable final handover. A report-only retry preserves the original
 outcome and `ended_at`; a new report's timestamp is not a new run end time. The supervisor
 stores `consecutive_failures`, `limit_waited_seconds`, `next_limit_wait`, `phase`, `child_pid`,
-`heartbeat_at` (last supervisor state update), and `retry_at`. Agents must not edit those
+`heartbeat_at` (last supervisor state update), `retry_at`, and `limit_wait_started_at` (the
+unaccounted start of a pending wait). A restarted daemon honors `retry_at` and accounts the
+elapsed portion once, including downtime. Agents must not edit those
 fields. `--status --json` returns them with the current clock and the agent's run state.
