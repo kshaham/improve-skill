@@ -6,7 +6,7 @@ metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus)
   created: 2026-09-17
   parent: improve
-  version: 0.5.0
+  version: 0.6.0
   install: symlink improve-max to this directory beside the improve skill in the host's skills folder
 ---
 
@@ -127,6 +127,10 @@ The parent's local Kanban board includes `bets.jsonl` alongside ordinary tasks. 
 phases, measurements, and implementation-piece statuses current; do not duplicate bets in
 `backlog.jsonl` for visibility. Share the verified board URL in daily/hourly/final reports.
 See `../references/board.md` for startup and status mappings.
+Read and acknowledge board requests at each checkpoint using the parent's
+`scripts/improve_control.py` helper and `../references/board-control.md`. Proposal
+approval preserves this skill's characterization and spike gates. A requested pause
+settles the current piece and returns to the supervisor; the original deadline stays fixed.
 
 ## Preflight - the first day is mostly this
 

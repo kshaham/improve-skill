@@ -149,6 +149,13 @@ plan with a dated journal note, never silently restarts the duration.
 remaining exclusions. Carry it across cycles; neither a finder proposal nor a new priority
 silently grants permission to publish, spend, or expand the requested scope.
 
+Board submissions live in `operator.json`; acknowledged outcomes live in
+`board-receipts.json`. Consume them at item boundaries using `scripts/improve_control.py`,
+and link created tasks with `board_request_id`. `user_priority` records high/normal/low
+without changing evidence-based severity. The board never writes worker-owned ledgers.
+`pause.json` belongs to the user and is scoped to the supervisor's immutable `run_id`;
+the supervisor alone writes its `paused` phase. See [board-control.md](board-control.md).
+
 `discovery.jsonl` records one row per scan:
 
 ```json

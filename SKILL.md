@@ -6,8 +6,9 @@ metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus) in plan mode
   created: 2026-09-05
   origin: Designed to spec in the ~/Code/bonsai session (plan shimmying-roaming-goose.md); daemon added 2026-09-06 after the first 6h run hit ENOSPC
-  version: 1.10.0
+  version: 1.11.0
   changelog: |
+    1.11.0 (2026-10-04) - cooperative board pause/resume/stop, durable task and guidance requests, proposal decisions, priorities, request receipts, saved reports, and authenticated local controls
     1.10.0 (2026-10-04) - compact completed-history rows, four working columns, paginated searchable history, stable live browsing, keyboard navigation, and large-history browser checks
     1.9.0 (2026-10-04) - experiment-aware progress checks, lifecycle-only churn detection, preserved intake authorization, completed-intake validation, and truthful board run health
     1.8.0 (2026-10-04) - live local Kanban board, automatic daemon startup, searchable task history, explicit task transitions, archived runs, local-only service and browser tests
@@ -64,6 +65,14 @@ Retain finished tasks. Keep meaningful investigations in `discovery.jsonl`; don'
 tasks or outcomes to fill columns. The board shows current and archived ledgers, refreshes
 automatically, and stays available after completion. See [references/board.md](references/board.md)
 for lifecycle, task fields, and local commands.
+
+Before selecting work and after each settled item, read pending board requests with the
+installed `scripts/improve_control.py --repo <repo> pending` helper. Apply user task,
+priority, guidance, and proposal decisions at checkpoints; acknowledge only after saving
+the resulting plan/ledger change. Follow [references/board-control.md](references/board-control.md)
+for request handling, idempotent recovery, and cooperative pause/resume. If pause is
+requested during a supervised cycle, settle current work and return a clean checkpoint;
+the supervisor waits without resetting the deadline.
 
 ## What makes this different from ordinary work
 
@@ -511,6 +520,7 @@ build a real coverage profile) can miss the deadline entirely. So:
 - `references/work-selection.md` - acceptance goals, evidence, scope, and verification budgets
 - `references/continuation.md` - execution modes, discovery checkpoints, recovery
 - `references/board.md` - local Kanban board, task history, startup and shutdown
+- `references/board-control.md` - run controls, user requests, and saved responses
 - `references/performance.md` - journey harnesses and profiling when performance is active
 
 - `scripts/improve-clock.sh` - elapsed, remaining, hour label, report due, deadline passed

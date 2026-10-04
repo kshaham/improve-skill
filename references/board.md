@@ -1,8 +1,10 @@
 # Local Kanban board
 
-The board is a read-only view of the target repository's `.improve/` ledger. It needs
+The board shows the target repository's `.improve/` ledger and lets the user control a
+running daemon or submit requests for the skill. It needs
 Python 3.9+ and a browser, with no npm install, hosted account, or external assets.
-It does not run agents, advance the clock, approve proposals, or change task status.
+It does not launch agents or rewrite task status directly. Requests and responses live
+separately from the worker-owned task ledger; see [board-control.md](board-control.md).
 
 ## Launch and share the URL
 
@@ -117,9 +119,19 @@ outcome in stored history. Viewer warnings and pending reports never approve unv
 but preserves these service files and the existing URL. Daemon `--status --json` includes
 board liveness and its URL without exposing the token.
 
+Run controls always target the current run, even while browsing archived tasks. Task
+actions are available only for unfinished current tasks. A replacement run has a new
+identity, so forms opened before it started are rejected with their drafts intact.
+Requests have stable IDs for safe retry after a lost response. The board shows their
+pending/applied/declined responses in a separate tab. `operator.lock` serializes submissions
+and acknowledgments and stays in place during new-run archival.
+
 The server binds only `127.0.0.1`, validates local Host headers, and serves allowlisted
-board assets and ledger fields. It does not serve arbitrary repository files, intake
-answers, raw logs, or authorization state. Task text renders as text, never HTML. The
-browser has no write/stop controls; the CLI stop action uses a private token. Treat task
+board assets, ledger fields, user requests/responses, and the bounded saved final report.
+It does not serve arbitrary repository files, intake answers, raw logs, or authorization
+state. Task, request, and report content renders as text, never HTML. Browser mutations
+require an explicit same-origin request, a per-service browser capability, and a matching
+run identity. That capability cannot stop the board service; the CLI stop action uses a
+separate private token. Requests have length limits and are never executed as shell commands. Treat task
 content as locally visible and keep secrets out of task evidence. No remote fonts,
 analytics, CDNs, or model calls are used.

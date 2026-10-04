@@ -11,6 +11,7 @@ import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 spec = importlib.util.spec_from_file_location("runtime", ROOT / "scripts/improve_runtime.py")
 runtime = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runtime)
@@ -150,6 +151,14 @@ if mode in ('timeout', 'orphan') or (mode == 'overrun' and 'FINALIZATION ONLY' n
     time.sleep(30)
     sys.exit(0)
 control = json.loads((state / 'supervisor.json').read_text())
+if mode == 'controlled' and 'FINALIZATION ONLY' not in prompt:
+    until = time.monotonic() + 10
+    while time.monotonic() < until:
+        pause_file = state / 'pause.json'
+        paused = json.loads(pause_file.read_text()).get('paused') if pause_file.exists() else False
+        if paused or (state / 'stop.request').exists():
+            break
+        time.sleep(0.02)
 path = state / 'run.json'
 run = json.loads(path.read_text()) if path.exists() else dict(
     started_at=control['started_at'], deadline=control['deadline'], outcome=None, cycle=0)
@@ -307,6 +316,139 @@ class DaemonTests(unittest.TestCase):
         control = {**run, 'skill': 'improve', 'args': '', 'engine': 'claude', **changes}
         runtime.atomic_json(self.state / 'supervisor.json', control)
         return control
+
+    def wait_control(self, predicate, timeout=5):
+        until = time.monotonic() + timeout
+        while time.monotonic() < until:
+            try:
+                value = self.load('supervisor.json')
+                if predicate(value):
+                    return value
+            except (FileNotFoundError, ValueError):
+                pass
+            time.sleep(0.02)
+        self.fail('Supervisor did not reach the expected state')
+
+    def check_board_pause(self, engine):
+        import improve_control as controls
+        self.seed_control(engine=engine, consecutive_failures=2, model='saved-model')
+        proc = subprocess.Popen(self.command('--for', '60s', '--intake', str(self.intake), '--engine', engine),
+                                env={**self.env, 'FAKE_MODE': 'controlled', 'IMPROVE_FINISH_GRACE': '1'},
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            saved = self.wait_control(lambda value: bool(value.get('child_pid')))
+            with controls.operator_lock(self.repo):
+                controls.set_pause(self.repo, saved['run_id'], True)
+            paused = self.wait_control(lambda value: value.get('phase') == 'paused')
+            self.assertEqual(paused['consecutive_failures'], 2)
+            self.assertIsNone(paused.get('child_pid'))
+            launches = len(self.launches())
+            time.sleep(0.25)
+            self.assertEqual(len(self.launches()), launches)
+            with controls.operator_lock(self.repo):
+                controls.set_pause(self.repo, saved['run_id'], False)
+            self.wait_control(lambda value: bool(value.get('child_pid')))
+            with controls.operator_lock(self.repo):
+                controls.set_pause(self.repo, saved['run_id'], True)
+            self.wait_control(lambda value: value.get('phase') == 'paused')
+            self.assertEqual(len(self.launches()), launches + 1)
+            (self.state / 'stop.request').touch()
+            out, err = proc.communicate(timeout=5)
+            self.assertEqual(proc.returncode, 0, out + err)
+            self.assertEqual(self.load('supervisor.json')['outcome'], 'stopped by user')
+            self.assertEqual(self.load('supervisor.json')['deadline'], saved['deadline'])
+            self.assertEqual(self.load('supervisor.json')['model'], 'saved-model')
+            self.assertEqual({row['engine'] for row in self.launches()}, {engine})
+        finally:
+            if proc.poll() is None:
+                (self.state / 'stop.request').touch()
+                proc.communicate(timeout=5)
+            proc.stdout.close()
+            proc.stderr.close()
+
+    def test_board_pause_resume_and_stop_claude(self):
+        self.check_board_pause('claude')
+
+    def test_board_pause_resume_and_stop_codex(self):
+        self.check_board_pause('codex')
+
+    def test_pause_survives_restart_but_never_extends_deadline(self):
+        import improve_control as controls
+        saved = self.seed_control(run_id='stable-run', deadline=runtime.stamp(time.time() + 3))
+        with controls.operator_lock(self.repo):
+            controls.set_pause(self.repo, saved['run_id'], True)
+        result = self.invoke('early')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.load('supervisor.json')['deadline'], saved['deadline'])
+        self.assertEqual(self.load('supervisor.json')['outcome'], 'completed')
+        self.assertEqual(len(self.launches()), 1)
+        self.assertIn('FINALIZATION ONLY', self.launches()[0]['prompt'])
+
+    def test_explicit_resume_clears_pause_but_keeps_run_identity(self):
+        import improve_control as controls
+        saved = self.seed_control(run_id='stable-run', outcome='stopped by user')
+        with controls.operator_lock(self.repo):
+            controls.set_pause(self.repo, saved['run_id'], True)
+        result = self.invoke('early', '--resume')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(controls.pause_requested(self.repo, saved['run_id']))
+        self.assertEqual(self.load('supervisor.json')['run_id'], saved['run_id'])
+
+    def test_new_run_archives_requests_and_preserves_operator_lock(self):
+        import improve_control as controls
+        self.assertEqual(self.invoke().returncode, 0)
+        old_id = self.load('supervisor.json')['run_id']
+        with controls.operator_lock(self.repo):
+            controls.set_pause(self.repo, old_id, True)
+        runtime.atomic_json(self.state / 'operator.json', {'requests': []})
+        runtime.atomic_json(self.state / 'board-receipts.json', {})
+        inode = (self.state / 'operator.lock').stat().st_ino
+        self.assertEqual(self.invoke('early', '--new-run').returncode, 0)
+        self.assertNotEqual(self.load('supervisor.json')['run_id'], old_id)
+        self.assertEqual((self.state / 'operator.lock').stat().st_ino, inode)
+        archive = next((self.state / 'history').iterdir())
+        for name in ('operator.json', 'board-receipts.json', 'pause.json'):
+            self.assertTrue((archive / name).is_file())
+            self.assertFalse((self.state / name).exists())
+
+    def test_malformed_pause_state_halts_without_losing_recovery_state(self):
+        self.seed_control(run_id='stable-run')
+        path = self.state / 'pause.json'
+        path.write_text('{malformed')
+        result = self.invoke()
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertTrue(self.load('supervisor.json')['outcome'].startswith('halted:'))
+        self.assertEqual(path.read_text(), '{malformed')
+        self.assertFalse((self.state / 'launches.jsonl').exists())
+
+    def test_pause_preserves_account_limit_retry_and_resume_restores_wait_phase(self):
+        import improve_control as controls
+        saved = self.seed_control(run_id='rate-limited-run', phase='account-limit',
+                                  retry_at=runtime.stamp(time.time() + 10),
+                                  limit_wait_started_at=runtime.stamp(time.time()), limit_waited_seconds=3)
+        proc = subprocess.Popen(self.command('--for', '60s', '--intake', str(self.intake)),
+                                env={**self.env, 'FAKE_MODE': 'early'},
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.wait_control(lambda value: value.get('board_control_version') == 1)
+            with controls.operator_lock(self.repo):
+                controls.set_pause(self.repo, saved['run_id'], True)
+            paused = self.wait_control(lambda value: value.get('phase') == 'paused')
+            self.assertEqual(paused['retry_at'], saved['retry_at'])
+            with controls.operator_lock(self.repo):
+                controls.set_pause(self.repo, saved['run_id'], False)
+            self.wait_control(lambda value: value.get('phase') == 'account-limit')
+            self.assertFalse((self.state / 'launches.jsonl').exists())
+            (self.state / 'stop.request').touch()
+            out, err = proc.communicate(timeout=5)
+            self.assertEqual(proc.returncode, 0, out + err)
+            self.assertGreaterEqual(self.load('supervisor.json')['limit_waited_seconds'], 3)
+        finally:
+            if proc.poll() is None:
+                (self.state / 'stop.request').touch()
+                proc.communicate(timeout=5)
+            proc.stdout.close()
+            proc.stderr.close()
 
     def test_clock_uses_supervisor_before_first_checkpoint(self):
         control = self.seed_control()

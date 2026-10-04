@@ -58,6 +58,7 @@ function filteredTasks() {
 }
 function openTask(task) {
   selectedTask = task.key;
+  taskControls(task);
   $("detail-meta").textContent = [task.id, labels[task.status], task.area].join(
     " · ",
   );
@@ -117,7 +118,9 @@ function taskCard(task) {
   card.setAttribute("aria-label", task.title + ", " + labels[task.status]);
   const eyebrow = element("div", "card-eyebrow");
   eyebrow.append(element("span", "task-id", task.id));
-  if (task.focus_priority != null || task.priority != null)
+  if (task.user_priority)
+    eyebrow.append(element("span", "priority", task.user_priority));
+  else if (task.focus_priority != null || task.priority != null)
     eyebrow.append(
       element(
         "span",
@@ -324,11 +327,17 @@ function renderCards() {
   $("history-count").textContent = countText(tasks.length - active.length);
   $("board-view").hidden = activeView !== "board";
   $("history-view").hidden = activeView !== "history";
+  $("requests-view").hidden = activeView !== "requests";
+  $("task-toolbar").hidden = activeView === "requests";
+  $("export").textContent =
+    activeView === "requests" ? "Export requests ↗" : "Export tasks ↗";
   $("export").title =
-    activeView === "history"
-      ? "Export all matching history, including every page"
-      : "Export all matching tasks, including finished work";
-  for (const view of ["board", "history"]) {
+    activeView === "requests"
+      ? "Export all matching requests, including every page"
+      : activeView === "history"
+        ? "Export all matching history, including every page"
+        : "Export all matching tasks, including finished work";
+  for (const view of ["board", "history", "requests"]) {
     $(view + "-tab").setAttribute("aria-selected", String(activeView === view));
     $(view + "-tab").tabIndex = activeView === view ? 0 : -1;
   }
@@ -348,7 +357,12 @@ function renderCards() {
     $("board").replaceChildren();
     $("recent-list").replaceChildren();
     cardSignature = recentSignature = "";
-    renderHistory(tasks);
+    if (activeView === "history") renderHistory(tasks);
+    else {
+      $("history-list").replaceChildren();
+      historySignature = "";
+      renderRequests();
+    }
   }
 }
 function resetHistory() {
@@ -460,9 +474,15 @@ function render(data) {
       ? "Writing final report"
       : run.outcome) ||
     (run.daemon_running
-      ? run.phase === "account-limit"
-        ? "Waiting for account limit"
-        : "Running"
+      ? data.controls?.stop_requested
+        ? "Stopping"
+        : run.phase === "paused"
+          ? "Paused"
+          : data.controls?.pause_requested
+            ? "Pause requested"
+            : run.phase === "account-limit"
+              ? "Waiting for account limit"
+              : "Running"
       : run.supervised
         ? "Daemon not running"
         : run.started_at
@@ -474,6 +494,7 @@ function render(data) {
       ? "The run has ended. Its task history stays available."
       : "Tasks update from the project ledger.");
   renderHealth(run);
+  renderControls();
   $("warning").hidden = !data.warnings.length;
   $("warning").textContent = data.warnings.join("\n");
   const investigations = data.discovery.slice(0, 6);
@@ -527,10 +548,13 @@ async function refresh() {
     const data = await response.json();
     if (!response.ok)
       throw new Error(data.error || "Unable to read the ledger");
+    connected = true;
     if ($("run").value === requestedRun) render(data);
     $("connection").textContent = "Board connected";
     $("connection").classList.remove("offline");
   } catch (error) {
+    connected = false;
+    renderControls();
     $("connection").textContent = "Disconnected · retrying";
     $("connection").classList.add("offline");
     $("warning").hidden = false;
@@ -575,14 +599,16 @@ $("history-next").addEventListener("click", () => historyPage(1));
 document.querySelector(".view-tabs").addEventListener("keydown", (event) => {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
   event.preventDefault();
+  const views = ["board", "history", "requests"];
   const view =
     event.key === "Home"
       ? "board"
       : event.key === "End"
-        ? "history"
-        : activeView === "board"
-          ? "history"
-          : "board";
+        ? "requests"
+        : views[
+            (views.indexOf(activeView) + (event.key === "ArrowRight" ? 1 : 2)) %
+              views.length
+          ];
   selectView(view);
   $(view + "-tab").focus();
 });
@@ -602,7 +628,12 @@ $("export").addEventListener("click", () => {
         {
           repo: snapshot.repo,
           exported_at: new Date().toISOString(),
-          tasks: activeView === "history" ? historyTasks() : filteredTasks(),
+          ...(activeView === "requests"
+            ? { requests: filteredRequests() }
+            : {
+                tasks:
+                  activeView === "history" ? historyTasks() : filteredTasks(),
+              }),
         },
         null,
         2,
@@ -613,7 +644,8 @@ $("export").addEventListener("click", () => {
   const url = URL.createObjectURL(blob),
     link = element("a");
   link.href = url;
-  link.download = "improve-tasks.json";
+  link.download =
+    activeView === "requests" ? "improve-requests.json" : "improve-tasks.json";
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
@@ -621,4 +653,5 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) refresh();
 });
 setInterval(remaining, 1000);
+initControls();
 refresh();
