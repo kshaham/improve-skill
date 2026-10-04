@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 HOST_MARKERS = {"codex": ("CODEX_THREAD_ID", "CODEX_CI"),
                 "claude": ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
 SANDBOX_MODES = ("read-only", "workspace-write", "danger-full-access")
@@ -491,6 +491,11 @@ first cycle are initialized during preflight. The supervisor's immutable start i
 {self.control['started_at']} and deadline is {self.control['deadline']}.
 Copy those exact timestamps into run.json; never calculate a replacement deadline.
 Do not schedule wakeups, launch another daemon, or sleep to fill the duration.
+The supervisor owns the local task board ({'disabled by --no-board' if self.args.no_board else 'auto-start enabled'}).
+Do not start or stop a board from this child cycle. Keep backlog.jsonl current: record
+each task before work, set in_progress before editing, then its verified final status.
+Keep completed/rejected tasks, verification evidence, and actual commit SHAs for the board.
+For improve-max, update bets.jsonl phases, measurements, and pieces; do not duplicate bets in backlog.jsonl.
 An empty queue requires a fresh scoped discovery pass, not a completion summary.
 Resolve all finders before returning: another process cannot inherit live agents.
 Persist cycle + 1, next_action, and evidence of work/discovery before returning.
@@ -643,6 +648,8 @@ Previous cycle correction, if any: {self.control.get('last_error', 'none')}.
 
 
 def daemon(args):
+    from improve_board import SERVICE_FILES, board_status, start_board
+
     repo = Path(args.repo).expanduser().resolve()
     if not repo.is_dir():
         raise StateError(f"no such directory: {repo}")
@@ -651,6 +658,7 @@ def daemon(args):
     state, lock = repo / ".improve", repo / ".improve/daemon.lock"
     if args.status:
         info = {"running": lock_active(lock), "repo": str(repo)}
+        info["board"] = board_status(repo)
         for name in ("supervisor.json", "run.json"):
             if (state / name).exists():
                 info[name.removesuffix(".json")] = read_json(state / name)
@@ -661,6 +669,8 @@ def daemon(args):
             print(json.dumps(info))
         else:
             print("running" if info["running"] else "not running")
+            if info["board"]["running"]:
+                print(f"board={info['board']['url']}")
             if recorded:
                 print(f"deadline={recorded['deadline']} remaining={human(info['clock']['remaining_seconds'])} outcome={recorded.get('outcome')}")
                 print(f"phase={recorded.get('phase', 'unknown')} child_pid={recorded.get('child_pid')} retry_at={recorded.get('retry_at')}")
@@ -715,7 +725,7 @@ def daemon(args):
             if not args.intake:
                 raise StateError("--new-run requires --intake FILE from a new ten-question intake")
             intake = read_json(Path(args.intake).expanduser())
-            old = [p for p in state.iterdir() if p.name not in ("history", "daemon.lock")]
+            old = [p for p in state.iterdir() if p.name not in {"history", "daemon.lock", *SERVICE_FILES}]
             if old:
                 history = state / "history"
                 history.mkdir(exist_ok=True)
@@ -727,6 +737,12 @@ def daemon(args):
         supervisor.stop_path.unlink(missing_ok=True)
         supervisor.prepare()
         supervisor.log(f"using {supervisor.engine}; engine and deadline are fixed for this run")
+        if not args.no_board:
+            try:
+                board = start_board(repo, args.board_port)
+                supervisor.log(f"Kanban board: {board['url']} (stays available after the run)")
+            except (OSError, ValueError) as exc:
+                supervisor.log(f"Kanban board unavailable: {exc}; improvement work will continue")
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, supervisor.request_stop)
         try:
@@ -759,6 +775,9 @@ def main(argv=None):
                         help="carry over the current Codex session's mode; default: CLI configuration")
     runner.add_argument("--model", help="model for a new run; saved selection is kept on recovery")
     runner.add_argument("--intake", help="JSON file with ten intake answers")
+    runner.add_argument("--no-board", action="store_true", help="do not auto-start the local Kanban board")
+    from improve_board import port_number
+    runner.add_argument("--board-port", type=port_number, help="board port; 0 chooses a free port")
     recovery = runner.add_mutually_exclusive_group()
     recovery.add_argument("--new-run", action="store_true", help="archive old state after a new intake")
     recovery.add_argument("--resume", action="store_true", help="resume a recovered halt/stop with its original deadline")
