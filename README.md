@@ -103,6 +103,14 @@ The board includes:
 - **Live progress:** task counts, deadline, latest checkpoint, and recent investigations.
 - **Run health:** engine/model, cycle, checkpoint times, retry schedule, failure count,
   and pending final report. A connected board is separate from a running daemon.
+- **Run controls:** pause after a clean checkpoint, resume, or stop a running daemon.
+  Pause keeps the original wall-clock deadline; it works with either saved engine.
+- **New tasks and guidance:** send desired outcomes, acceptance checks, or updated focus
+  directly from the board. Change a current task's priority or approve/decline a proposal
+  from its details.
+- **Requests:** track pending, applied, and declined requests with the skill's response.
+  Twenty per page, status filters, and JSON export keep the request history manageable.
+- **Final report:** read and download the saved report without leaving the board.
 - **Export:** download matching tasks as JSON. History includes all matching pages and
   respects the outcome filter; Board exports all matching tasks, including finished work.
 
@@ -111,10 +119,23 @@ It reads `.improve/backlog.jsonl` directly, includes `improve-max` experiments f
 There is no second task database to maintain. The skill records tasks before starting,
 updates their status as work progresses, and retains finished/rejected work. Existing
 ledgers work without migration; older work that was never recorded cannot be reconstructed.
-The view is read-only; proposals and blocked items do not become approved by opening them.
+Opening task details does not approve work. Explicit controls save user intent separately
+from worker-owned ledgers, and the skill applies it at a checkpoint. A saved request stays
+**Pending** until the skill records a response. **Applied** means its plan or task ledger
+was updated; normal task verification determines whether implementation reaches Done.
 Completed work stays in the ledger. History searches every recorded task, including rows
 outside the current page. New results keep your place while you browse older pages; use
 **Latest** to return to the newest results. Page controls stay visible as you scroll.
+
+Run controls require a live daemon started with version 1.11.0 or newer. **Pause requested**
+means its current cycle is still settling; **Paused** means no new improvement cycle is
+running. The deadline keeps counting down, and expiry still permits the bounded final
+report. **Resume** also cancels a pending pause. **Stop run** ends work after cleanup and
+leaves the board online; restarting an ended/halted run uses the existing CLI recovery
+checks. The board never launches a model or changes its saved engine, model, or sandbox.
+Foreground sessions can read the same task/guidance requests through the skill's helper.
+Requests apply to the current run; new-run archival preserves them with that run's files.
+See [request handling and controls](references/board-control.md) for the checkpoint contract.
 
 The current run panel flags an inactive daemon and missing final report, and shows when a
 report-only retry is running. It uses the supervisor's confirmed outcome, so a worker's
@@ -515,6 +536,9 @@ These exercise filtering, task details, automatic refresh, export, escaped task 
 connection recovery, run-health/report states, and mobile/tablet overflow. A fixture with
 over 2,000 finished tasks checks bounded row rendering, pagination, search across pages,
 keyboard navigation, date fallbacks, and position preservation during live updates.
+Control checks cover pause/resume/stop with fake Codex and Claude workers, unchanged
+deadlines, stale tabs, concurrent submissions, same-origin capabilities, request
+acknowledgments, lost-response retries, preserved drafts, and saved-report downloads.
 Screenshots are written to a temporary directory
 unless `--artifacts PATH` is supplied. Playwright is only a development dependency.
 

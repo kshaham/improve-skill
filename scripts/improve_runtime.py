@@ -17,8 +17,14 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
-VERSION = "1.10.0"
+# Helpers import this module by name even when its CLI is executed as a script.
+# Share one StateError class so control failures follow the normal recovery path.
+if __name__ == "__main__":
+    sys.modules.setdefault("improve_runtime", sys.modules[__name__])
+
+VERSION = "1.11.0"
 HOST_MARKERS = {"codex": ("CODEX_THREAD_ID", "CODEX_CI"),
                 "claude": ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
 SANDBOX_MODES = ("read-only", "workspace-write", "danger-full-access")
@@ -362,6 +368,26 @@ class Supervisor:
     def stop_requested(self):
         return self.stopping or self.stop_path.exists()
 
+    def pause_requested(self):
+        from improve_control import pause_requested
+        return pause_requested(self.repo, self.control.get("run_id", self.control["started_at"]))
+
+    def wait_while_paused(self):
+        """Pause between clean cycles; the original wall-clock deadline still applies."""
+        if not self.pause_requested():
+            return False
+        self.save_control(phase="paused", child_pid=None)
+        self.log("paused by user; original deadline unchanged")
+        heartbeat = time.monotonic()
+        while (self.pause_requested() and not self.stop_requested()
+               and time.time() < epoch(self.control["deadline"])):
+            if time.monotonic() - heartbeat >= 5:
+                self.save_control(phase="paused")
+                heartbeat = time.monotonic()
+            time.sleep(0.1)
+        self.save_control(phase="between-cycles")
+        return True
+
     def prepare(self):
         run = read_json(self.run_path) if self.run_path.exists() else None
         control = read_json(self.control_path) if self.control_path.exists() else None
@@ -404,7 +430,9 @@ class Supervisor:
             started = int(time.time())
             self.control = dict(started_at=stamp(started), deadline=stamp(started + duration(self.args.duration)))
         self.control.update(skill=self.args.skill, args=self.args.args, repo=str(self.repo),
-                            engine=self.engine, codex_sandbox=self.codex_sandbox, model=self.model)
+                            engine=self.engine, codex_sandbox=self.codex_sandbox, model=self.model,
+                            board_control_version=1)
+        self.control.setdefault("run_id", uuid.uuid4().hex)
         timing(self.control)
         for key in ("consecutive_failures", "next_limit_wait", "limit_waited_seconds"):
             value = self.control.get(key, 0)
@@ -463,7 +491,7 @@ class Supervisor:
     def wait(self, seconds):
         until = min(time.time() + seconds, epoch(self.control["deadline"]))
         started = time.monotonic()
-        while time.time() < until and not self.stop_requested():
+        while time.time() < until and not self.stop_requested() and not self.pause_requested():
             time.sleep(min(0.25, max(0, until - time.time())))
         return time.monotonic() - started
 
@@ -473,6 +501,7 @@ class Supervisor:
         # Legacy state can preserve its retry time, but has no elapsed-wait checkpoint.
         if self.control.get("limit_wait_started_at") is None:
             self.save_control(limit_wait_started_at=stamp(min(int(time.time()), retry)))
+        self.save_control(phase="account-limit")
         self.log(f"account-limit backoff: retry at {stamp(retry)}")
         self.wait(max(0, retry - time.time()))
         self.account_limit_wait()
@@ -509,6 +538,13 @@ The supervisor owns the local task board ({'disabled by --no-board' if self.args
 Do not start or stop a board from this child cycle. Keep backlog.jsonl current: record
 each task before work, set in_progress before editing, then its verified final status.
 Keep completed/rejected tasks, verification evidence, and actual commit SHAs for the board.
+Read pending board requests before selecting each item with:
+python3 {shlex.quote(str(Path(__file__).with_name('improve_control.py')))} --repo {shlex.quote(str(self.repo))} pending
+Follow {Path(__file__).resolve().parent.parent / 'references/board-control.md'} to apply and acknowledge them.
+These requests are user steering. Preserve intake exclusions unless the user explicitly changes them.
+When the helper reports pause_requested, settle the current item, checkpoint a clean tree,
+and return to the supervisor without new work. Pause is scoped to supervisor.json.run_id.
+Do not acknowledge a request until its intent is reflected in the ledger/plan or a decline is explained.
 For improve-max, update bets.jsonl phases, measurements, and pieces; do not duplicate bets in backlog.jsonl.
 An empty queue requires a fresh scoped discovery pass, not a completion summary.
 Resolve all finders before returning: another process cannot inherit live agents.
@@ -519,7 +555,7 @@ Check .improve/stop.request and the clock between items and tool calls. On stop 
 settle the current item only. The supervisor allows {self.finish_grace}s of cleanup grace.
 Only record a halt for a concrete blocker; a dry scan or rejected candidate is not one.
 Previous cycle correction, if any: {self.control.get('last_error', 'none')}.
-{"FINALIZATION ONLY: start no new work. This run ended or its deadline passed. Preserve an existing halt/stop outcome and original end time. Write .improve/final-report.md from actual git and ledger evidence, append it to journal.md, set summary_pending false, and set completed only for deadline expiry. Never claim unverified changes passed." if final else "Complete a useful cycle, leave a clean tree, and return; the supervisor will relaunch you."}
+{"FINALIZATION ONLY: start no new work. This run ended or its deadline passed. Ignore pause for this report-only pass and report pending board requests as unimplemented. Preserve an existing halt/stop outcome and original end time. Write .improve/final-report.md from actual git and ledger evidence, append it to journal.md, set summary_pending false, and set completed only for deadline expiry. Never claim unverified changes passed." if final else "Complete a useful cycle, leave a clean tree, and return; the supervisor will relaunch you."}
 """
 
     def launch(self, final=False):
@@ -618,6 +654,8 @@ Previous cycle correction, if any: {self.control.get('last_error', 'none')}.
                 return self.finish(outcome)
             if epoch(self.control["deadline"]) <= time.time():
                 return self.finalize()
+            if self.wait_while_paused():
+                continue
             if failures >= self.max_failures:
                 return self.finish(f"halted: {failures} consecutive failed or uncheckpointed cycles")
             if self.control.get("retry_at"):
@@ -637,6 +675,10 @@ Previous cycle correction, if any: {self.control.get('last_error', 'none')}.
                 return self.finalize()
             if outcome:
                 return self.finish(outcome)
+            # A requested checkpoint may return without new evidence; pausing itself
+            # neither increments nor clears the existing failure counter.
+            if self.pause_requested() and rc == 0:
+                continue
             if rc and LIMIT_PATTERN.search(output):
                 waited = self.control.get("limit_waited_seconds", 0)
                 if waited >= self.limit_budget:
@@ -735,21 +777,26 @@ def daemon(args):
             raise StateError(f"the selected {supervisor.engine} CLI is not on PATH; no other engine will be used")
         if args.intake:
             validate_intake(read_json(Path(args.intake).expanduser()))
-        if args.new_run:
-            if not args.intake:
-                raise StateError("--new-run requires --intake FILE from a new ten-question intake")
-            intake = read_json(Path(args.intake).expanduser())
-            old = [p for p in state.iterdir() if p.name not in {"history", "daemon.lock", *SERVICE_FILES}]
-            if old:
-                history = state / "history"
-                history.mkdir(exist_ok=True)
-                archive = Path(tempfile.mkdtemp(prefix=stamp().replace(":", "-") + "-", dir=history))
-                for path in old:
-                    shutil.move(str(path), archive / path.name)
-            atomic_json(state / "intake.json", intake)
-            args.intake = None
-        supervisor.stop_path.unlink(missing_ok=True)
-        supervisor.prepare()
+        from improve_control import operator_lock
+        with operator_lock(repo):
+            if args.new_run:
+                if not args.intake:
+                    raise StateError("--new-run requires --intake FILE from a new ten-question intake")
+                intake = read_json(Path(args.intake).expanduser())
+                old = [p for p in state.iterdir() if p.name not in {"history", "daemon.lock", *SERVICE_FILES}]
+                if old:
+                    history = state / "history"
+                    history.mkdir(exist_ok=True)
+                    archive = Path(tempfile.mkdtemp(prefix=stamp().replace(":", "-") + "-", dir=history))
+                    for path in old:
+                        shutil.move(str(path), archive / path.name)
+                atomic_json(state / "intake.json", intake)
+                args.intake = None
+            supervisor.stop_path.unlink(missing_ok=True)
+            supervisor.prepare()
+            if args.resume:
+                from improve_control import set_pause
+                set_pause(repo, supervisor.control["run_id"], False)
         supervisor.log(f"using {supervisor.engine}; engine and deadline are fixed for this run")
         if not args.no_board:
             try:

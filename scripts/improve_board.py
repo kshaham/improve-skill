@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local, read-only Kanban board for improve. Python 3.9+, standard library only."""
+"""Local task board and cooperative controls for improve. Python 3.9+, standard library only."""
 
 import argparse
 import contextlib
@@ -20,16 +20,17 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
 from improve_runtime import StateError, atomic_json, git, lock_active, read_json, recorded_timing, repo_lock, stamp
+from improve_control import operator_lock, pause_requested, queue_request, read_local, request_view, require_run, set_pause
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets/board"
-SERVICE_FILES = {"board.json", "board.lock", "board.log"}
+SERVICE_FILES = {"board.json", "board.lock", "board.log", "operator.lock"}
 COLUMNS = [("ready", "Queued"), ("in_progress", "In progress"), ("done", "Done"),
            ("blocked", "Blocked"), ("proposed", "Proposed"), ("rejected", "Rejected")]
 TASK_FIELDS = ("id", "title", "claim", "area", "kind", "file", "line", "paths", "owned_paths",
                "note", "evidence", "failure", "acceptance", "verification", "counter", "measurement",
                "commit", "focus_priority", "priority", "created_at", "updated_at", "started_at",
                "completed_at", "reopens", "last_verification", "bet_status", "journey",
-               "target", "claimed_gain", "spike", "landed", "pieces", "kill", "branch")
+               "target", "claimed_gain", "spike", "landed", "pieces", "kill", "branch", "user_priority", "board_request_id")
 MAX_FILE_BYTES = 32 * 1024 * 1024
 
 
@@ -176,12 +177,14 @@ def board_snapshot(repo, selected="current"):
         runs.append(summary)
         if run_id == "current":
             current = {**summary, "branch": run.get("branch"), "engine": control.get("engine"),
+                       "control_id": (control or run).get("run_id", summary["started_at"]),
                        "phase": control.get("phase") or run.get("phase"), "cycle": run.get("cycle", 0),
                        "next_action": run.get("next_action"), "summary_pending": control.get("summary_pending", run.get("summary_pending")),
                        "retry_at": control.get("retry_at"), "daemon_running": False,
                        "supervised": bool(control), "model": control.get("model"),
                        "heartbeat_at": control.get("heartbeat_at"), "last_activity_at": run.get("last_activity_at"),
                        "consecutive_failures": control.get("consecutive_failures", 0),
+                       "board_control_version": control.get("board_control_version", 0),
                        "last_error": control.get("last_error"), "clock": clock}
             if not (state / "daemon.lock").is_symlink():
                 with contextlib.suppress(OSError):
@@ -199,10 +202,38 @@ def board_snapshot(repo, selected="current"):
             warnings.extend(f"{summary['label']}: {notice}" for notice in notices)
     discovery.sort(key=lambda row: text_value(row.get("at")), reverse=True)
     counts = {key: sum(task["status"] == key for task in tasks) for key, _ in COLUMNS}
+    controls = {"available": False, "requests_available": True, "pause_requested": False,
+                "stop_requested": (state / "stop.request").exists(), "requests": [],
+                "report_available": (state / "final-report.md").is_file() and not (state / "final-report.md").is_symlink()}
+    try:
+        controls["pause_requested"] = pause_requested(repo, current.get("control_id"))
+        controls["requests"] = request_view(repo)
+        if current.get("outcome"):
+            controls["reason"] = "This run has ended. Resume or start a new run from your assistant."
+            controls["requests_available"] = (current["outcome"] == "stopped by user" or
+                                              isinstance(current["outcome"], str) and current["outcome"].startswith("halted:"))
+        elif not current.get("daemon_running"):
+            controls["reason"] = "Run controls need a running daemon. Saved requests can be read by either assistant."
+        elif current.get("board_control_version") != 1:
+            controls["reason"] = "Restart the daemon with the updated skill to enable board controls."
+        elif current.get("phase") == "finalize":
+            controls["reason"] = "The final report is being written; new work is closed."
+            controls["requests_available"] = False
+        elif not current.get("clock"):
+            controls["reason"] = "Repair the run clock before using run controls."
+        else:
+            controls["available"] = True
+            controls["reason"] = "Pause takes effect at a clean checkpoint. The deadline keeps running."
+        if current.get("clock") and current["clock"]["remaining_seconds"] <= 0:
+            controls["requests_available"] = False
+            controls["reason"] = "The deadline has passed. Task history and saved requests remain available."
+    except (StateError, OSError) as exc:
+        controls.update(reason=str(exc), requests_available=False)
+        warnings.append(f"Board controls: {exc}")
     return {"repo": repo.name, "selected_run": selected, "runs": runs, "current": current,
             "columns": [{"id": key, "label": label} for key, label in COLUMNS],
             "tasks": tasks, "counts": counts, "discovery": discovery[:24],
-            "warnings": warnings, "updated_at": stamp()}
+            "controls": controls, "warnings": warnings, "updated_at": stamp()}
 
 
 def local_request(url, **kwargs):
@@ -262,6 +293,23 @@ class BoardHandler(BaseHTTPRequestHandler):
         if not self.allowed_host():
             return self.reply(403, {"error": "local host required"})
         target = urlsplit(self.path)
+        if target.path == "/api/session":
+            # A custom header prevents cross-site forms/images from retrieving the
+            # browser capability. No CORS response is ever sent.
+            origin = self.headers.get("Origin")
+            if (self.headers.get("X-Improve-Client") != "board" or
+                    self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none") or
+                    origin not in (None, "http://" + self.headers.get("Host", ""))):
+                return self.reply(403, {"error": "same-origin board session required"})
+            return self.reply(200, {"token": self.server.ui_token})
+        if target.path == "/api/report":
+            try:
+                report = read_local(state_directory(self.server.repo) / "final-report.md", limit=512 * 1024)
+                if report is None:
+                    return self.reply(404, {"error": "No saved final report yet."})
+                return self.reply(200, {"text": report})
+            except (StateError, OSError) as exc:
+                return self.reply(400, {"error": str(exc)})
         if target.path == "/api/health":
             return self.reply(200, {"service": "improve-board", "instance": self.server.instance,
                                     "repo": str(self.server.repo)})
@@ -273,6 +321,7 @@ class BoardHandler(BaseHTTPRequestHandler):
                 return self.reply(400, {"error": str(exc)})
         assets = {"/": ("index.html", "text/html; charset=utf-8"),
                   "/board.js": ("board.js", "text/javascript; charset=utf-8"),
+                  "/controls.js": ("controls.js", "text/javascript; charset=utf-8"),
                   "/board.css": ("board.css", "text/css; charset=utf-8")}
         if target.path in assets:
             name, mime = assets[target.path]
@@ -281,15 +330,64 @@ class BoardHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         origin = self.headers.get("Origin")
-        trusted = (None, f"http://127.0.0.1:{self.server.server_port}", f"http://localhost:{self.server.server_port}")
         token = self.headers.get("X-Improve-Board-Token", "").encode()
-        if (not self.allowed_host() or origin not in trusted
-                or not secrets.compare_digest(token, self.server.token.encode())):
+        same_origin = origin == "http://" + self.headers.get("Host", "")
+        if not self.allowed_host():
             return self.reply(403, {"error": "not authorized"})
-        if self.path != "/api/stop":
+        if self.path == "/api/stop":
+            if (origin is not None and not same_origin) or not secrets.compare_digest(token, self.server.token.encode()):
+                return self.reply(403, {"error": "not authorized"})
+            self.reply(200, {"stopping": True})
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            return
+        if (not same_origin or not secrets.compare_digest(token, self.server.ui_token.encode()) or
+                self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none")):
+            return self.reply(403, {"error": "Refresh the board to reconnect its controls."})
+        if self.path not in ("/api/control", "/api/requests"):
             return self.reply(404, {"error": "not found"})
-        self.reply(200, {"stopping": True})
-        threading.Thread(target=self.server.shutdown, daemon=True).start()
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if (not 0 < length <= 65536 or self.headers.get("Transfer-Encoding") or
+                    self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json"):
+                return self.reply(400, {"error": "a JSON request of at most 64 KiB is required"})
+            self.connection.settimeout(5)
+            raw = self.rfile.read(length)
+            if len(raw) != length:
+                raise StateError("incomplete request")
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise StateError("a JSON object is required")
+            with operator_lock(self.server.repo) as state:
+                require_run(self.server.repo, data.get("run_id"))
+                snapshot = board_snapshot(self.server.repo, "current")
+                controls = snapshot["controls"]
+                if self.path == "/api/requests":
+                    if not controls["requests_available"]:
+                        raise StateError(controls["reason"])
+                    request = queue_request(self.server.repo, data, snapshot["tasks"])
+                    return self.reply(200, {"request": request, "message": "Request saved. The skill will review it at its next checkpoint."})
+                if not controls["available"]:
+                    raise StateError(controls["reason"])
+                action = data.get("action")
+                if action not in ("pause", "resume", "stop"):
+                    raise StateError("unknown run control")
+                if controls["stop_requested"]:
+                    raise StateError("A stop is already pending; it cannot be undone from the board.")
+                if action != "stop" and snapshot["current"]["clock"]["remaining_seconds"] <= 0:
+                    raise StateError("The deadline has passed; no more improvement cycles can start.")
+                if action == "stop":
+                    if (state / "stop.request").is_symlink():
+                        raise StateError("stop.request must not be a symlink")
+                    (state / "stop.request").touch()
+                else:
+                    set_pause(self.server.repo, data.get("run_id"), action == "pause")
+                return self.reply(200, {"action": action, "message": {
+                    "pause": "Pause requested. The current work will checkpoint first.",
+                    "resume": "Resume requested. The original deadline is unchanged.",
+                    "stop": "Stop requested. The skill will settle current work and end the run."
+                }[action]})
+        except (StateError, OSError, ValueError, TypeError, RecursionError) as exc:
+            return self.reply(400, {"error": str(exc)})
 
 
 def serve(repo, port=None):
@@ -305,6 +403,7 @@ def serve(repo, port=None):
                 raise
             server = BoardServer(("127.0.0.1", 0), BoardHandler)
         server.repo, server.instance, server.token = repo, secrets.token_hex(16), secrets.token_hex(32)
+        server.ui_token = secrets.token_hex(32)
         info = dict(repo=str(repo), url=f"http://127.0.0.1:{server.server_port}", port=server.server_port,
                     pid=os.getpid(), instance=server.instance, token=server.token, started_at=stamp())
         atomic_json(state / "board.json", info)

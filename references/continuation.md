@@ -40,6 +40,11 @@ and scheduler runs use the installed `scripts/improve-board.sh --start` once and
 its URL. Keep each task's `in_progress`/settled status and evidence current at checkpoints.
 Board availability does not prove the daemon is running. See [board.md](board.md).
 
+The board's Pause waits between clean cycles; Resume releases that wait, and Stop uses
+the existing cleanup/stop path. The wall-clock deadline continues while paused. Workers
+read and acknowledge the request inbox at each item boundary; pending pause means settle
+the current item and return, without sleeping inside a child. See [board-control.md](board-control.md).
+
 ## Checkpoint a useful cycle
 
 Atomically update `run.json` after each item or completed discovery pass:
