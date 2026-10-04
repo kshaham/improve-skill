@@ -60,6 +60,11 @@ Save the user's answers verbatim in `.improve/intake.json`:
 }
 ```
 
+Before handing off to the daemon, also save `intake.json.authorization`: any explicit
+user grants from the original request or later messages, their source wording, and their
+conditions. Copy them to `run.json.authorization` during preflight. This captures instructions
+outside the ten answers without asking the user to repeat them. An empty grants list is valid.
+
 Turn these into `run.json.focus` with `priorities` (ordered outcomes, lanes, paths/journeys,
 and acceptance checks), `excluded` (explicit user boundaries), and `source: "intake.json"`.
 Use the goal/check/status model in `work-selection.md`. Show that compact focus plan with
@@ -77,8 +82,10 @@ the interpretation so later cycles cannot quietly substitute their own goals.
 - Feature and visual findings may be an evidenced gap against the user's stated acceptance
   criteria, rather than a crashing defect. Include the exact screen/interaction/asset and
   how the outcome will be checked. Do not manufacture cosmetic changes to fill time.
-- The intake does not override hard rules. Record work needing broader authority as a
-  proposal and continue on the highest-priority eligible work.
+- Save explicit grants and their conditions in `run.json.authorization` alongside the
+  exclusions. A preference is not an authorization to spend, publish, or broaden scope.
+  Honor permissions the user has already explicitly granted; propose work that still needs
+  broader authority and continue on the highest-priority eligible work.
 
 ## Resumption and unattended execution
 

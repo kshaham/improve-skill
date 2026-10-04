@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 HOST_MARKERS = {"codex": ("CODEX_THREAD_ID", "CODEX_CI"),
                 "claude": ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
 SANDBOX_MODES = ("read-only", "workspace-write", "danger-full-access")
@@ -64,6 +64,18 @@ def resolve_sandbox(engine, requested=None, control=None):
     if control is not None and requested is not None and requested != saved:
         raise StateError("resume keeps the saved Codex sandbox; use --new-run to change it")
     return saved
+
+
+def resolve_model(requested=None, control=None):
+    if control is not None and "model" in control:
+        selected = control["model"]
+        if requested is not None and requested != selected:
+            raise StateError("resume keeps the saved model; omit --model or use --new-run to change it")
+    else:
+        selected = requested if requested is not None else os.environ.get("IMPROVE_MODEL")
+    if selected is not None and (not isinstance(selected, str) or not selected.strip()):
+        raise StateError("model must be a nonempty string or null for the CLI default")
+    return selected
 
 
 def agent_command(engine, prompt, model=None, codex_sandbox=None):
@@ -142,8 +154,20 @@ def human(seconds):
     return f"{sign}{seconds // 60}m{seconds % 60:02d}s" if seconds >= 60 else f"{sign}{seconds}s"
 
 
+def recorded_timing(run, control):
+    recorded = dict(run or {})
+    if control is not None:
+        recorded.update({key: control.get(key) for key in ("started_at", "deadline")})
+    return timing(recorded)
+
+
 def clock(args):
-    info = timing(read_json(Path(args.repo) / ".improve/run.json"))
+    state = Path(args.repo).expanduser() / ".improve"
+    run = read_json(state / "run.json") if (state / "run.json").exists() else None
+    control = read_json(state / "supervisor.json") if (state / "supervisor.json").exists() else None
+    if run is None and control is None:
+        raise StateError(f"no run.json or supervisor.json in {state}")
+    info = recorded_timing(run, control)
     if args.remaining:
         print(info["remaining_seconds"])
     elif args.json:
@@ -300,6 +324,7 @@ class Supervisor:
         self.control_path = self.state / "supervisor.json"
         self.stop_path = self.state / "stop.request"
         self.stopping = False
+        self.last_report_ok = False
         self.timeout = env_integer("IMPROVE_CYCLE_TIMEOUT", 14400 if args.skill == "improve-max" else 3600)
         self.gap = env_integer("IMPROVE_CYCLE_GAP", 2, 0)
         self.too_fast = env_integer("IMPROVE_TOO_FAST", 25, 0)
@@ -369,12 +394,22 @@ class Supervisor:
             started = int(time.time())
             self.control = dict(started_at=stamp(started), deadline=stamp(started + duration(self.args.duration)))
         self.control.update(skill=self.args.skill, args=self.args.args, repo=str(self.repo),
-                            engine=self.engine, codex_sandbox=self.codex_sandbox)
+                            engine=self.engine, codex_sandbox=self.codex_sandbox, model=self.model)
         timing(self.control)
         for key in ("consecutive_failures", "next_limit_wait", "limit_waited_seconds"):
             value = self.control.get(key, 0)
             if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
                 raise StateError(f"supervisor {key} must be a nonnegative finite number")
+        retry = self.control.get("retry_at")
+        wait_start = self.control.get("limit_wait_started_at")
+        if retry is not None:
+            retry_epoch = epoch(retry)
+            if retry_epoch > epoch(self.control["deadline"]):
+                raise StateError("retry_at cannot extend beyond the original deadline")
+            if wait_start is not None and epoch(wait_start) > retry_epoch:
+                raise StateError("limit_wait_started_at cannot be later than retry_at")
+        elif wait_start is not None:
+            raise StateError("limit_wait_started_at requires retry_at")
         if self.args.resume:
             if run and run.get("active_item"):
                 raise StateError("resolve and clear active_item before --resume; a clean tree alone does not prove verification")
@@ -418,6 +453,29 @@ class Supervisor:
             time.sleep(min(0.25, max(0, until - time.time())))
         return time.monotonic() - started
 
+    def resume_limit_wait(self):
+        """Honor a durable retry time and account each wall-clock second once."""
+        retry = epoch(self.control["retry_at"])
+        # Legacy state can preserve its retry time, but has no elapsed-wait checkpoint.
+        if self.control.get("limit_wait_started_at") is None:
+            self.save_control(limit_wait_started_at=stamp(min(int(time.time()), retry)))
+        self.log(f"account-limit backoff: retry at {stamp(retry)}")
+        self.wait(max(0, retry - time.time()))
+        self.account_limit_wait()
+        self.save_control(phase="account-limit" if self.control.get("retry_at") else "between-cycles")
+
+    def account_limit_wait(self):
+        if not self.control.get("retry_at"):
+            return
+        retry = epoch(self.control["retry_at"])
+        accounted_until = min(int(time.time()), retry)
+        start = epoch(self.control["limit_wait_started_at"]) if self.control.get("limit_wait_started_at") else accounted_until
+        waited = self.control.get("limit_waited_seconds", 0) + max(0, accounted_until - start)
+        pending = accounted_until < retry
+        self.control.update(limit_waited_seconds=waited,
+                            limit_wait_started_at=stamp(accounted_until) if pending else None,
+                            retry_at=stamp(retry) if pending else None)
+
     def prompt(self, final=False):
         remaining = max(0, epoch(self.control["deadline"]) - int(time.time()))
         skill_path = Path(__file__).resolve().parent.parent / ("max/SKILL.md" if self.args.skill == "improve-max" else "SKILL.md")
@@ -446,7 +504,10 @@ Previous cycle correction, if any: {self.control.get('last_error', 'none')}.
 """
 
     def launch(self, final=False):
-        command = agent_command(self.engine, self.prompt(final), self.args.model, self.codex_sandbox)
+        command = agent_command(self.engine, self.prompt(final), self.model, self.codex_sandbox)
+        report = self.state / "final-report.md"
+        previous_write = report.stat().st_mtime_ns if report.exists() else None
+        self.last_report_ok = False
         env = os.environ.copy()
         # Each cycle is a fresh process, not a nested interactive Claude session.
         # Keep auth/config variables; discard only inherited session identity.
@@ -489,12 +550,16 @@ Previous cycle correction, if any: {self.control.get('last_error', 'none')}.
         with log_path.open("rb") as output:
             output.seek(max(offset, log_path.stat().st_size - 65536))
             tail = output.read().decode(errors="replace")
-        return (124 if timed_out else rc), time.monotonic() - started, tail
+        rc = 124 if timed_out else rc
+        self.last_report_ok = (rc == 0 and report.exists() and report.stat().st_mtime_ns != previous_write
+                               and bool(report.read_text().strip()))
+        return rc, time.monotonic() - started, tail
 
     def finish(self, outcome, summary_pending=None):
+        # An offline restart may reach finalization without re-entering the wait loop.
+        self.account_limit_wait()
         if summary_pending is None:
-            report = self.state / "final-report.md"
-            summary_pending = not (report.exists() and report.read_text().strip())
+            summary_pending = not self.last_report_ok
         self.control.update(outcome=outcome, ended_at=self.control.get("ended_at") or stamp(),
                             summary_pending=summary_pending, phase="ended", child_pid=None)
         atomic_json(self.control_path, self.control)
@@ -511,20 +576,15 @@ Previous cycle correction, if any: {self.control.get('last_error', 'none')}.
         """A bounded report-only launch; retryable without granting more work time."""
         original = self.control.get("outcome")
         original_head = git(self.repo, "rev-parse", "HEAD")
-        report = self.state / "final-report.md"
-        previous_write = report.stat().st_mtime_ns if report.exists() else None
         self.log("requesting final report without new work")
         rc, _, _ = self.launch(final=True)
         outcome = self.reconcile()
         if dirty(self.repo) or git(self.repo, "rev-parse", "HEAD") != original_head:
             return self.finish("halted: finalization modified repository work", summary_pending=True)
-        reported = (report.exists() and report.stat().st_mtime_ns != previous_write
-                    and bool(report.read_text().strip()))
-        return self.finish(original or outcome or "completed", summary_pending=rc != 0 or not reported)
+        return self.finish(original or outcome or "completed", summary_pending=rc != 0 or not self.last_report_ok)
 
     def run(self):
         failures = self.control.get("consecutive_failures", 0)
-        waited = self.control.get("limit_waited_seconds", 0)
         next_wait = self.control.get("next_limit_wait", min(self.limit_wait, self.limit_cap))
         if self.args.finalize:
             return self.finalize()
@@ -535,12 +595,15 @@ Previous cycle correction, if any: {self.control.get('last_error', 'none')}.
                 return self.finish("stopped by user")
             if dirty(self.repo):
                 return self.finish("halted: working tree has uncommitted changes; manual recovery required")
-            if outcome:
+            if outcome and outcome != "completed":
                 return self.finish(outcome)
             if epoch(self.control["deadline"]) <= time.time():
                 return self.finalize()
             if failures >= self.max_failures:
                 return self.finish(f"halted: {failures} consecutive failed or uncheckpointed cycles")
+            if self.control.get("retry_at"):
+                self.resume_limit_wait()
+                continue
             before = snapshot(self.repo)
             self.log(f"cycle starting ({human(epoch(self.control['deadline']) - int(time.time()))} left)")
             rc, elapsed, output = self.launch()
@@ -549,18 +612,23 @@ Previous cycle correction, if any: {self.control.get('last_error', 'none')}.
                 return self.finish("stopped by user")
             if dirty(self.repo):
                 return self.finish("halted: cycle left uncommitted changes; manual recovery required")
+            if outcome in ("completed", "target reached") and rc:
+                return self.finish(f"halted: cycle claimed {outcome} but exited {rc}", summary_pending=True)
+            if outcome == "completed":
+                return self.finalize()
             if outcome:
                 return self.finish(outcome)
             if rc and LIMIT_PATTERN.search(output):
+                waited = self.control.get("limit_waited_seconds", 0)
                 if waited >= self.limit_budget:
                     return self.finish("halted: account-limit wait budget exhausted")
-                delay = min(next_wait, self.limit_budget - waited,
-                            max(0, epoch(self.control["deadline"]) - time.time()))
+                now = int(time.time())
+                delay = min(max(1, next_wait), self.limit_budget - waited,
+                            max(0, epoch(self.control["deadline"]) - now))
                 self.journal(f"Account usage limit; waiting up to {human(delay)}. Original deadline unchanged.")
-                self.save_control(phase="account-limit", retry_at=stamp(time.time() + delay))
-                waited += self.wait(delay)
-                next_wait = min(next_wait * 2, self.limit_cap)
-                self.save_control(limit_waited_seconds=waited, next_limit_wait=next_wait, retry_at=None)
+                next_wait = min(max(1, next_wait) * 2, self.limit_cap)
+                self.save_control(phase="account-limit", retry_at=stamp(now + math.ceil(delay)),
+                                  limit_wait_started_at=stamp(now), next_limit_wait=next_wait)
                 continue
             next_wait = min(self.limit_wait, self.limit_cap)
             after = snapshot(self.repo)
@@ -588,7 +656,7 @@ def daemon(args):
                 info[name.removesuffix(".json")] = read_json(state / name)
         recorded = info.get("supervisor") or info.get("run")
         if recorded:
-            info["clock"] = timing(recorded)
+            info["clock"] = recorded_timing(info.get("run"), info.get("supervisor"))
         if args.json:
             print(json.dumps(info))
         else:
@@ -597,7 +665,7 @@ def daemon(args):
                 print(f"deadline={recorded['deadline']} remaining={human(info['clock']['remaining_seconds'])} outcome={recorded.get('outcome')}")
                 print(f"phase={recorded.get('phase', 'unknown')} child_pid={recorded.get('child_pid')} retry_at={recorded.get('retry_at')}")
                 if "supervisor" in info:
-                    print(f"engine={info['supervisor'].get('engine', 'claude')}")
+                    print(f"engine={info['supervisor'].get('engine', 'claude')} model={info['supervisor'].get('model') or 'CLI default'}")
                 run = info.get("run", {})
                 print(f"cycle={run.get('cycle', 0)} next_action={run.get('next_action', 'not yet recorded')}")
         return 0
@@ -621,6 +689,7 @@ def daemon(args):
         control = read_json(control_path) if control_path.exists() and not args.new_run else None
         engine = resolve_engine(args.engine, control)
         sandbox = resolve_sandbox(engine, args.codex_sandbox, control)
+        model = resolve_model(args.model, control)
         existing = state / "supervisor.json" if (state / "supervisor.json").exists() else state / "run.json"
         deadline = stamp(int(time.time()) + seconds)
         if existing.exists() and not args.new_run:
@@ -628,7 +697,7 @@ def daemon(args):
             timing(saved)
             deadline = saved["deadline"]
         print(f"Would run {args.skill} with {engine} in {repo} until {deadline}.")
-        print("Requires ten-question intake; command: " + shlex.join(agent_command(engine, "<cycle prompt>", args.model, sandbox)))
+        print("Requires ten-question intake; command: " + shlex.join(agent_command(engine, "<cycle prompt>", model, sandbox)))
         print(f"Cycle timeout: {supervisor.timeout}s; final-report timeout: {supervisor.final_timeout}s.")
         return 0
     state.mkdir(exist_ok=True)
@@ -637,6 +706,7 @@ def daemon(args):
         control = read_json(control_path) if control_path.exists() and not args.new_run else None
         supervisor.engine = resolve_engine(args.engine, control)
         supervisor.codex_sandbox = resolve_sandbox(supervisor.engine, args.codex_sandbox, control)
+        supervisor.model = resolve_model(args.model, control)
         if not shutil.which(supervisor.engine):
             raise StateError(f"the selected {supervisor.engine} CLI is not on PATH; no other engine will be used")
         if args.intake:
@@ -687,7 +757,7 @@ def main(argv=None):
                         help="assistant for new runs (default: detect host); saved engine wins on restart")
     runner.add_argument("--codex-sandbox", choices=SANDBOX_MODES,
                         help="carry over the current Codex session's mode; default: CLI configuration")
-    runner.add_argument("--model", default=os.environ.get("IMPROVE_MODEL"))
+    runner.add_argument("--model", help="model for a new run; saved selection is kept on recovery")
     runner.add_argument("--intake", help="JSON file with ten intake answers")
     recovery = runner.add_mutually_exclusive_group()
     recovery.add_argument("--new-run", action="store_true", help="archive old state after a new intake")

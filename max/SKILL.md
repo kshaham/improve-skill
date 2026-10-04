@@ -7,7 +7,7 @@ metadata:
   created: 2026-09-17
   parent: improve
   version: 0.4.0
-  install: symlink improve-max -> improve/max inside ~/.claude/skills or ~/.codex/skills (this directory lives inside the improve skill's repo)
+  install: symlink improve-max to this directory beside the improve skill in the host's skills folder
 ---
 
 # The courageous loop

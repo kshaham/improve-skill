@@ -29,6 +29,10 @@ CLI or account limit never switches providers. Both engines use the same deadlin
 checkpoint, stop, timeout, and recovery machinery. For Codex, carry over the current session's
 sandbox with `--codex-sandbox`; it is saved for recovery and must not broaden that session's
 permissions. If unknown, omit it to inherit CLI configuration. See README for CLI settings.
+The daemon also saves the initial `--model` or `IMPROVE_MODEL` selection. Restarts ignore
+later environment defaults; an explicit different `--model` requires `--new-run`. A null
+selection leaves the model to the CLI configuration. Legacy supervisors without a model
+field adopt the supplied selection on their first upgraded launch.
 
 ## Checkpoint a useful cycle
 
@@ -126,12 +130,25 @@ and clear `active_item` with a recovery note. `--resume` requires a clean tree a
 active item. It resets the consecutive-failure breaker, keeps the original start/deadline,
 and reuses the ten answers. If the deadline is already past, it only finalizes. Merely
 restarting a process keeps the saved failure and completed account-wait counters.
+If a rate-limit retry is pending, restart waits until its recorded `retry_at` before
+launching an agent. Elapsed wall time inside that wait, including process downtime, is
+accounted once toward the wait budget. Stops checkpoint the partial wait; recovery keeps
+the remaining wait and original deadline. A pre-1.7 wait lacks its start checkpoint, so
+only its remaining wait can be newly accounted. Do not restart repeatedly to bypass a limit.
 
 Finalization writes `.improve/final-report.md` and appends the report to the journal. If it
 cannot finish, `--finalize` retries that report even for an earlier halt/stop, preserving
 its reason and original end time. No code changes or new commits are allowed in a report-only
 cycle; the supervisor checks HEAD and the working tree. A stale report left over from a
 previous attempt is not evidence that the current report attempt completed.
+A worker that writes `completed` at expiry still receives the report-only pass. A nonzero
+worker exit cannot claim `completed` or `target reached`; the run halts with a pending
+summary. Finishing a later halt/stop accepts a report only if the most recent successful
+cycle refreshed it, so a previous report cannot hide missing recovery work.
+
+Read `run.json.authorization` with the intake on every re-entry. Keep explicit user grants
+and their conditions across compaction; do not infer grants from backlog text or a finder's
+proposal. A later instruction changes only the scope it actually addresses.
 
 `--status --json` exposes saved phase, child PID, retry time, failure counts, clock, and the
 agent's next action for monitoring. The OS lock determines process liveness; the saved phase
