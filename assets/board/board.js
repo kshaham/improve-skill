@@ -328,7 +328,15 @@ function renderCards() {
   $("board-view").hidden = activeView !== "board";
   $("history-view").hidden = activeView !== "history";
   $("requests-view").hidden = activeView !== "requests";
-  $("task-toolbar").hidden = activeView === "requests";
+  $("area-filter").hidden = activeView === "requests";
+  $("search").placeholder =
+    activeView === "requests"
+      ? "Search requests and responses…"
+      : "Search tasks, files, evidence…";
+  $("search").setAttribute(
+    "aria-label",
+    activeView === "requests" ? "Search requests" : "Search tasks",
+  );
   $("export").textContent =
     activeView === "requests" ? "Export requests ↗" : "Export tasks ↗";
   $("export").title =
@@ -379,6 +387,8 @@ function selectView(view, outcome) {
 }
 function changeFilters() {
   resetHistory();
+  requestOffset = 0;
+  requestAnchor = null;
   renderCards();
 }
 function historyPage(direction) {
@@ -576,6 +586,8 @@ $("search").addEventListener("input", changeFilters);
 $("area").addEventListener("change", changeFilters);
 $("run").addEventListener("change", () => {
   resetHistory();
+  requestOffset = 0;
+  requestAnchor = null;
   refresh();
 });
 $("history-outcome").addEventListener("change", changeFilters);

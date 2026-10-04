@@ -42,7 +42,7 @@
           <p>A live view of what’s next, what’s moving, and what’s done.</p>
         </div>
         <div class="actions">
-          <button id="open-report" type="button" disabled>Final report</button>
+          <button id="open-report" type="button" disabled>Reports</button>
           <button id="refresh" type="button">↻ <span>Refresh</span></button
           ><button id="export" type="button" class="primary">
             Export tasks <span aria-hidden="true">↗</span>
@@ -130,7 +130,7 @@
               <option value="all">All runs</option>
               <option value="current">Current run</option>
             </select></label
-          ><label
+          ><label id="area-filter"
             >Area
             <select id="area">
               <option value="all">All areas</option>
@@ -270,7 +270,8 @@
           <div>
             <h2>Your requests</h2>
             <p>
-              Current run · Saved immediately, reviewed at the next checkpoint.
+              Browse requests across runs. New requests always go to the current
+              run.
             </p>
           </div>
           <label class="outcome-filter"
@@ -422,6 +423,10 @@
           ✕
         </button>
       </div>
+      <label class="report-picker"
+        >Run
+        <select id="report-run"></select
+      ></label>
       <p id="report-note" class="dialog-context"></p>
       <pre id="report-text"></pre>
       <div class="dialog-actions">

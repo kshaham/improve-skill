@@ -115,6 +115,7 @@ class ControlTests(LedgerFixture):
         self.rows([dict(id="a", status="proposed"), dict(id="b", status="done")])
         payload = self.request_data("decision", task_key="current:a", decision="approve")
         self.http("/api/requests", payload)
+        self.assertEqual(control.request_view(self.repo)[0]["expected_status"], "proposed")
         self.assertEqual(board.board_snapshot(self.repo)["tasks"][0]["status"], "proposed")
         for key in ("archived:a", "current:b", "current:missing"):
             self.rejected("/api/requests", self.request_data("priority", task_key=key, priority="high"))
@@ -205,3 +206,94 @@ class ControlTests(LedgerFixture):
         path.symlink_to(self.repo / "private-report")
         (self.repo / "private-report").write_text("private")
         self.rejected("/api/report")
+
+    def test_archived_requests_link_only_to_work_in_their_own_run(self):
+        request_id = str(uuid.uuid4())
+        archive = self.state / "history" / "older-run"
+        archive.mkdir(parents=True)
+        self.rows([dict(id="same", title="Current task", board_request_id=request_id)], self.state)
+        self.rows([dict(id="same", title="Archived task", board_request_id=request_id)], archive)
+        (archive / "bets.jsonl").write_text(json.dumps(dict(id="same", hypothesis="Archived bet", status="landed")))
+        request = dict(id=request_id, type="task", title="Reusable request", text="", created_at=board.stamp())
+        board.atomic_json(self.state / "operator.json", {"requests": [request]})
+        board.atomic_json(archive / "operator.json", {"requests": [request,
+            dict(id=str(uuid.uuid4()), type="priority", task_key="current:bet:same", expected_status="proposed")]})
+        board.atomic_json(archive / "board-receipts.json", {request_id: dict(status="applied", note="Queued archived task", at=board.stamp())})
+        data = self.http("/api/board?run=all")
+        rows = {row["key"]: row for row in data["requests"]}
+        self.assertEqual(rows[f"current:{request_id}"]["task_keys"], ["current:same"])
+        old = rows[f"older-run:{request_id}"]
+        self.assertEqual(old["task_keys"], ["older-run:same"])
+        self.assertEqual(old["response"], "Queued archived task")
+        priority = next(row for row in rows.values() if row["type"] == "priority")
+        self.assertEqual(priority["task_keys"], ["older-run:bet:same"])
+        self.assertEqual(priority["expected_status"], "proposed")
+        selected = self.http("/api/board?run=older-run")
+        self.assertEqual({row["source_run"] for row in selected["requests"]}, {"older-run"})
+        self.assertEqual(len(selected["controls"]["requests"]), 1)
+        self.assertEqual(len(self.http("/api/board?run=current")["requests"]), 1)
+
+    def test_bad_archive_does_not_disable_current_requests_or_hide_tasks(self):
+        archive = self.state / "history" / "damaged"
+        archive.mkdir(parents=True)
+        self.rows([dict(id="visible")], archive)
+        for raw in ("{partial", '{"requests":[{"id":"bad","type":[]}]}'):
+            (archive / "operator.json").write_text(raw)
+            snapshot = self.http("/api/board?run=all")
+            self.assertTrue(snapshot["controls"]["requests_available"])
+            self.assertEqual(snapshot["tasks"][0]["id"], "visible")
+            self.assertTrue(any("damaged: Requests:" in warning for warning in snapshot["warnings"]))
+            self.http("/api/requests", self.request_data())
+        (archive / "operator.json").unlink()
+        outside = self.repo / "private.json"
+        outside.write_text('{"requests":[]}')
+        (archive / "operator.json").symlink_to(outside)
+        self.assertTrue(self.http("/api/board?run=all")["warnings"])
+
+    def test_archived_reports_are_selected_without_exposing_arbitrary_paths(self):
+        archive = self.state / "history" / "older-run"
+        archive.mkdir(parents=True)
+        (archive / "final-report.md").write_text("# Archived work")
+        (self.state / "final-report.md").write_text("# Current work")
+        report = self.http("/api/report?run=older-run")
+        self.assertEqual(report, {"text": "# Archived work", "run_id": "older-run"})
+        self.assertEqual(self.http("/api/report")["text"], "# Current work")
+        runs = self.http("/api/board")["runs"]
+        self.assertTrue(all(run["report_available"] for run in runs))
+        for selected in ("all", "missing", "..", "..%2F..", "%2Ftmp"):
+            self.rejected("/api/report?run=" + selected)
+        self.rejected("/api/report?" + "&".join("run=older-run" for _ in range(9)))
+        outside = self.repo / "private"
+        outside.mkdir()
+        (outside / "final-report.md").write_text("private")
+        (archive.parent / "linked").symlink_to(outside)
+        self.rejected("/api/report?run=linked")
+        (archive / "final-report.md").unlink()
+        (archive / "final-report.md").symlink_to(outside / "final-report.md")
+        self.rejected("/api/report?run=older-run")
+        (archive.parent / "current").mkdir()
+        (archive.parent / "current" / "final-report.md").write_text("Shadowed")
+        self.assertEqual(self.http("/api/report")["text"], "# Current work")
+
+    def test_pending_reader_waits_for_new_run_transaction(self):
+        saved = self.seed()
+        script = Path(board.__file__).with_name("improve_control.py")
+        with control.operator_lock(self.repo):
+            process = subprocess.Popen([sys.executable, str(script), "--repo", str(self.repo), "pending"],
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    process.communicate(timeout=0.3)
+                replacement = {**saved, "run_id": uuid.uuid4().hex}
+                board.atomic_json(self.state / "supervisor.json", replacement)
+                board.atomic_json(self.state / "operator.json", {"requests": [dict(
+                    id=str(uuid.uuid4()), type="guidance", text="New run only", run_id=replacement["run_id"])]})
+            except BaseException:
+                process.kill()
+                process.communicate()
+                raise
+        stdout, stderr = process.communicate(timeout=5)
+        self.assertEqual(process.returncode, 0, stderr)
+        result = json.loads(stdout)
+        self.assertEqual(result["run_id"], replacement["run_id"])
+        self.assertEqual(result["requests"][0]["run_id"], result["run_id"])

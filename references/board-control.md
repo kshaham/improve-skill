@@ -37,6 +37,9 @@ Never apply an old request to a similarly named task in another run. Finished ta
 remain finished; explain that follow-up work needs a new task. When a target changed
 since submission, explain whether the decision still applies. Conflicting requests are
 handled in order, with the later explicit direction taking precedence where applicable.
+The helper includes `expected_status` for targeted requests: compare it with the current
+ledger before acting. Its run identity, flags, and requests are read under the archival
+lock so they always belong to the same run. Reread at each checkpoint.
 
 ## Acknowledge an actual result
 
@@ -60,8 +63,22 @@ Only the helper updates these files, using a shared lock and atomic writes. The 
 does not compete with the worker to write `backlog.jsonl`, `bets.jsonl`, `run.json`, or
 `supervisor.json`. Run archival moves requests, receipts, and pause state together;
 `operator.lock` remains in place so its inode continues to coordinate concurrent access.
-The Requests tab shows the current run's requests, twenty per page, with status filtering
-and export across all pages. Old request files remain in the archived run directory.
+The Requests tab uses the shared run selector to show current, archived, or all runs.
+Text search includes request details and skill responses; status filtering and JSON export
+cover every matching page. Twenty rows render at a time, and new arrivals preserve your
+place on older pages. Archived pending requests remain historical; do not carry them into
+a replacement run. Creating a request while viewing an archive always targets the current
+run and returns the view there after saving.
+
+Related work links match `board_request_id` or the exact target key within the same run.
+They show task/bet status and open its evidence, including completed work. Keep those IDs
+when updating ledgers; an applied receipt alone does not imply the task is done. Missing
+links mean no matching work was recorded. Damaged archived request files show a warning
+without disabling the current run's controls.
+
+The **Reports** button lists saved final reports for all runs. It starts with the selected
+run's report when available, otherwise the current or latest archived report. Reports are
+bounded to 512 KiB, displayed as plain text, and downloadable with the run in the filename.
 
 ## Pause, resume, and stop
 

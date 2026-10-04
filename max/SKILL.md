@@ -6,7 +6,7 @@ metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus)
   created: 2026-09-17
   parent: improve
-  version: 0.6.0
+  version: 0.7.0
   install: symlink improve-max to this directory beside the improve skill in the host's skills folder
 ---
 
@@ -131,6 +131,8 @@ Read and acknowledge board requests at each checkpoint using the parent's
 `scripts/improve_control.py` helper and `../references/board-control.md`. Proposal
 approval preserves this skill's characterization and spike gates. A requested pause
 settles the current piece and returns to the supervisor; the original deadline stays fixed.
+Retain `board_request_id` on requested bets so their archived requests link to measured
+results. Archived pending requests are historical; consume only the current helper output.
 
 ## Preflight - the first day is mostly this
 
