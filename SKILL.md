@@ -6,8 +6,9 @@ metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus) in plan mode
   created: 2026-09-05
   origin: Designed to spec in the ~/Code/bonsai session (plan shimmying-roaming-goose.md); daemon added 2026-09-06 after the first 6h run hit ENOSPC
-  version: 1.6.0
+  version: 1.7.0
   changelog: |
+    1.7.0 (2026-10-04) - authoritative clocks before preflight, durable rate-limit recovery, saved model selection, verified report freshness, explicit authorization continuity, installation and troubleshooting docs
     1.6.0 (2026-10-04) - host-aware Codex/Claude daemon routing, persisted engine across recovery, native skill invocation, isolated cycle input and engine regression tests
     1.5.0 (2026-10-04) - evidence-based progress detection, bounded deadline cleanup, recoverable halts and final reports, verification-aware work selection, persistent retry counters and live status
     1.4.0 (2026-10-04) - ten-question intake, persistent user priorities, feature/UI/asset lanes, active discovery without dry sleeps, verified continuation, portable deadline supervisor and regression tests
@@ -61,10 +62,16 @@ and they outrank throughput:
    "hour 2 of 2 (final)" seventeen minutes in, and a 3h run wrote FINAL fifty minutes early
    with "tier 1 throughout", both because the queue they started with had run out.
 
-## Hard rules
+## Default boundaries and explicit authorization
 
-These bound autonomous work. If a finding needs an exception, save it as a proposal and
-continue eligible work; do not halt the entire run to request routine approvals:
+These are the defaults for autonomous work. Explicit user instructions take precedence
+within their stated scope: for example, a request to push and merge already authorizes
+those actions after the required checks. Save such grants, their source, and any conditions
+in `intake.json.authorization` before a daemon handoff and copy them to `run.json.authorization`
+so compaction and daemon cycles retain them. Do not ask for the
+same permission again. A broad request to "improve" does not itself authorize publishing,
+spending, dependency changes, or a larger rewrite. For an exception not already authorized,
+save a proposal and continue eligible work instead of stopping for routine approvals:
 
 - **Never touch `main`.** Work on `improve/<YYYY-MM-DD>`, created at preflight.
 - **Never push, never force-push, never open a PR.** Landing is local commits only.
@@ -78,8 +85,9 @@ continue eligible work; do not halt the entire run to request routine approvals:
 - **Never read or write `.env*`, `*credential*`, `*secret*`, `*.pem`, `*.key`.**
 - **Never edit files outside the target repo**, except this skill's own state.
 
-Repo-specific prohibitions may be added at preflight from `CLAUDE.md` / `AGENTS.md`. They are
-additive; they never relax the list above.
+Read repo-specific instructions in `CLAUDE.md` / `AGENTS.md` at preflight, and follow them
+alongside the user's current instructions. Preserve exclusions and conditions when the user
+steers the run; an unrelated new preference does not erase an earlier boundary or grant.
 
 ## State
 
@@ -89,7 +97,7 @@ clean-tree checks. If needed, add it to `.gitignore` only after creating the run
 and commit that housekeeping before the first item so it cannot leave a cycle dirty:
 
     .improve/intake.json    the ten user answers, collected before the timer
-    .improve/run.json       deadline, focus, next action, cycle, tier, gates, baseline, guardrails
+    .improve/run.json       deadline, focus, authorization, next action, cycle, gates, baseline
     .improve/discovery.jsonl completed scans, evidence, empty results, and next scopes
     .improve/supervisor.json daemon-owned start/deadline and terminal status (daemon only)
     .improve/backlog.jsonl  one JSON object per candidate, appended and rewritten in place
@@ -112,6 +120,8 @@ resume automatically. After resolving a halt, `--resume` explicitly continues wi
 original deadline; `--finalize` retries a missing report without reopening work. A new run
 gets a new intake and preserves the old ledger in history.
 For a legacy live run with no intake, ask the ten questions once without moving its deadline.
+The clock reads the supervisor's timestamps even before the first `run.json` checkpoint;
+an agent-written replacement deadline cannot extend a supervised run.
 
 ## The clock
 
@@ -137,7 +147,8 @@ invalid state; do not let an `&&` chain or `set -e` skip finalization on exit `1
 **Only exit `10` ends the run on time.** Writing "final", "at the deadline", "N minutes
 left" or "hour N of M" without the script's output in front of you is the failure this
 section exists to prevent. If the script is unavailable, compute the same numbers with
-`date -u` against `run.json` and show the arithmetic; never estimate.
+`date -u` against `supervisor.json` when present, otherwise `run.json`, and show the arithmetic;
+never estimate.
 
 ## When the run stops
 
@@ -508,3 +519,7 @@ omit it on recovery. Codex uses noninteractive `exec`, retains rules, and reques
 Claude retains `--permission-mode bypassPermissions`. Ensure the selected CLI is authenticated
 and configured for the authorized unattended work. See `references/continuation.md` and README
 for engine detection, permissions, restart, stop, and new-run behavior.
+An explicit `--model` (or initial `IMPROVE_MODEL`) is also saved; omit it on recovery to keep
+the selection. Account-limit waits survive restarts. A successful deadline-ending cycle still
+gets a bounded report pass; a failed exit cannot establish success, and an older report cannot
+clear `summary_pending` for a later halt.
