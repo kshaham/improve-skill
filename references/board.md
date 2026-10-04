@@ -39,14 +39,14 @@ machine; access it through an SSH local port forward when needed.
 
 ## Keep the board faithful to the work
 
-| Column | Ledger status | Meaning |
+| Location | Ledger status | Meaning |
 |---|---|---|
 | Queued | `ready` | Accepted work waiting to begin |
 | In progress | `in_progress` | The current task is being investigated or edited |
-| Done | `done` | Verification or investigation finished; evidence recorded |
+| History / Completed | `done` | Verification or investigation finished; evidence recorded |
 | Blocked | `blocked`, legacy `benched` | Work cannot proceed; note explains recovery |
 | Proposed | `proposed` | A concrete proposal awaiting a user decision |
-| Rejected | `rejected` | An idea failed verification or was ruled out; reason retained |
+| History / Rejected | `rejected` | An idea failed verification or was ruled out; reason retained |
 
 Create the row before work begins, using a stable ID, useful title/claim, area, acceptance
 checks, and status. On each transition update its UTC `updated_at`, evidence/verification,
@@ -58,7 +58,7 @@ Explicitly `in_progress` tasks also appear Blocked once the run ends, with a not
 they were not settled. Unknown statuses appear Blocked with a warning rather than disappearing.
 
 For `improve-max`, the board also reads `bets.jsonl`: `spiking`/`placed` map to In progress,
-`landed` to Done, `killed` to Rejected, and `proposed` to Proposed. Each bet's details show
+`landed` to Completed history, `killed` to Rejected history, and `proposed` to Proposed. Each bet's details show
 the original phase, journey, spike/landed measurements, implementation pieces with their
 statuses/commits, and kill criteria. Maintain the original bet ledger; do not duplicate
 bets in the ordinary backlog. Bet IDs and ordinary task IDs remain separate in the view.
@@ -69,10 +69,29 @@ task card with `kind: "investigation"`, clearly identified and backed by finding
 turn every tool call into a card, invent retrospective outcomes, or create busywork.
 This board can show only recorded work; it does not reconstruct missing tasks from chat.
 
-The browser defaults to **All runs**. Search covers task text, files, evidence, and commits;
-filters narrow by run and area. Open a card for evidence, acceptance checks, verification,
-files, and commit details. Export downloads the currently filtered tasks as JSON. The page
-refreshes every three seconds while visible and every ten seconds while hidden. Connection
+The browser defaults to **Board** and **All runs**. Four columns hold active work. Below
+them, **Recently completed** shows the five newest matching completions as compact rows.
+The completed counter and **View completed history** open the full **History** view;
+a rejected-count shortcut opens rejected history. Moving work into History is only a
+display choice: no records are moved, removed, or rewritten.
+
+History shows completed and rejected work in rows, twenty per page, with title, outcome,
+area, recorded date, and commit. Narrow screens use fewer fields; all details remain
+available by opening a row. Rows sort newest first using the first valid `completed_at`,
+`updated_at`, or `created_at`. The date tooltip identifies which timestamp was used;
+undated records appear last with **Date not recorded**. Equal dates sort by stable task key.
+
+Search covers task text, files, evidence, and commits across every page. Filters narrow
+by run and area, and History adds an outcome filter. Filter changes return to the first
+page. On older pages, background updates preserve the first visible task when it still
+matches; **Latest** returns to the newest results. Page controls remain visible while
+scrolling. Tab arrows switch Board/History; Enter opens the focused card or row, and
+Escape closes its details.
+
+Open a card or row for evidence, acceptance checks, verification, files, and commit
+details. Export downloads JSON: History exports every matching finished task across all
+pages with its outcome filter; Board exports all matching tasks, including finished work.
+The page refreshes every three seconds while visible and every ten seconds while hidden. Connection
 failures retain the last view and show a warning. Partial/malformed ledger rows generate
 warnings while valid rows remain visible.
 Non-finite measurements (`NaN`, infinities, or overflowing numbers) are invalid records;
