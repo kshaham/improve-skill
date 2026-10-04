@@ -2,9 +2,18 @@
 const $ = (id) => document.getElementById(id);
 let snapshot = null,
   cardSignature = "",
+  recentSignature = "",
+  historySignature = "",
+  activeView = "board",
+  historyOffset = 0,
+  historyAnchor = null,
   selectedTask = null,
   timer = null,
   fetching = false;
+const FINISHED = new Set(["done", "rejected"]);
+const PAGE_SIZE = 20,
+  RECENT_LIMIT = 5;
+const countText = (value) => value.toLocaleString();
 const labels = {
   ready: "Queued",
   in_progress: "In progress",
@@ -130,18 +139,106 @@ function taskCard(task) {
   card.addEventListener("click", () => openTask(task));
   return card;
 }
-function renderCards() {
-  if (!snapshot) return;
-  const tasks = filteredTasks();
-  $("visible-count").textContent =
-    tasks.length + (tasks.length === 1 ? " task" : " tasks");
-  const signature = JSON.stringify([tasks, snapshot.columns]);
+function recordedDate(task) {
+  for (const field of ["completed_at", "updated_at", "created_at"]) {
+    const epoch = Date.parse(task[field]);
+    if (Number.isFinite(epoch)) return { epoch, field };
+  }
+  return { epoch: null, field: null };
+}
+function newestFirst(tasks) {
+  return [...tasks].sort(
+    (a, b) =>
+      (recordedDate(b).epoch ?? -Infinity) -
+        (recordedDate(a).epoch ?? -Infinity) || a.key.localeCompare(b.key),
+  );
+}
+function historyTasks(tasks = filteredTasks()) {
+  const outcome = $("history-outcome").value;
+  return newestFirst(
+    tasks.filter(
+      (task) =>
+        FINISHED.has(task.status) &&
+        (outcome === "all" || task.status === outcome),
+    ),
+  );
+}
+function taskRow(task) {
+  const item = element("div", "task-row-item");
+  item.setAttribute("role", "listitem");
+  const row = element("button", "task-row");
+  row.type = "button";
+  row.dataset.key = task.key;
+  row.setAttribute(
+    "aria-label",
+    task.title + ", " + labels[task.status] + ", " + task.area,
+  );
+  const title = element("span", "row-title");
+  const name = element("strong", "", task.title);
+  name.title = task.title;
+  title.append(
+    name,
+    element(
+      "span",
+      "row-id",
+      task.id + (task.run_id !== "current" ? " · " + task.run_id : ""),
+    ),
+  );
+  const outcome = element(
+    "span",
+    "row-outcome " + task.status,
+    task.status === "done" ? "Completed" : "Rejected",
+  );
+  const area = element("span", "row-area", task.area);
+  const recorded = recordedDate(task),
+    date = element("span", "row-date", "Date not recorded");
+  if (recorded.epoch !== null) {
+    const value = new Date(recorded.epoch);
+    date.textContent = value.toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+    date.title =
+      {
+        completed_at: "Completed",
+        updated_at: "Updated",
+        created_at: "Created",
+      }[recorded.field] +
+      ": " +
+      value.toLocaleString();
+  }
+  const commit = element(
+    "span",
+    "row-commit",
+    typeof task.commit === "string" && task.commit
+      ? task.commit.slice(0, 7)
+      : "—",
+  );
+  row.append(title, outcome, area, date, commit);
+  row.addEventListener("click", () => openTask(task));
+  item.append(row);
+  return item;
+}
+function replaceRows(id, tasks) {
+  const focus = $(id).contains(document.activeElement)
+    ? document.activeElement.dataset.key
+    : null;
+  $(id).replaceChildren(...tasks.map(taskRow));
+  if (focus)
+    [...$(id).querySelectorAll(".task-row")]
+      .find((row) => row.dataset.key === focus)
+      ?.focus({ preventScroll: true });
+}
+function renderBoard(tasks) {
+  const columns = snapshot.columns.filter((column) => !FINISHED.has(column.id));
+  const signature = JSON.stringify([tasks, columns]);
   if (signature === cardSignature) return;
   cardSignature = signature;
   const focus = document.activeElement?.dataset.key;
   const scrollLeft = $("board").scrollLeft;
   $("board").replaceChildren(
-    ...snapshot.columns.map((column) => {
+    ...columns.map((column) => {
       const section = element("section", "column");
       section.dataset.status = column.id;
       section.setAttribute("aria-label", column.label);
@@ -165,7 +262,116 @@ function renderCards() {
     [...document.querySelectorAll(".task-card")]
       .find((card) => card.dataset.key === focus)
       ?.focus({ preventScroll: true });
-  $("empty").hidden = snapshot.tasks.length !== 0;
+}
+function renderRecent(tasks) {
+  const done = newestFirst(tasks.filter((task) => task.status === "done"));
+  const rejected = tasks.filter((task) => task.status === "rejected").length;
+  $("recent-section").hidden = !done.length && !rejected;
+  $("recent-summary").textContent = done.length
+    ? "Latest " +
+      Math.min(RECENT_LIMIT, done.length) +
+      " of " +
+      countText(done.length) +
+      " completed tasks"
+    : "No completed tasks match these filters.";
+  $("view-completed").hidden = !done.length;
+  $("rejected-shortcut").hidden = !rejected;
+  $("rejected-shortcut").textContent = countText(rejected) + " rejected";
+  const recent = done.slice(0, RECENT_LIMIT),
+    signature = JSON.stringify(recent);
+  if (signature !== recentSignature) {
+    recentSignature = signature;
+    replaceRows("recent-list", recent);
+  }
+}
+function renderHistory(tasks) {
+  const rows = historyTasks(tasks);
+  if (historyOffset > 0 && historyAnchor) {
+    const index = rows.findIndex((task) => task.key === historyAnchor);
+    if (index >= 0) historyOffset = index;
+  }
+  if (historyOffset >= rows.length)
+    historyOffset = Math.max(
+      0,
+      Math.floor((rows.length - 1) / PAGE_SIZE) * PAGE_SIZE,
+    );
+  const page = rows.slice(historyOffset, historyOffset + PAGE_SIZE);
+  historyAnchor = historyOffset > 0 ? page[0]?.key : null;
+  $("history-empty").hidden = rows.length !== 0;
+  $("history-range").textContent = rows.length
+    ? countText(historyOffset + 1) +
+      "–" +
+      countText(historyOffset + page.length) +
+      " of " +
+      countText(rows.length) +
+      " tasks"
+    : "0 tasks";
+  $("history-first").disabled = $("history-prev").disabled =
+    historyOffset === 0;
+  $("history-next").disabled = historyOffset + PAGE_SIZE >= rows.length;
+  const signature = JSON.stringify(page);
+  if (signature !== historySignature) {
+    historySignature = signature;
+    replaceRows("history-list", page);
+  }
+}
+function renderCards() {
+  if (!snapshot) return;
+  const tasks = filteredTasks(),
+    active = tasks.filter((task) => !FINISHED.has(task.status));
+  $("visible-count").textContent = countText(tasks.length) + " matching tasks";
+  $("board-count").textContent = countText(active.length);
+  $("history-count").textContent = countText(tasks.length - active.length);
+  $("board-view").hidden = activeView !== "board";
+  $("history-view").hidden = activeView !== "history";
+  $("export").title =
+    activeView === "history"
+      ? "Export all matching history, including every page"
+      : "Export all matching tasks, including finished work";
+  for (const view of ["board", "history"]) {
+    $(view + "-tab").setAttribute("aria-selected", String(activeView === view));
+    $(view + "-tab").tabIndex = activeView === view ? 0 : -1;
+  }
+  if (activeView === "board") {
+    $("history-list").replaceChildren();
+    historySignature = "";
+    $("empty").hidden = snapshot.tasks.length !== 0;
+    $("active-empty").hidden = !snapshot.tasks.length || active.length !== 0;
+    $("active-empty-note").textContent =
+      $("search").value || $("area").value !== "all"
+        ? "No active tasks match these filters. Finished matches are available in History."
+        : "Completed and rejected work is available in History.";
+    $("board").hidden = !active.length;
+    renderBoard(active);
+    renderRecent(tasks);
+  } else {
+    $("board").replaceChildren();
+    $("recent-list").replaceChildren();
+    cardSignature = recentSignature = "";
+    renderHistory(tasks);
+  }
+}
+function resetHistory() {
+  historyOffset = 0;
+  historyAnchor = null;
+}
+function selectView(view, outcome) {
+  activeView = view;
+  if (outcome) {
+    $("history-outcome").value = outcome;
+    resetHistory();
+  }
+  renderCards();
+}
+function changeFilters() {
+  resetHistory();
+  renderCards();
+}
+function historyPage(direction) {
+  historyOffset =
+    direction === 0 ? 0 : Math.max(0, historyOffset + direction * PAGE_SIZE);
+  historyAnchor = null;
+  renderCards();
 }
 function remaining() {
   if (!snapshot) return;
@@ -236,10 +442,12 @@ function render(data) {
       .sort()
       .map((area) => [area, area]),
   ]);
-  $("total").textContent = data.tasks.length;
-  $("working").textContent = data.counts.in_progress;
-  $("completed").textContent = data.counts.done;
-  $("blocked").textContent = data.counts.blocked + data.counts.proposed;
+  $("total").textContent = countText(data.tasks.length);
+  $("working").textContent = countText(data.counts.in_progress);
+  $("completed").textContent = countText(data.counts.done);
+  $("blocked").textContent = countText(
+    data.counts.blocked + data.counts.proposed,
+  );
   $("run-count").textContent =
     data.selected_run === "all"
       ? "Across " +
@@ -340,9 +548,44 @@ async function refresh() {
     );
   }
 }
-$("search").addEventListener("input", renderCards);
-$("area").addEventListener("change", renderCards);
-$("run").addEventListener("change", refresh);
+$("search").addEventListener("input", changeFilters);
+$("area").addEventListener("change", changeFilters);
+$("run").addEventListener("change", () => {
+  resetHistory();
+  refresh();
+});
+$("history-outcome").addEventListener("change", changeFilters);
+$("board-tab").addEventListener("click", () => selectView("board"));
+$("history-tab").addEventListener("click", () => selectView("history"));
+$("completed-shortcut").addEventListener("click", () => {
+  selectView("history", "done");
+  $("history-tab").focus();
+});
+$("view-completed").addEventListener("click", () => {
+  selectView("history", "done");
+  $("history-tab").focus();
+});
+$("rejected-shortcut").addEventListener("click", () => {
+  selectView("history", "rejected");
+  $("history-tab").focus();
+});
+$("history-first").addEventListener("click", () => historyPage(0));
+$("history-prev").addEventListener("click", () => historyPage(-1));
+$("history-next").addEventListener("click", () => historyPage(1));
+document.querySelector(".view-tabs").addEventListener("keydown", (event) => {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const view =
+    event.key === "Home"
+      ? "board"
+      : event.key === "End"
+        ? "history"
+        : activeView === "board"
+          ? "history"
+          : "board";
+  selectView(view);
+  $(view + "-tab").focus();
+});
 $("refresh").addEventListener("click", refresh);
 $("close-dialog").addEventListener("click", () => $("task-dialog").close());
 $("task-dialog").addEventListener("click", (event) => {
@@ -359,7 +602,7 @@ $("export").addEventListener("click", () => {
         {
           repo: snapshot.repo,
           exported_at: new Date().toISOString(),
-          tasks: filteredTasks(),
+          tasks: activeView === "history" ? historyTasks() : filteredTasks(),
         },
         null,
         2,

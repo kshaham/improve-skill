@@ -94,13 +94,17 @@ improve_repo="$HOME/Code/my-app"
 
 The board includes:
 
-- **Six columns:** Queued, In progress, Done, Blocked, Proposed, and Rejected.
+- **Four working columns:** Queued, In progress, Blocked, and Proposed.
+- **Recent completions:** five compact rows below the board, with a link to the full history.
+- **History view:** completed and rejected tasks in rows with title, outcome, area, recorded
+  date, and commit. Twenty rows per page keep long runs manageable; click any row for details.
 - **Task details:** evidence, acceptance checks, verification, files, notes, and commits.
 - **Search and filters:** find tasks by text, area, or run, including archived history.
 - **Live progress:** task counts, deadline, latest checkpoint, and recent investigations.
 - **Run health:** engine/model, cycle, checkpoint times, retry schedule, failure count,
   and pending final report. A connected board is separate from a running daemon.
-- **Export:** download the filtered task list as JSON.
+- **Export:** download matching tasks as JSON. History includes all matching pages and
+  respects the outcome filter; Board exports all matching tasks, including finished work.
 
 It reads `.improve/backlog.jsonl` directly, includes `improve-max` experiments from
 `bets.jsonl`, and refreshes every three seconds while visible.
@@ -108,6 +112,9 @@ There is no second task database to maintain. The skill records tasks before sta
 updates their status as work progresses, and retains finished/rejected work. Existing
 ledgers work without migration; older work that was never recorded cannot be reconstructed.
 The view is read-only; proposals and blocked items do not become approved by opening them.
+Completed work stays in the ledger. History searches every recorded task, including rows
+outside the current page. New results keep your place while you browse older pages; use
+**Latest** to return to the newest results. Page controls stay visible as you scroll.
 
 The current run panel flags an inactive daemon and missing final report, and shows when a
 report-only retry is running. It uses the supervisor's confirmed outcome, so a worker's
@@ -505,7 +512,10 @@ uv run --with playwright python tests/browser_board.py --chrome /path/to/chrome
 ```
 
 These exercise filtering, task details, automatic refresh, export, escaped task text,
-connection recovery, run-health/report states, and mobile overflow. Screenshots are written to a temporary directory
+connection recovery, run-health/report states, and mobile/tablet overflow. A fixture with
+over 2,000 finished tasks checks bounded row rendering, pagination, search across pages,
+keyboard navigation, date fallbacks, and position preservation during live updates.
+Screenshots are written to a temporary directory
 unless `--artifacts PATH` is supplied. Playwright is only a development dependency.
 
 Licensed under [MIT](LICENSE).

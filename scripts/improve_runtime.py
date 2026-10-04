@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "1.9.0"
+VERSION = "1.10.0"
 HOST_MARKERS = {"codex": ("CODEX_THREAD_ID", "CODEX_CI"),
                 "claude": ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
 SANDBOX_MODES = ("read-only", "workspace-write", "danger-full-access")

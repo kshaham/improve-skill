@@ -6,8 +6,9 @@ metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus) in plan mode
   created: 2026-09-05
   origin: Designed to spec in the ~/Code/bonsai session (plan shimmying-roaming-goose.md); daemon added 2026-09-06 after the first 6h run hit ENOSPC
-  version: 1.9.0
+  version: 1.10.0
   changelog: |
+    1.10.0 (2026-10-04) - compact completed-history rows, four working columns, paginated searchable history, stable live browsing, keyboard navigation, and large-history browser checks
     1.9.0 (2026-10-04) - experiment-aware progress checks, lifecycle-only churn detection, preserved intake authorization, completed-intake validation, and truthful board run health
     1.8.0 (2026-10-04) - live local Kanban board, automatic daemon startup, searchable task history, explicit task transitions, archived runs, local-only service and browser tests
     1.7.0 (2026-10-04) - authoritative clocks before preflight, durable rate-limit recovery, saved model selection, verified report freshness, explicit authorization continuity, installation and troubleshooting docs
