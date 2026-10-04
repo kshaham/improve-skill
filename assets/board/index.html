@@ -59,7 +59,10 @@
         </div>
         <div class="stat">
           <span>Completed <i class="dot green"></i></span
-          ><strong id="completed">0</strong><small>Recorded as done</small>
+          ><strong id="completed">0</strong
+          ><button id="completed-shortcut" class="stat-action" type="button">
+            View history ↗
+          </button>
         </div>
         <div class="stat">
           <span>Needs attention <i class="dot amber"></i></span
@@ -109,15 +112,118 @@
           ><span id="visible-count" class="visible-count">0 tasks</span>
         </div>
       </section>
-      <div id="empty" class="empty-state" hidden>
-        <span aria-hidden="true">▥</span>
-        <h2>Your next improvement starts here.</h2>
-        <p>
-          Tasks appear as the skill records them. This page refreshes
-          automatically.
-        </p>
+      <div class="view-tabs" role="tablist" aria-label="Task views">
+        <button
+          id="board-tab"
+          type="button"
+          role="tab"
+          aria-selected="true"
+          aria-controls="board-view"
+        >
+          Board <span id="board-count" class="view-count">0</span>
+        </button>
+        <button
+          id="history-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="history-view"
+          tabindex="-1"
+        >
+          History <span id="history-count" class="view-count">0</span>
+        </button>
+        <span class="view-hint"
+          >Active work on the board. Finished work in history.</span
+        >
       </div>
-      <section id="board" class="board" aria-label="Kanban board"></section>
+      <section id="board-view" role="tabpanel" aria-labelledby="board-tab">
+        <div id="empty" class="empty-state" hidden>
+          <span aria-hidden="true">▥</span>
+          <h2>Your next improvement starts here.</h2>
+          <p>
+            Tasks appear as the skill records them. This page refreshes
+            automatically.
+          </p>
+        </div>
+        <div id="active-empty" class="active-empty" hidden>
+          <span aria-hidden="true">✓</span>
+          <div>
+            <h2>No active tasks</h2>
+            <p id="active-empty-note">
+              Completed and rejected work is available in History.
+            </p>
+          </div>
+        </div>
+        <section id="board" class="board" aria-label="Kanban board"></section>
+        <section
+          id="recent-section"
+          class="recent-section"
+          aria-labelledby="recent-heading"
+          hidden
+        >
+          <div class="history-heading">
+            <div>
+              <h2 id="recent-heading">Recently completed</h2>
+              <p id="recent-summary"></p>
+            </div>
+            <div class="history-actions">
+              <button id="rejected-shortcut" type="button" hidden></button
+              ><button id="view-completed" type="button">
+                View completed history ↗
+              </button>
+            </div>
+          </div>
+          <div
+            id="recent-list"
+            class="task-rows"
+            role="list"
+            aria-label="Recent completions"
+          ></div>
+        </section>
+      </section>
+      <section
+        id="history-view"
+        role="tabpanel"
+        aria-labelledby="history-tab"
+        hidden
+      >
+        <div class="history-heading">
+          <div>
+            <h2>Task history</h2>
+            <p>Completed and rejected work, newest first.</p>
+          </div>
+          <label class="outcome-filter"
+            >Outcome
+            <select id="history-outcome">
+              <option value="all">All outcomes</option>
+              <option value="done">Completed</option>
+              <option value="rejected">Rejected</option>
+            </select></label
+          >
+        </div>
+        <nav class="history-pagination" aria-label="History pages">
+          <span id="history-range" role="status"></span>
+          <div>
+            <button id="history-first" type="button">Latest</button
+            ><button id="history-prev" type="button">← Previous</button
+            ><button id="history-next" type="button">Next →</button>
+          </div>
+        </nav>
+        <div class="row-head" aria-hidden="true">
+          <span>Task</span><span>Outcome</span><span>Area</span
+          ><span>Recorded</span><span>Commit</span>
+        </div>
+        <div
+          id="history-list"
+          class="task-rows"
+          role="list"
+          aria-label="Task history"
+          aria-describedby="history-range"
+        ></div>
+        <p id="history-empty" class="history-empty" hidden>
+          No finished tasks match these filters.
+        </p>
+      </section>
       <section id="discovery-section" class="discovery-section" hidden>
         <div class="section-heading">
           <h2>Recent investigations</h2>
