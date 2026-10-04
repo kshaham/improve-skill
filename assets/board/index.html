@@ -72,6 +72,18 @@
         ><span id="run-detail">The board is ready for your first task.</span
         ><span id="remaining" class="remaining"></span>
       </section>
+      <section
+        id="run-health"
+        class="run-health"
+        aria-label="Current run health"
+        hidden
+      >
+        <div class="health-heading">
+          <strong>Current run</strong><span id="run-meta"></span>
+        </div>
+        <div id="run-checkpoint"></div>
+        <div id="run-notice" role="status" hidden></div>
+      </section>
       <div id="warning" class="warning" role="status" hidden></div>
       <section class="toolbar" aria-label="Board filters">
         <label class="search"

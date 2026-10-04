@@ -75,8 +75,22 @@ files, and commit details. Export downloads the currently filtered tasks as JSON
 refreshes every three seconds while visible and every ten seconds while hidden. Connection
 failures retain the last view and show a warning. Partial/malformed ledger rows generate
 warnings while valid rows remain visible.
+Non-finite measurements (`NaN`, infinities, or overflowing numbers) are invalid records;
+they produce warnings rather than breaking the browser's entire task response.
 
 ## State and boundaries
+
+The **Current run** health panel shows the saved engine/model, cycle/phase, work and
+supervisor checkpoint times, account-limit retry, consecutive failures, and pending final
+report. Checkpoint timestamps are saved observations, not proof of continuous activity.
+**Board connected** means the viewer is responding; daemon liveness comes from its OS lock.
+An active supervisor's null outcome takes precedence over an unconfirmed worker completion.
+Foreground completion recorded before its deadline is flagged without modifying the ledger.
+The panel remains about the current run when filtering archived task history.
+
+An ended run with **Final report pending** still needs its report-only retry. During a
+live report retry the board says **Writing final report** while retaining the original
+outcome in stored history. Viewer warnings and pending reports never approve unverified work.
 
 `.improve/board.json` contains the URL, process identity, and private stop token;
 `board.lock` enforces one server per repo and `board.log` records startup errors. Keep

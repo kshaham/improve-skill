@@ -5,6 +5,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
@@ -32,6 +33,38 @@ class LedgerFixture(unittest.TestCase):
 
 
 class SnapshotTests(LedgerFixture):
+    def test_worker_cannot_mark_supervised_run_ended_on_the_board(self):
+        run = dict(started_at=board.stamp(time.time() - 10), deadline=board.stamp(time.time() + 60),
+                   active_item={"id": "a"}, outcome="completed")
+        board.atomic_json(self.state / "run.json", run)
+        board.atomic_json(self.state / "supervisor.json", {**run, "outcome": None})
+        data = board.board_snapshot(self.repo)
+        self.assertIsNone(data["current"]["outcome"])
+        self.assertEqual(data["tasks"][0]["status"], "in_progress")
+        self.assertTrue(data["warnings"])
+        self.assertEqual(board.read_json(self.state / "run.json"), run)
+
+    def test_foreground_premature_completion_is_not_displayed_as_finished(self):
+        run = dict(started_at=board.stamp(time.time() - 10), deadline=board.stamp(time.time() + 60), outcome="completed")
+        board.atomic_json(self.state / "run.json", run)
+        data = board.board_snapshot(self.repo)
+        self.assertIsNone(data["current"]["outcome"])
+        self.assertIn("Premature completion", data["warnings"][0])
+
+    def test_health_distinguishes_saved_phase_from_daemon_liveness(self):
+        control = dict(started_at=board.stamp(time.time() - 10), deadline=board.stamp(time.time() + 60),
+                       phase="working", engine="codex", model="test-model", heartbeat_at=board.stamp(),
+                       summary_pending=True, consecutive_failures=2, last_error="No new evidence")
+        board.atomic_json(self.state / "supervisor.json", control)
+        current = board.board_snapshot(self.repo)["current"]
+        self.assertFalse(current["daemon_running"])
+        self.assertTrue(current["supervised"])
+        self.assertTrue(current["summary_pending"])
+        self.assertEqual(current["consecutive_failures"], 2)
+        self.assertEqual(current["model"], "test-model")
+        with board.repo_lock(self.state / "daemon.lock"):
+            self.assertTrue(board.board_snapshot(self.repo)["current"]["daemon_running"])
+
     def test_empty_ledger_needs_no_timed_run(self):
         data = board.board_snapshot(self.repo)
         self.assertEqual(data["tasks"], [])
@@ -67,6 +100,15 @@ class SnapshotTests(LedgerFixture):
         data = board.board_snapshot(self.repo)
         self.assertEqual([task["id"] for task in data["tasks"]], ["one", "two"])
         self.assertEqual(len(data["warnings"]), 2)
+
+    def test_nonfinite_measurements_cannot_poison_the_browser_response(self):
+        (self.state / "backlog.jsonl").write_text('{"id":"valid","measurement":1.5}\n' +
+            ''.join('{"id":"invalid","measurement":' + value + '}\n'
+                    for value in ('NaN', 'Infinity', '-Infinity', '1e999')))
+        data = board.board_snapshot(self.repo)
+        self.assertEqual([task["id"] for task in data["tasks"]], ["valid"])
+        self.assertEqual(len(data["warnings"]), 4)
+        json.dumps(data, allow_nan=False)
 
     def test_archive_filter_does_not_confuse_reused_ids(self):
         archive = self.state / "history/2026-10-03-run"

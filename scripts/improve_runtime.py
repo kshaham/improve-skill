@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "1.8.0"
+VERSION = "1.9.0"
 HOST_MARKERS = {"codex": ("CODEX_THREAD_ID", "CODEX_CI"),
                 "claude": ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
 SANDBOX_MODES = ("read-only", "workspace-write", "danger-full-access")
@@ -204,6 +204,8 @@ def env_integer(name, default, minimum=1):
 
 
 def validate_intake(value):
+    if "status" in value and value["status"] != "complete":
+        raise StateError("intake status must be complete; collect the user's remaining answers before starting")
     answers = value.get("answers")
     if not isinstance(answers, dict):
         raise StateError("intake must contain an answers object; see references/intake.md")
@@ -234,7 +236,8 @@ def evidence_rows(path):
     """Ignore bookkeeping-only rewrites when looking for new recorded evidence."""
     if not path.exists():
         return set()
-    ignored = {"at", "timestamp", "updated_at", "generation", "next_scope", "id"}
+    ignored = {"at", "timestamp", "created_at", "updated_at", "started_at", "completed_at",
+               "ended_at", "placed_at", "generation", "next_scope", "id", "title", "status"}
     fingerprints = set()
     with path.open() as stream:
         for number, line in enumerate(stream, 1):
@@ -247,6 +250,10 @@ def evidence_rows(path):
             if not isinstance(row, dict):
                 raise StateError(f"{path.name}:{number} must contain an object")
             normalized = {k: v for k, v in row.items() if k not in ignored}
+            if isinstance(normalized.get("pieces"), list):
+                normalized["pieces"] = [
+                    {k: v for k, v in piece.items() if k not in ignored} if isinstance(piece, dict) else piece
+                    for piece in normalized["pieces"]]
             if normalized:
                 fingerprints.add(json.dumps(normalized, sort_keys=True))
     return fingerprints
@@ -262,13 +269,15 @@ def snapshot(repo):
              "focus", "journeys", "detectors", "scanners") if key in run}
     return dict(cycle=cycle, head=git(repo, "rev-parse", "HEAD"), setup=setup,
                 discovery=evidence_rows(state / "discovery.jsonl"),
-                backlog=evidence_rows(state / "backlog.jsonl"))
+                backlog=evidence_rows(state / "backlog.jsonl"),
+                bets=evidence_rows(state / "bets.jsonl"))
 
 
 def advanced(before, after):
     return after["cycle"] > before["cycle"] and bool(
         after["head"] != before["head"] or after["setup"] != before["setup"] or
-        after["discovery"] - before["discovery"] or after["backlog"] - before["backlog"])
+        after["discovery"] - before["discovery"] or after["backlog"] - before["backlog"] or
+        after["bets"] - before["bets"])
 
 
 @contextlib.contextmanager
@@ -359,15 +368,16 @@ class Supervisor:
         recorded = control or run
         report_only = self.args.finalize or (recorded and timing(recorded)["remaining_seconds"] <= 0)
         intake_path = self.state / "intake.json"
+        saved_intake = read_json(intake_path) if intake_path.exists() else None
+        supplied = None
         if self.args.intake:
             supplied = validate_intake(read_json(Path(self.args.intake).expanduser()))
-            if intake_path.exists() and supplied["answers"] != read_json(intake_path).get("answers"):
+            if saved_intake is not None and supplied["answers"] != saved_intake.get("answers"):
                 raise StateError("resume keeps saved intake; change focus in the active session or start a new run")
-            atomic_json(intake_path, supplied)
-        if not intake_path.exists() and not report_only:
+        if saved_intake is None and supplied is None and not report_only:
             raise StateError("complete the ten intake questions first; pass --intake FILE (references/intake.md)")
-        if intake_path.exists() and not report_only:
-            validate_intake(read_json(intake_path))
+        if saved_intake is not None and not report_only:
+            validate_intake(saved_intake)
         if control:
             old_outcome = control.get("outcome")
             if self.args.finalize:
@@ -421,6 +431,10 @@ class Supervisor:
             self.control["consecutive_failures"] = 0
             if run is not None:
                 atomic_json(self.run_path, run)
+        # Saved answers may have later authorization/steering metadata. Repeating the
+        # original file must not erase it; only a first intake or --new-run replaces it.
+        if saved_intake is None and supplied is not None:
+            atomic_json(intake_path, supplied)
         atomic_json(self.control_path, self.control)
 
     def save_control(self, **changes):

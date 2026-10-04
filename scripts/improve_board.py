@@ -5,6 +5,7 @@ import argparse
 import contextlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -39,6 +40,13 @@ def state_directory(repo):
     return state
 
 
+def finite_number(value):
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("non-finite numbers are not valid board data")
+    return number
+
+
 def load_file(directory, name, warnings, jsonl=False):
     path = directory / name
     if path.is_symlink():
@@ -51,7 +59,7 @@ def load_file(directory, name, warnings, jsonl=False):
             raise ValueError("file exceeds the 32 MiB viewer limit")
         text = raw.decode("utf-8")
         if not jsonl:
-            value = json.loads(text)
+            value = json.loads(text, parse_float=finite_number, parse_constant=finite_number)
             if not isinstance(value, dict):
                 raise ValueError("expected a JSON object")
             return value
@@ -60,7 +68,7 @@ def load_file(directory, name, warnings, jsonl=False):
             if not line.strip():
                 continue
             try:
-                row = json.loads(line)
+                row = json.loads(line, parse_float=finite_number, parse_constant=finite_number)
                 if not isinstance(row, dict):
                     raise ValueError("expected an object")
                 rows.append(row)
@@ -147,24 +155,37 @@ def board_snapshot(repo, selected="current"):
         notices = []
         run = load_file(directory, "run.json", notices)
         control = load_file(directory, "supervisor.json", notices)
+        # A worker may announce completion before the supervisor validates its exit
+        # and deadline. A saved null supervisor outcome is still authoritative.
+        outcome = control.get("outcome") if control else run.get("outcome")
+        if control and run.get("outcome") and not outcome:
+            notices.append("Worker outcome awaits supervisor confirmation; the run is not yet ended.")
+        clock = None
+        if run or control:
+            try:
+                clock = recorded_timing(run, control or None)
+                if not control and outcome == "completed" and clock["remaining_seconds"] > 0:
+                    outcome = None
+                    notices.append("Premature completion ignored: the recorded deadline has not passed.")
+            except StateError as exc:
+                notices.append(f"Clock: {exc}")
         summary = {"id": run_id, "label": "Current run" if run_id == "current" else run_id,
-                   "outcome": control.get("outcome") or run.get("outcome"),
-                   "started_at": control.get("started_at") or run.get("started_at"),
-                   "deadline": control.get("deadline") or run.get("deadline")}
+                   "outcome": outcome,
+                   "started_at": (control if control else run).get("started_at"),
+                   "deadline": (control if control else run).get("deadline")}
         runs.append(summary)
         if run_id == "current":
             current = {**summary, "branch": run.get("branch"), "engine": control.get("engine"),
                        "phase": control.get("phase") or run.get("phase"), "cycle": run.get("cycle", 0),
                        "next_action": run.get("next_action"), "summary_pending": control.get("summary_pending", run.get("summary_pending")),
-                       "retry_at": control.get("retry_at"), "daemon_running": False}
+                       "retry_at": control.get("retry_at"), "daemon_running": False,
+                       "supervised": bool(control), "model": control.get("model"),
+                       "heartbeat_at": control.get("heartbeat_at"), "last_activity_at": run.get("last_activity_at"),
+                       "consecutive_failures": control.get("consecutive_failures", 0),
+                       "last_error": control.get("last_error"), "clock": clock}
             if not (state / "daemon.lock").is_symlink():
                 with contextlib.suppress(OSError):
                     current["daemon_running"] = lock_active(state / "daemon.lock")
-            if run or control:
-                try:
-                    current["clock"] = recorded_timing(run, control or None)
-                except StateError as exc:
-                    notices.append(f"Clock: {exc}")
         if selected in ("all", run_id):
             rows = load_file(directory, "backlog.jsonl", notices, jsonl=True)
             effective_run = {**run, "outcome": summary["outcome"]}
@@ -173,6 +194,8 @@ def board_snapshot(repo, selected="current"):
             tasks.extend(normalize_bets(bets, effective_run, run_id, notices))
             for row in load_file(directory, "discovery.jsonl", notices, jsonl=True)[-8:]:
                 discovery.append({key: row[key] for key in ("at", "lane", "scope", "hypothesis", "status", "evidence", "accepted") if key in row})
+        # The current run header remains visible even when viewing an archive.
+        if selected in ("all", run_id) or run_id == "current":
             warnings.extend(f"{summary['label']}: {notice}" for notice in notices)
     discovery.sort(key=lambda row: text_value(row.get("at")), reverse=True)
     counts = {key: sum(task["status"] == key for task in tasks) for key, _ in COLUMNS}
