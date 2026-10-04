@@ -66,7 +66,11 @@ mode execute it immediately. With a scheduler, verify the armed continuation. Un
 daemon, advance `cycle` only after real work or discovery; the supervisor uses that
 checkpoint **and new recorded evidence** to distinguish a valid fast empty scan from a
 launch that did nothing. A new commit, a changed finding or preflight result, or a fresh
-scan counts. Changing only the cycle counter, timestamps, IDs, or generation does not.
+scan counts. Improve-max spike measurements and implementation-piece evidence in
+`bets.jsonl` count too, even when no ordinary backlog task or commit changed that cycle.
+Changing only the cycle counter, timestamps, IDs, labels, statuses, or generation does not.
+Status transitions still belong in the ledger for the board; they need accompanying
+findings, verification results, measurements, or commits to demonstrate actual progress.
 After a cycle without progress, the next prompt asks for a different scope or hypothesis;
 repeated failure to checkpoint actual work trips the bounded breaker.
 

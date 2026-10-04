@@ -68,6 +68,11 @@ Users can answer all ten in one message, including “none” or “use your jud
 waits for answers, saves them, and derives an ordered focus plan. Resumed cycles and context
 compaction reuse that plan. A fresh run gets a fresh intake.
 
+An intake explicitly marked `awaiting_answers` cannot launch unattended work. Mark it
+`complete` after the user has answered; legacy files without a status still accept ten
+nonempty answers. Resupplying the original `--intake` on recovery preserves later saved
+authorization and steering notes. New answers require a new run or explicit in-session steering.
+
 Most discovery effort goes to the highest-priority unfinished outcomes. Other lanes support
 those goals; easy cleanup cannot crowd out a requested feature or visual improvement.
 Explicit exclusions apply throughout. User steering updates the plan without resetting time.
@@ -93,6 +98,8 @@ The board includes:
 - **Task details:** evidence, acceptance checks, verification, files, notes, and commits.
 - **Search and filters:** find tasks by text, area, or run, including archived history.
 - **Live progress:** task counts, deadline, latest checkpoint, and recent investigations.
+- **Run health:** engine/model, cycle, checkpoint times, retry schedule, failure count,
+  and pending final report. A connected board is separate from a running daemon.
 - **Export:** download the filtered task list as JSON.
 
 It reads `.improve/backlog.jsonl` directly, includes `improve-max` experiments from
@@ -101,6 +108,14 @@ There is no second task database to maintain. The skill records tasks before sta
 updates their status as work progresses, and retains finished/rejected work. Existing
 ledgers work without migration; older work that was never recorded cannot be reconstructed.
 The view is read-only; proposals and blocked items do not become approved by opening them.
+
+The current run panel flags an inactive daemon and missing final report, and shows when a
+report-only retry is running. It uses the supervisor's confirmed outcome, so a worker's
+premature completion cannot make an active supervised run look finished. Checkpoint times
+show the latest saved observations, not a guarantee that an agent is still making progress.
+
+Malformed records and non-finite benchmark values such as `NaN` produce warnings while
+valid task history remains visible. The viewer never rewrites those source records.
 
 The board stays available after the improvement run ends. Stopping it does not stop the
 daemon, and daemon `--stop` leaves the board available. Restarting the computer stops the
@@ -304,7 +319,10 @@ The daemon preserves one deadline in `supervisor.json` across restarts and prefl
 It restores an agent-reset deadline and rejects premature completion. A fast empty scan is
 valid if it checkpoints new evidence. Incrementing a counter or rewriting an identical
 scan’s timestamps does not count. New commits, findings, scans, and meaningful preflight
-results do count. The next prompt redirects a stalled cycle toward a fresh scope; repeated
+results do count. Improve-max measurements and implementation-piece evidence in `bets.jsonl`
+also count. Changing task IDs, titles, status labels, or lifecycle timestamps alone does not;
+record the actual findings, verification, measurements, or commits behind a status transition.
+The next prompt redirects a stalled cycle toward a fresh scope; repeated
 failed/uncheckpointed cycles trip a bounded breaker. Failure and wait totals survive
 ordinary process restarts.
 Completed finders are persisted before a cycle exits; live subagents cannot cross processes.
@@ -388,6 +406,7 @@ the final narrative report was generated. These differ from the clock's `0`/`10`
 | Halt after failed/uncheckpointed cycles | Read `daemon.log`, `last_error`, and discovery evidence; resolve the blocker before `--resume` |
 | `summary_pending: true` | Restore the required CLI/environment, then `--finalize`; the original reason and end time remain intact |
 | Board unavailable | Read `.improve/board.log`, check the helper's `--status`, and retry `--start`; use `--port 0` if your explicit port is occupied |
+| Board connected but daemon not running | The viewer outlives work. Inspect daemon `--status`; recover the saved run as appropriate before expecting more work |
 | Skill not appearing or appearing twice | Check the installed link and skill name; keep one installation per host, reload if needed |
 
 ## State on disk
@@ -468,7 +487,8 @@ deadlines, early completion, discovery continuity, restart, rate limits, lock ow
 timeouts, dirty state, recovery, repeated-scan detection, stop/deadline cleanup, report-only
 retries, engine/model persistence, authoritative clocks, rate-limit restart accounting,
 failed-success claims, stale reports, missing CLI failures, board startup/stop/history,
-malformed ledgers, HTTP boundaries, live task data, and finalization without
+malformed ledgers, HTTP boundaries, live task data, experiment evidence, bookkeeping-only
+churn, intake metadata preservation, authoritative board outcomes, and finalization without
 launching a real model or editing a real app.
 It does not establish that every model will find useful changes for a multi-hour run.
 
@@ -480,7 +500,7 @@ uv run --with playwright python tests/browser_board.py --chrome /path/to/chrome
 ```
 
 These exercise filtering, task details, automatic refresh, export, escaped task text,
-connection recovery, and mobile overflow. Screenshots are written to a temporary directory
+connection recovery, run-health/report states, and mobile overflow. Screenshots are written to a temporary directory
 unless `--artifacts PATH` is supplied. Playwright is only a development dependency.
 
 Licensed under [MIT](LICENSE).

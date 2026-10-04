@@ -103,6 +103,37 @@ class EngineTests(unittest.TestCase):
                 runtime.resolve_sandbox(engine, requested, control)
 
 
+class EvidenceTests(unittest.TestCase):
+    def test_lifecycle_edits_do_not_count_as_new_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "backlog.jsonl"
+            row = {"id": "a", "title": "Old label", "claim": "A real finding", "status": "ready",
+                   "created_at": "old", "started_at": "old", "completed_at": "old"}
+            path.write_text(json.dumps(row) + "\n")
+            before = runtime.evidence_rows(path)
+            row.update(id="new-id", title="Renamed", status="in_progress", created_at="new",
+                       started_at="new", completed_at="new")
+            path.write_text(json.dumps(row) + "\n")
+            self.assertEqual(runtime.evidence_rows(path), before)
+            row["verification"] = {"command": "pytest test_retry", "result": "passed"}
+            path.write_text(json.dumps(row) + "\n")
+            self.assertNotEqual(runtime.evidence_rows(path), before)
+
+    def test_experiment_piece_commits_count_but_labels_and_timestamps_do_not(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "bets.jsonl"
+            row = {"id": "b", "hypothesis": "Faster feed", "pieces": [
+                {"name": "handler", "status": "in-progress", "updated_at": "old"}]}
+            path.write_text(json.dumps(row) + "\n")
+            before = runtime.evidence_rows(path)
+            row["pieces"][0].update(status="landed", updated_at="new")
+            path.write_text(json.dumps(row) + "\n")
+            self.assertEqual(runtime.evidence_rows(path), before)
+            row["pieces"][0]["commit"] = "verified-commit"
+            path.write_text(json.dumps(row) + "\n")
+            self.assertNotEqual(runtime.evidence_rows(path), before)
+
+
 FAKE_AGENT = r'''import json, os, pathlib, subprocess, sys, time
 state = pathlib.Path('.improve')
 prompt = sys.argv[-1]
@@ -140,7 +171,15 @@ elif mode == 'no_checkpoint':
 else:
     run['cycle'] = run.get('cycle', 0) + 1
     run['next_action'] = 'Inspect a new UI interaction state'
-    if mode != 'counter_only':
+    if mode == 'bet_progress':
+        (state / 'bets.jsonl').write_text(json.dumps({'id':'b-1', 'hypothesis':'Improve feed latency',
+            'spike': {'runs': list(range(run['cycle']))}}) + '\n')
+        if run['cycle'] >= 5:
+            run['outcome'] = 'stopped by user'
+    elif mode == 'lifecycle_only':
+        (state / 'backlog.jsonl').write_text(json.dumps({'id':'q-1', 'claim':'Same finding',
+            'created_at': str(run['cycle']), 'completed_at': str(run['cycle'])}) + '\n')
+    elif mode != 'counter_only':
         with (state / 'discovery.jsonl').open('a') as stream:
             stream.write(json.dumps({'scope': 'same' if mode == 'duplicate_scan' else str(run['cycle']),
                                      'accepted': 0, 'at': str(time.time()), 'generation': run['cycle']}) + '\n')
@@ -671,6 +710,47 @@ class DaemonTests(unittest.TestCase):
         result = self.invoke("duplicate_scan")
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(len(self.launches()), 4)
+
+    def test_experiment_evidence_keeps_max_running_across_cycles(self):
+        result = self.invoke("bet_progress", "--skill", "improve-max")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.launches()), 5)
+        self.assertEqual(self.load("supervisor.json")["consecutive_failures"], 0)
+
+    def test_task_lifecycle_timestamps_do_not_bypass_failure_breaker(self):
+        result = self.invoke("lifecycle_only")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(len(self.launches()), 4)
+
+    def test_repeated_intake_preserves_later_authorization_and_metadata(self):
+        self.assertEqual(self.invoke("halt").returncode, 1)
+        saved = self.load("intake.json")
+        saved.update(authorization={"grants": ["Push and merge after tests"], "exclusions": ["No paid services"]},
+                     steering=["Prioritize checkout"], status="complete")
+        runtime.atomic_json(self.state / "intake.json", saved)
+        before = (self.state / "intake.json").read_bytes()
+        result = self.invoke("early", "--resume")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.state / "intake.json").read_bytes(), before)
+
+    def test_rejected_recovery_does_not_install_supplied_intake(self):
+        self.seed_control(outcome=None)
+        result = self.invoke("early", "--resume")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse((self.state / "intake.json").exists())
+        self.assertFalse((self.state / "launches.jsonl").exists())
+
+    def test_awaiting_answers_intake_cannot_start_or_archive_a_run(self):
+        self.seed_control(outcome="stopped by user")
+        before = (self.state / "supervisor.json").read_bytes()
+        supplied = json.loads(self.intake.read_text())
+        supplied["status"] = "awaiting_answers"
+        self.intake.write_text(json.dumps(supplied))
+        result = self.invoke("early", "--new-run")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual((self.state / "supervisor.json").read_bytes(), before)
+        self.assertFalse((self.state / "history").exists())
+        self.assertFalse((self.state / "launches.jsonl").exists())
 
     def test_deadline_grace_bounds_long_cycle(self):
         self.env.update(IMPROVE_FINISH_GRACE="1", IMPROVE_CYCLE_TIMEOUT="3600")

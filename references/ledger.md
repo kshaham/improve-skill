@@ -96,6 +96,11 @@ append-only updates by merging repeated IDs in file order; skill writers should 
 using one canonical row per ID with atomic rewrites so queue queries remain correct.
 See [board.md](board.md) for column meanings and service lifecycle.
 
+Task lifecycle timestamps, IDs, titles, and status labels are bookkeeping for the viewer,
+not proof of new work. Pair a transition with evidence or verification. The daemon also
+checks `bets.jsonl`, including measurements and actual implementation-piece commits;
+changing a piece's status without evidence does not reset its failure breaker.
+
 `counter` is filled when an item reaches the counter-scenario check in step 4: the scenario
 verbatim as the subagent returned it, or `"none"`. An item `rejected` by its counter-scenario
 has the scenario in `note` too, so a later attempt starts from the input that broke the

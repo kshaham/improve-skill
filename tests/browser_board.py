@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 
 from playwright.sync_api import expect, sync_playwright
 
@@ -112,6 +113,16 @@ def main():
                 page.locator("#refresh").click()
                 expect(page.locator('[data-key="current:ui-01"]')).to_contain_text("Improve mobile navigation")
 
+                with (state / "backlog.jsonl").open("a") as stream:
+                    stream.write('{"id":"bad-measurement","measurement":NaN}\n')
+                page.locator("#refresh").click()
+                expect(page.locator("#warning")).to_contain_text("invalid record")
+                expect(page.locator("#connection")).to_have_text("Board connected")
+                expect(page.locator(".task-card")).to_have_count(6)
+                write_tasks()
+                page.locator("#refresh").click()
+                expect(page.locator("#warning")).not_to_be_visible()
+
                 page.set_viewport_size({"width": 390, "height": 844})
                 page.screenshot(path=str(artifacts / "mobile.png"), full_page=True)
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "Page overflows mobile viewport"
@@ -121,6 +132,39 @@ def main():
                 expect(page.locator("#detail-content")).to_contain_text("Test database unavailable")
                 page.locator("#close-dialog").click()
                 page.locator("#search").fill("")
+
+                # Connection to the viewer is separate from daemon liveness and report completion.
+                now = time.time()
+                run = dict(started_at=board.stamp(now - 20), deadline=board.stamp(now + 120),
+                           cycle=4, outcome="completed", last_activity_at=board.stamp(now - 5))
+                control = dict(started_at=run["started_at"], deadline=run["deadline"], outcome=None,
+                               engine="codex", model="test-model", phase="account-limit", retry_at=board.stamp(now + 30),
+                               heartbeat_at=board.stamp(now), consecutive_failures=2, last_error="Inspect a new scope")
+                board.atomic_json(state / "run.json", run)
+                board.atomic_json(state / "supervisor.json", control)
+                page.locator("#refresh").click()
+                expect(page.locator("#run-state")).to_have_text("Daemon not running")
+                expect(page.locator("#connection")).to_have_text("Board connected")
+                expect(page.locator("#run-meta")).to_contain_text("codex · test-model · Cycle 4")
+                expect(page.locator("#run-notice")).to_contain_text("Consecutive failed or uncheckpointed cycles: 2")
+                expect(page.locator("#run-notice")).to_contain_text("Saved account-limit retry")
+                expect(page.locator("#warning")).to_contain_text("awaits supervisor confirmation")
+                control.update(outcome="halted: verification unavailable", summary_pending=True, phase="ended")
+                board.atomic_json(state / "supervisor.json", control)
+                page.locator("#refresh").click()
+                expect(page.locator("#run-notice")).to_contain_text("Final report pending")
+                expect(page.locator("#run-state")).to_have_text("halted: verification unavailable")
+                page.screenshot(path=str(artifacts / "mobile-health.png"), full_page=True)
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "Health panel overflows mobile viewport"
+                with board.repo_lock(state / "daemon.lock"):
+                    control["phase"] = "finalize"
+                    board.atomic_json(state / "supervisor.json", control)
+                    page.locator("#refresh").click()
+                    expect(page.locator("#run-state")).to_have_text("Writing final report")
+                (state / "supervisor.json").unlink()
+                (state / "run.json").unlink()
+                page.locator("#refresh").click()
+                expect(page.locator("#run-health")).not_to_be_visible()
 
                 # Fail a request, preserve the last snapshot, and recover on the next refresh.
                 page.route("**/api/board?*", lambda route: route.abort())
