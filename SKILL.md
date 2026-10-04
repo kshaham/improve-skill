@@ -1,13 +1,15 @@
 ---
 name: improve
-description: Run a time-boxed autonomous improvement loop over a codebase - code quality, test coverage, security, performance, concurrency, resilience, gate speed, docs, and (where the repo has them) accessibility and client/server contracts - refilling its own backlog when it runs dry and reporting every hour. Use when the user asks to continuously improve, harden, or keep working on a repo for a set duration ("improve this repo for 4 hours", "spend the afternoon raising coverage", "keep finding and fixing issues until 6pm").
+description: Ask ten intake questions, then continuously improve a codebase for a requested duration, prioritizing the user’s features, UI, graphics/assets, performance, bug fixes, security, and quality goals. Refill the backlog until the deadline, verify changes, and report progress. Use for timed ongoing improvement requests such as "improve this repo for 4 hours" or "keep finding and fixing issues until 6pm"; not for a one-off fix or editing this skill itself.
 license: MIT
 metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus) in plan mode
   created: 2026-09-05
   origin: Designed to spec in the ~/Code/bonsai session (plan shimmying-roaming-goose.md); daemon added 2026-09-06 after the first 6h run hit ENOSPC
-  version: 1.3.0
+  version: 1.5.0
   changelog: |
+    1.5.0 (2026-10-04) - evidence-based progress detection, bounded deadline cleanup, recoverable halts and final reports, verification-aware work selection, persistent retry counters and live status
+    1.4.0 (2026-10-04) - ten-question intake, persistent user priorities, feature/UI/asset lanes, active discovery without dry sleeps, verified continuation, portable deadline supervisor and regression tests
     1.3.0 (2026-09-22) - the run lasts until the deadline: scripts/improve-clock.sh is the only authority on time, an empty backlog is a refill not a finish, an exhaustive list of stop conditions, dry-at-T4 keeps sweeping new ground instead of idling out
     1.2.0 (2026-09-17) - six new lanes (gate-speed, concurrency, resilience, docs always; accessibility, contracts when detected), lane rotation under the finder cap, benchmark-harness-first rule for performance
     1.1.0 (2026-09-17) - gate signal counts, counter-scenario check, interleaved performance measurement, scanner baseline in the security lane, usage-limit backoff in the daemon
@@ -15,21 +17,35 @@ metadata:
 
 # Continuous improvement loop
 
-Work a codebase for a stated duration across its lanes - code quality, test coverage,
-security, performance, concurrency, resilience, the speed of its own gates, its docs, and
-where the repo has them, accessibility and client/server contracts - verifying every change
-and reporting every hour. When the obvious work runs out, escalate to harder work rather than
-stopping.
+Work a codebase for a stated duration, guided by the user's priorities for features, UI,
+graphics/assets, performance, bugs, security, and supporting quality. Verify every change
+and report every hour. When the obvious work runs out, discover fresh evidence and keep
+working until the deadline.
 
     /improve <duration> [path]
 
 `/improve 4h`, `/improve 90m ~/Code/api`. Duration is required; path defaults to the
 current working directory.
 
+## Intake - first, before the timer
+
+For each **new run**, ask the user the exact ten questions in
+[references/intake.md](references/intake.md). Wait for answers before starting the timer,
+launching finders, or editing code. Save all ten answers and derive an ordered focus plan.
+A wakeup, daemon cycle, or compacted session resumes the same run and does not ask again.
+A noninteractive launch requires previously collected answers; never fabricate them.
+
+The focus plan controls which lanes, features, screens, assets, and journeys receive the
+most effort. Technical cleanup supports that plan; it must not quietly replace it. Read
+[references/continuation.md](references/continuation.md) before launching to select a real
+continuation mechanism and checkpoint the next action. Foreground continuation is the
+default when no scheduler is available. Use `references/work-selection.md` to turn the
+answers into observable goals, prioritize discovery fairly, and budget verification.
+
 ## What makes this different from ordinary work
 
 You are unattended. Nobody will catch a bad change before it lands, and nobody will notice
-if you quietly stop finding real problems and start inventing them. Two obligations follow,
+if you quietly stop finding real problems and start inventing them. Three obligations follow,
 and they outrank throughput:
 
 1. **Every change is proven or reverted.** There is no "looks right". A change whose gate
@@ -46,7 +62,8 @@ and they outrank throughput:
 
 ## Hard rules
 
-Never, at any tier, for any reason, without stopping to ask:
+These bound autonomous work. If a finding needs an exception, save it as a proposal and
+continue eligible work; do not halt the entire run to request routine approvals:
 
 - **Never touch `main`.** Work on `improve/<YYYY-MM-DD>`, created at preflight.
 - **Never push, never force-push, never open a PR.** Landing is local commits only.
@@ -66,24 +83,34 @@ additive; they never relax the list above.
 ## State
 
 Durable, because wakeups and cron die with the session and context gets compacted. Everything
-the loop needs to resume lives in `.improve/` in the target repo (add it to `.gitignore` at
-preflight if absent):
+the loop needs to resume lives in `.improve/` in the target repo. Exclude this state from
+clean-tree checks. If needed, add it to `.gitignore` only after creating the run branch,
+and commit that housekeeping before the first item so it cannot leave a cycle dirty:
 
-    .improve/run.json       deadline, cycle count, tier, gates, baseline commit, guardrails
+    .improve/intake.json    the ten user answers, collected before the timer
+    .improve/run.json       deadline, focus, next action, cycle, tier, gates, baseline, guardrails
+    .improve/discovery.jsonl completed scans, evidence, empty results, and next scopes
+    .improve/supervisor.json daemon-owned start/deadline and terminal status (daemon only)
     .improve/backlog.jsonl  one JSON object per candidate, appended and rewritten in place
     .improve/journal.md     every hourly report, appended
+    .improve/final-report.md final handover, with evidence and actual stop reason
 
-Read `run.json` and `backlog.jsonl` at the start of **every** cycle. Never carry loop state
-only in your context - assume you will be compacted mid-run. See `references/ledger.md` for
+Read `run.json`, `backlog.jsonl`, the focus plan, and the latest discovery checkpoint at
+the start of **every** cycle. Never carry loop state only in your context - assume you
+will be compacted mid-run. See `references/ledger.md` for
 the schema and the jq recipes.
 
-**Entry is resumption first.** Every invocation, including every wakeup, starts by checking
-for `.improve/run.json` with no `outcome`. If there is one, this is the same run: skip
-preflight, keep the recorded deadline, and go to the cycle - whose first step is the clock,
-so a run whose deadline passed while nobody was looking gets its final report there.
-Never recompute a deadline from the duration in the prompt when a run is in progress - the
-wakeup prompt repeats the original duration verbatim, and recomputing from it silently turns
-a 2h run into an unbounded one.
+**Entry is resumption first.** Before asking the intake again, every invocation checks
+for `.improve/run.json` with no `outcome`. If there is one, this is the same run: keep the
+deadline and read the clock first. Resume unfinished preflight if `preflight_complete` is
+false; otherwise go to the cycle. For legacy state, inspect recorded gates/baseline before
+marking preflight complete. Expired runs finalize without repeating setup or asking intake.
+Never recompute a deadline from the duration in the prompt when a run is in progress.
+If `supervisor.json` exists, its start/deadline are authoritative. Terminal state does not
+resume automatically. After resolving a halt, `--resume` explicitly continues with the
+original deadline; `--finalize` retries a missing report without reopening work. A new run
+gets a new intake and preserves the old ledger in history.
+For a legacy live run with no intake, ask the ten questions once without moving its deadline.
 
 ## The clock
 
@@ -92,13 +119,17 @@ the result hours, and you will be wrong by a large factor - the run that wrote "
 after seventeen minutes had done exactly that. So nothing in this loop reasons about time.
 It asks:
 
-    ~/.claude/skills/improve/scripts/improve-clock.sh <repo>
+    <skill-directory>/scripts/improve-clock.sh <repo>
 
-It prints now, elapsed, remaining, the wall-clock hour, whether an hourly report is due,
-and exits `0` while the deadline is in the future and `10` once it has passed. Run it:
+Resolve `<skill-directory>` from the SKILL.md you loaded; do not assume a particular install
+path. `--json` returns machine-readable timing. It prints now, elapsed, remaining, the
+current hour interval, the completed `report_hour` to report, whether a report is due,
+and exits `0` while the deadline is in the future and `10` once it has passed. Capture
+status explicitly: `0` means continue, `10` means expiry, `2` means
+invalid state; do not let an `&&` chain or `set -e` skip finalization on exit `10`. Run it:
 
 - at the start of **every** cycle,
-- before writing any report, hourly or final - the hour label is the one it prints,
+- before writing any report, hourly or final - the report label uses its completed `report_hour`,
 - before deciding an item is too large for the time left,
 - before deciding whether to re-arm.
 
@@ -113,8 +144,10 @@ This list is exhaustive. Anything not on it is a reason to keep working.
 
 1. **The clock says the deadline has passed** (`improve-clock.sh` exits `10`).
 2. **The user says stop.**
-3. **A halt condition fires:** a gate becomes unavailable, or three consecutive rejections
-   across all areas (see Stop-loss). A halt is reported as a halt, with the time remaining -
+3. **A halt condition fires:** required verification is unavailable across all eligible
+   work after bounded recovery, or an unresolved dirty tree prevents safe continuation.
+   Three rejected ideas trigger diagnosis (see Stop-loss), not automatic shutdown.
+   A halt is reported as a halt, with the time remaining -
    `HALTED at 22:41Z, 1h24m before the deadline, because ...` - never as a finished run.
 
 Not on the list, and each one has ended a run early before: the backlog is empty; the items
@@ -124,19 +157,26 @@ like a complete story.
 
 ## Preflight - once, at launch
 
-1. Resolve the target repo and confirm it is a git repository.
-2. **Refuse to start on a dirty tree.** Report what is uncommitted and stop. The loop's
-   safety rests on `git checkout --` being able to undo exactly one item.
+1. Resolve the target repo and confirm it is a git repository. Complete the ten-question
+   intake for a new run. Then record `started_at` and an absolute deadline using the system
+   clock, **before** baseline checks, so setup consumes the requested work duration. Under
+   the daemon copy the timestamps from `supervisor.json` exactly. Persist
+   `phase: "preflight"` and `preflight_complete: false` until all setup checks succeed.
+2. **Refuse to start on a dirty tree**, excluding `.improve/`. Report what is uncommitted
+   and stop. The loop must be able to attribute and undo exactly its own edits.
 3. Read `CLAUDE.md` / `AGENTS.md` / `docs/` for conventions, traps, and extra prohibitions.
    A repo that documents its own footguns is telling you what the backlog should avoid.
 4. **Discover and record the gates** - the actual commands that prove a change is good in
    this repo. See `references/verification.md`. Write them into `run.json`.
-   **Decide the lanes** while you are there. Eight are always on: `quality`, `coverage`,
+   **Decide the lanes** while you are there. Eight technical lanes are available: `quality`, `coverage`,
    `security`, `performance`, `concurrency`, `resilience`, `gate-speed`, `docs`. Two are on
    only when preflight finds what they need: `accessibility` when there is a UI target
    (an app scheme, a web bundle, a React Native entry point), and `contracts` when the repo
    holds both a server and a client of it, or a client of a server whose schema is in the
-   tree (an OpenAPI file, generated types, a shared models package). Record the active list
+   tree (an OpenAPI file, generated types, a shared models package). Use the intake to
+   prioritize these lanes and to exclude ones the user ruled out.
+   Enable `features`, `ui`, and `assets` when explicitly requested; see the finder briefs
+   for their acceptance and verification rules. Record the active list
    and the reason for each conditional one in `run.json`; a lane switched off is stated
    once in the first report and not revisited, except by the dry sweep (see Escalation).
    Record whether each was switched off by the user or by your own judgement - the sweep
@@ -144,9 +184,11 @@ like a complete story.
 5. **Establish a green baseline by running them.** If the repo is already red, stop and
    report. You cannot attribute a failure to your change if it was failing before you
    started, and a loop that begins on red will thrash.
-6. Create `improve/<YYYY-MM-DD>`, record the baseline commit SHA.
-7. Compute the deadline from the duration with `date -u`, not in your head. Write
-   `run.json`, then run `improve-clock.sh` and check it prints the duration you were given.
+6. Create `improve/<YYYY-MM-DD>` (append a numeric suffix if it already exists); record the
+   baseline commit SHA. Never reset an existing branch.
+7. Complete `run.json` with the original timestamps, focus, gates, and continuation mode;
+   set `preflight_complete: true` and `phase: "discover"`.
+   Run `improve-clock.sh`; if setup consumed the whole duration, finalize without editing.
 8. Report the plan: gates discovered, baseline state, deadline (as the clock prints it).
    Then begin cycle 1.
 
@@ -154,98 +196,51 @@ like a complete story.
 
 ### 0. Read the clock
 
-Run `improve-clock.sh`. Exit `10`: go to the final report. Otherwise carry its `remaining`
-and `report` lines through the cycle.
+Read persisted focus, backlog, and discovery state; inspect any `active_item` left by an
+interruption. Run `improve-clock.sh`. Exit `10`: go to the final report. Exit `2` is invalid
+state: repair it from durable timestamps or halt, never interpret it as expiry. Otherwise
+carry its `remaining` and `report` lines through the cycle.
 
 ### 1. Refill, when fewer than 5 items are `ready`
 
-Check the count after **every** item, not once per cycle: the moment it drops below 5,
-dispatch the finders. A queue seeded at launch - from a previous run's `proposed` pile, from
-the user's list - does not count as a refill and does not exempt the run from one. It is
-the most common way a run reaches an empty queue with no finders in flight and mistakes
-that for being finished.
+Check the count after every item. Start one refill generation when fewer than five items
+are ready **and no refill is already active**. The launch queue is not a discovery pass.
+Use the intake priorities and the persisted next scope to give up to four read-only finders
+distinct assignments; respect actual agent availability, or run the briefs serially yourself.
+See `references/continuation.md` for rotation, deduplication, and checkpoint rules, and
+`references/finder-briefs.md` for lane-specific evidence.
 
-**Dispatch the finders in the background and keep fixing while they run.** They are read-only,
-so they cannot collide with the serial edit in the main session, and blocking on them is the
-single largest source of idle time in a run - measured at 3.5 to 6.5 minutes per refill, during
-which nothing lands. Launch them, go straight to the top of the current queue, and fold their
-findings in when they return. Only wait on a finder if the queue is genuinely empty.
+Keep fixing queued items while read-only finders run. When the queue is empty, do a bounded
+scan yourself or collect the active finders; do not end the run. Record every completed
+scan, including zero accepted findings, in `discovery.jsonl`. Do not carry live finders
+across daemon processes. Reduce barren supporting lanes' frequency, but do not starve an
+explicit user priority. Never launch overlapping refill generations after every item.
 
-Dispatch **read-only** subagents in parallel, at the current tier, using the briefs in
-`references/finder-briefs.md`. They search and report; they never edit.
-
-**Four finders per refill, rotated across the active lanes.** There are more lanes than
-finder slots, and that is deliberate: the cap is what bounds the cost of a refill, and the
-lanes take turns. `security` has a standing slot every refill. The other three slots go to
-the lanes with the longest wait since their last scan, except that a lane that landed
-something in the previous refill keeps its slot rather than rotating out. Record `last_scanned`
-and `last_yield` per lane in `run.json` so the rotation survives a compaction.
-
-**Stop scanning barren lanes.** A lane whose last two scans produced nothing that survived
-ranking drops to every third turn in the rotation; one that keeps landing work keeps its slot.
-Scanning every lane at equal depth forever spends the same tokens on the lane that has been
-dry since hour one as on the lane doing the work. `docs` starts at every third turn - its
-findings are real but rarely urgent - and earns a regular slot only by landing.
-
-**The performance lane is top-down, and it starts by building its own instruments.**
-Performance here means what the user feels - how long the app takes to be usable, how long
-a screen takes to show its data, whether the main list scrolls without dropping frames, how
-long the server takes to answer at the 95th percentile - not how fast a function is. A
-function can get ten times faster without anyone noticing; a journey cannot. So the lane
-works from the journey down, never from the code up:
-
-1. **Journeys first.** At preflight, name the three to five journeys that matter for this
-   repo, from its docs, its main screens, its busiest handlers: *cold launch to first
-   interactive frame*, *open the main screen with a warm cache*, *scroll the main list for
-   five seconds*, *the top three endpoints under a fixed request mix*. If no harness can
-   measure them, the lane's first items are to build one, additive and in the toolchain's
-   native form - `XCTApplicationLaunchMetric`, `XCTOSSignpostMetric`, `XCTClockMetric` and a
-   scrolling UI test on iOS; `testing.B` over `httptest` handlers plus a query counter per
-   request on Go; a load script only if the repo already ships one. Land the harness as its
-   own commit, run it for baseline numbers, write them under `journeys` in `run.json`.
-2. **Profile, do not guess.** Each refill, the performance finder runs the slowest journey
-   under the platform's profiler - `xctrace` Time Profiler and Hangs on iOS, `pprof` CPU and
-   allocation profiles on Go, the browser performance trace on web - and reports the
-   **largest contributors by share of that journey's time**, with the frame. That is its
-   evidence. A finding without a profile share is a smell, not a finding, and goes to
-   `quality` if it is anything.
-3. **Fix the biggest share, re-measure the journey.** The item's measurement is the
-   journey the profile came from, not a micro-benchmark of the function that changed.
-   Interleaved, no overlap, five percent floor, as step 4 says. A change that made the
-   function faster and the journey no faster is `rejected` with both numbers.
-4. **Report the journeys every hour.** `launch 1.84s -> 1.12s (-39%)`, one line per journey,
-   baseline to now, in every report. Over a multi-day run this line is the run's result.
-   Everything else in the lane is in service of moving it.
-
-What moves a journey is rarely exotic: work on the main thread that belongs off it, a screen
-that waits on three requests it could make in parallel or one it could cache, images decoded
-at full size for a thumbnail, a view whose body recomputes on every keystroke, a handler that
-runs one query per row, a response ten times the size the screen needs. The loop is allowed
-all of these. What it is not allowed to do - add an index, change a schema, bump a
-dependency, alter the wire format - it proposes with the journey numbers that justify it,
-and those proposals are usually the largest remaining wins, so they go at the top of the
-report, not the bottom.
-
-Say plainly, in the first report, how far this lane can take the repo. An app that does the
-things above will move a lot; an app that already does none of them will not, and the lane
-will run dry quickly and say so. Numbers measured on a simulator or a development machine
-are relative, not absolute, and the report says which.
+When performance is active, read `references/performance.md`: choose the user's journeys,
+build missing native measurement harnesses, and profile before proposing speed changes.
+Other runs do not need to load that lane's profiling procedure.
 
 Every returned finding must carry **evidence**: a file path, a line, and a concrete failure
-scenario or measurement. A finding that cannot say what breaks and when is not a finding, it
-is a preference. Drop it.
+scenario, measurement, or gap against a user-requested acceptance criterion. A visual or
+feature request must name the observable before/after result, not an agent’s taste.
 
-Dedupe against the whole ledger including `rejected` items, so the loop never re-litigates
-something it already dismissed.
+Dedupe against the whole ledger, including rejected items. Reopen only for changed code or
+new evidence, linking the previous item in `reopens`. Never rename a rejected idea to retry it.
 
-### 2. Rank
+### 2. Confirm and rank
 
-A confirmed vulnerability preempts everything else. Otherwise one pool, ordered by
+Reproduce or trace each claim before accepting it for implementation; inspect upstream
+guards and documented behavior that could disprove it. For visual/feature work, compare
+against the user’s acceptance checks. Use `references/work-selection.md` when estimating
+work or deciding whether a priority is met, blocked, or still active.
+
+Filter by user scope and guardrails first. A confirmed critical vulnerability in scope
+preempts lower-risk work. Otherwise rank by the user’s ordered focus priorities, then by
 
     severity x confidence x blast-radius
 
-regardless of which area produced it. A real bug in the quality lane outranks a speculative
-optimisation in the performance lane. Ties break toward the smaller diff.
+within each priority. Ties break toward stronger evidence and a smaller verified diff.
+Do not spend a UI-focused run on unrelated cleanup because it is easier to commit.
 
 ### 3. Fix - one item at a time, in the main session
 
@@ -253,21 +248,25 @@ Serially, never in parallel. Parallel edits collide, and a shared gate cannot te
 of two simultaneous changes broke it. Keep the diff minimal and scoped to the item; if the
 fix turns out to need a second unrelated change, that second change is a new backlog item.
 
-Match the surrounding code - its naming, its idiom, and its comment density.
+Match the surrounding code and design system. Before editing, record `active_item` with
+its ID, starting SHA, and owned paths. Clear it only after commit or scoped rollback.
 
 ### 4. Verify
 
-Run the gates from `run.json` for the half of the codebase you touched.
+Run the relevant gates from `run.json`. For features, UI, and assets, also execute the
+intake’s acceptance checks and the before/after checks in the finder briefs.
 
 **A green gate is not proof. Mutate the change and watch the gate fail.** This is required, not
-advisory, and it is the step that separates this loop from one that ships plausible-looking
-work. Deliberately break the thing you just fixed - reverse the comparison, drop the conjunct,
+advisory, for executable behavior changes. For docs or asset-only changes, run the
+documented command or inspect the rendered result instead of inventing a code mutation.
+Record the evidence and why mutation does not apply. Deliberately break the thing you just fixed - reverse the comparison, drop the conjunct,
 remove the guard - re-run the gate, and confirm it goes red *in the test that is supposed to
 catch it*. Then restore and confirm green again.
 
 If the gate stays green under mutation, **the gate is blind and your change is unverified.** Do
-not commit it. Revert, write the test that fails on the mutation, land that test as its own
-commit, and only then re-apply the change. This is not hypothetical: a query optimisation once
+not commit it. Add a regression test that fails on the original or mutated code, restore
+the fix, and commit the test and fix together only when green. A standalone test commit
+is appropriate only if it passes against the baseline; never commit a known-red test. This is not hypothetical: a query optimisation once
 passed an entire suite against a real database while selecting the wrong row, because every
 test case had only one row to choose from.
 
@@ -276,18 +275,19 @@ does not actually select the relevant test, and reading a pipeline's exit status
 the last command in the pipe rather than the one under test. Both report a confident green over
 nothing having run. Check that the test you expect actually executed.
 
-**A gate proves itself by its count, not its exit code.** At preflight, record how many tests
+**A test gate must prove that it actually ran the intended tests.** At preflight, record how many tests
 each gate reports when it is green on the baseline - that number is the gate's `signal` in
 `run.json`. Every later run is compared against it: a run that reports fewer tests than the
 baseline, or none, or no output at all, is red, whatever the exit status says. The count
 can only go up in this loop, because test changes are additive; a drop means the gate did not
 exercise what it exercised an hour ago - a build that skipped a target, a runner that
 filtered to nothing, a simulator that never booted. Never reason "it probably would have
-passed". If the count is unavailable for a gate, say so at preflight, and treat empty output
-as red for that gate.
+passed". Compare counts for the same command, target, and filter; never compare a focused test
+with a whole-suite baseline. Builds and linters use recorded artifact/diagnostic signals,
+not an invented test count. A documented silent-success tool is not red merely for being quiet.
 
 **The counter-scenario.** After the gate and the mutation check are green, hand the diff and
-the backlog item to one read-only subagent with a **fresh context** and a single question:
+the backlog item to one read-only subagent with a **fresh context** when subagents are available, with a single question:
 *what is the one input or state this change most plausibly still gets wrong?* It returns one
 scenario with concrete values, or `none`. It has no write tools and it does not give a verdict -
 the maker does not argue with it and the maker does not trust it either. **The scenario is
@@ -302,6 +302,9 @@ the gate:
   and mark the item `done`. The counter-scenario has become coverage.
 - `none` - land the item. Record `counter: "none"` on it so the report can show how often the
   second look found nothing, which over a run is a measure of whether it is worth its cost.
+
+If no subagent is available, perform a separate adversarial pass yourself and record that
+limitation; do not halt or claim an independent review.
 
 The point is that the check that decides is still the gate. A second opinion delivered as a
 verdict can be wrong in either direction; a second opinion delivered as a runnable scenario
@@ -323,18 +326,19 @@ what stops the finder proposing it again.
 
 - **Green** - one atomic conventional commit, lowercase after the colon, message explaining
   **why**. Mark the item `done` with the commit SHA.
-- **Red** - `git checkout -- <files>` (or `git stash drop`), mark the item `rejected` with
+- **Red** - restore only the item’s owned edits to its starting state and remove only
+  untracked files that item created. Never use blanket reset/clean or drop someone’s stash.
+  Mark the item `rejected` with
   the verbatim failure text, and move on. Do not attempt a third repair of the same item;
   two failed attempts means the item was misunderstood, and the honest outcome is a rejected
   item with evidence for the human.
 
-**Stop-loss:** three consecutive rejections in one area bench that area - for one hour, or for
-the rest of the run if less than an hour remains. A run of six hours should not lose a whole
-lane to three bad findings in its first twenty minutes; an area comes back at the next tier or
-after the next refill, whichever is sooner. Say so in the report, both when it is benched and
-when it returns. Three consecutive rejections across *all* areas halts the loop -
-that pattern means the baseline moved or your gate is lying, and continuing burns tokens
-producing nothing.
+**Stop-loss:** three consecutive rejections in one lane trigger a bounded diagnosis:
+re-run its unchanged baseline gate, distinguish weak findings from an environment failure,
+and rotate to another eligible focus area. Bench a failing lane with a recorded reason and
+retry condition; continue independent work whose gates remain usable. Three rejected
+hypotheses alone are not evidence that the whole run is broken. Halt only when no eligible
+work can be verified after recovery, or a dirty state cannot be safely attributed.
 
 ### 5. Report on the hour
 
@@ -350,31 +354,21 @@ for a lazy loop, and the two are indistinguishable unless the ratio is stated. I
 produced more proposals than commits, say so in the first line and say why: the items genuinely
 needed a human decision, or the loop is avoiding hard work.
 
-See `references/report-format.md`. Three deliveries of the same content: terminal block,
-`PushNotification` headline, and an append to `.improve/journal.md`.
+See `references/report-format.md`. Write a terminal block,
+an append to `.improve/journal.md`, and a notification only if a notification tool is
+available and already authorized. Missing notifications never block work.
 
-### 6. Re-arm
+### 6. Continue, with a persisted next action
 
-Run the clock. If it exits `0`, **re-arm - whatever the backlog looks like.** Call
-`ScheduleWakeup` with `prompt` set to the original `/improve <duration> [path]` invocation
-verbatim, so the next firing re-enters here (and resumes, per State), and `noop: false` if
-anything landed (`true` if the cycle was genuinely quiet). A cycle that ends with the clock
-at `0` and no wakeup armed has ended the run early, silently, which is worse than ending it
-early with a report.
+Read the clock, increment `cycle` after useful work or discovery, and checkpoint the next
+concrete action. While the clock exits `0`, continue according to the mode in
+`references/continuation.md`: execute the next cycle immediately in the foreground, verify
+an actual scheduler has re-armed, or return to the daemon. **A progress report is not a
+final response.** Do not return from foreground work because the current batch is done.
 
-`delaySeconds`:
-
-- **60** (the minimum) whenever items are `ready` - every second of delay is a second not
-  spent fixing.
-- **300** when the queue is empty and a refill is in flight, since there is nothing to do
-  until it lands.
-- **1200** when the run is in the dry sweep (see Escalation) and the last sweep found
-  nothing - the next one should see a tree that has had time to be looked at differently.
-- Never longer than the clock's `remaining`; if remaining is shorter than the delay, set
-  the delay to remaining so the final report fires on time.
-
-When the clock exits `10`: final summary, stop, and **do not** re-arm. Tell the user the
-branch name, the commit count, and how to review or discard it.
+No dry-sweep sleep, no assumed scheduling tool, and no final report before expiry. At exit
+`10`, finish or revert the item in hand, record late finder results as unimplemented
+candidates, write the final summary, and stop. Report the branch and review commands.
 
 ## Escalation - when the backlog runs dry
 
@@ -391,12 +385,13 @@ skip a tier, and announce every escalation in the hourly report.
   above roughly 400 changed lines is written up as a proposal in the report and left for the
   human rather than applied.
 
-**Dry is measured, not felt.** A tier is dry when a full refill at that tier - all four
-finder slots, rotated as step 1 says - returns nothing that survives ranking. Having worked
+**Dry is measured, not felt.** A tier is dry when completed scans have covered the eligible
+focus areas at that tier and nothing survives ranking. One empty finder, a failed scan,
+or one batch that missed the highest-priority area is not enough. Having worked
 through the items you started with is not dry; you have not looked yet.
 
 **Dry at T4 is not the end of the run - change the ground, not the bar.** The quality bar
-does not drop: a finding still needs a file, a line, and what breaks. What changes is where
+does not drop: a finding still needs a file, evidence, and a failure or user acceptance gap. What changes is where
 the finders look, in this order, one step per dry refill:
 
 1. **The run's own commits.** `git diff <baseline>..HEAD --stat` - every file this run
@@ -404,21 +399,19 @@ the finders look, in this order, one step per dry refill:
    Point every finder at those files and their direct callers.
 2. **Unscanned ground.** Record each finder's scanned directories in `run.json` under
    `scanned_paths`. Aim the next refill at the largest directories not yet in that list -
-   by line count, not name. A repo with a scope from the user still has unscanned ground
-   inside the scope.
+   within the highest-priority user scope first, using size only to break ties. A large
+   unrelated directory does not outrank a requested screen or journey.
 3. **Lanes switched off by preflight's guess rather than by the user.** A lane turned off
    because it "looked irrelevant" (not because the user excluded it, and not because the
    repo lacks what it needs) gets one scan. Say so in the report.
 4. **The proposed pile.** Re-read every `proposed` item. One that was deferred only for
-   lack of time, or for a gate that has since got faster, is `ready` again; one that
-   needed a human decision stays proposed.
+   lack of time, or for a gate that has since got faster, may become `ready` again only
+   if its measured effort fits the clock. Items needing human decisions stay proposed.
 
-Only when a full pass of all four finds nothing is the run genuinely dry. Say that plainly
-in the report, with the pass as evidence - do not manufacture work - and **keep re-arming**
-at the dry-sweep delay until the clock exits `10`, running one more sweep per wakeup. Code
-you landed an hour ago is ground you have not yet looked at with fresh eyes; a dry sweep
-that turns up one real item in the last hour of a run has paid for every empty one.
-Stopping early is never the honest alternative to padding - idling on the clock is.
+Only when a full pass finds nothing is the run genuinely dry. Report the evidence and
+continue active, bounded discovery using a new hypothesis or evidence source. Keep the
+quality bar intact. No commit quota and no 20-minute naps; useful investigation counts as
+work even when it produces no change. Follow the continuation reference until expiry.
 
 ## Cost, and where it goes
 
@@ -435,45 +428,53 @@ far more than the single serial edit that follows. So:
   general file sweep. `codegraph_impact` answers "what breaks if I change this" in one call;
   deriving the same answer by reading files costs orders of magnitude more.
 
-Tell the user the burn rate in the first hourly report so they can decide whether to let a
-long run continue.
+If actual usage/cost data is available, include it in the first hourly report. Otherwise
+say it is unavailable; never invent a burn rate.
 
 **Refill latency dominates short runs.** Measured on a 2,000-file repo: four parallel tier-1
 finders took 3.5 to 6.5 minutes to return. In a 30-minute window that is a fifth to a quarter
 of the run spent before any fix can start, and the slowest finder (coverage, which has to
 build a real coverage profile) can miss the deadline entirely. So:
 
-- Below about an hour, expect one refill and one or two fixes. Say so at launch rather than
-  implying more.
-- Start the finders in the same message as preflight - the baseline gate and the scan are
-  independent, and serialising them wastes the scan's latency.
+- For short runs, narrow finders to the user’s top priorities and keep their scopes small.
+  Use measured gate times to choose items; do not assume a fixed number of refills or fixes.
+- After intake and scope discovery, read-only finders may overlap the baseline gate.
+  Baseline results still decide whether edits can begin.
 - A finder that returns after the deadline has still done the work. Record its findings for
-  the next run rather than discarding them; the discard rule exists to stop you writing
-  half-formed state, not to throw away completed analysis.
+  the next run rather than discarding them; save completed evidence without implementing it after expiry.
 
 ## Boundaries
 
-- **Deadline mid-item:** finish and verify the item in hand, commit or revert it, then stop.
+- **Deadline or stop mid-item:** settle the item in hand, then stop. Under the daemon,
+  cleanup is bounded by `IMPROVE_FINISH_GRACE` (120 seconds by default); check the clock
+  and `.improve/stop.request` between items and tool calls, and begin rollback promptly
+  when verification cannot fit. A forced timeout leaves an explicit recovery halt.
   Never abandon a change half-applied - an unverified working tree is the one state the
   human cannot cheaply reason about.
-- **Deadline mid-refill:** discard the findings, write nothing, stop.
+- **Deadline mid-refill:** collect already completed findings as unimplemented candidates;
+  cancel unfinished scans, checkpoint their scope, and finalize. Do not start their fixes.
 - **Backlog empty before the deadline:** refill, then escalate, then sweep (see
   Escalation). Never a final report.
 - **An item too large for the time left:** read the clock first - the "twenty minutes left"
   that deferred an item once was really an hour and forty-three. If the clock agrees it is
-  too large (more than about half of `remaining` once its gate cycles are counted), take a
+  too large after counting editing, measured verification, and cleanup, take a
   smaller item from the queue, or propose it and go to the next. Either way keep working;
   a large item is never a reason to stop.
-- **User sends a message mid-run:** they outrank the loop. Answer them, do what they ask, and
-  only then decide whether to resume. If they say stop, call `ScheduleWakeup` with
-  `stop: true` and give the final report.
-- **Gate becomes unavailable** (simulator gone, Docker down, toolchain missing): halt, report
-  what broke, do not fall back to a weaker gate. A silently-downgraded gate turns every
-  subsequent green into a lie.
+- **User sends a message mid-run:** they outrank the loop. Incorporate steering in the saved focus
+  and continue with the same deadline unless they stop or replace the run. On stop, cancel
+  an actual scheduler if one exists and record `stopped by user`, not deadline completion.
+- **Gate becomes unavailable:** diagnose and try bounded recovery, then bench affected
+  work and continue independent eligible work. Halt if nothing can be verified. Never
+  silently substitute a weaker gate.
 - **Context compaction:** expected. Re-read `run.json` and `backlog.jsonl` and continue. This
   is why nothing lives only in your head.
 
 ## References
+
+- `references/intake.md` - the ten questions and persistent focus plan
+- `references/work-selection.md` - acceptance goals, evidence, scope, and verification budgets
+- `references/continuation.md` - execution modes, discovery checkpoints, recovery
+- `references/performance.md` - journey harnesses and profiling when performance is active
 
 - `scripts/improve-clock.sh` - elapsed, remaining, hour label, report due, deadline passed
 - `references/finder-briefs.md` - the per-lane subagent briefs, by tier
@@ -481,47 +482,19 @@ build a real coverage profile) can miss the deadline entirely. So:
 - `references/ledger.md` - `.improve/` schema and jq recipes
 - `references/report-format.md` - the hourly report
 
-## Launching under /loop
+## Running continuously
 
-`/improve` self-paces via `ScheduleWakeup`. If that is unavailable in the current session,
-the equivalent is `/loop /improve <duration> [path]`, which puts the loop skill in charge of
-re-entry. Either way the state in `.improve/` is what actually carries the run.
+In an interactive session, use foreground continuation by default. Use a scheduling tool
+or `/loop` only when it is actually available and has confirmed re-entry. Save its identity
+in the ledger. A session ending without such a mechanism ends the work; do not imply it is
+still running.
 
-## Launching under the daemon
+For an external supervisor, finish the ten-question intake first, then run:
 
-`scripts/improve-daemon.sh` runs the loop from OUTSIDE any session:
+    scripts/improve-daemon.sh --repo ~/Code/thing --for 6h --intake /path/to/intake.json
 
-    scripts/improve-daemon.sh --repo ~/Code/thing --for 6h
-
-It exists because a wakeup dies with the session that armed it. Close the terminal, sleep the
-laptop, lose the process, and the run stops silently mid-item with a ledger that still says
-"running" - which on a six-hour run is most of the run.
-
-**Under the daemon you are one cycle, not the loop.** The prompt says so, and the difference
-is small but total:
-
-- **Do not call `ScheduleWakeup`.** It would die with this session anyway, and the daemon is
-  what re-enters. Finish the cycle and stop.
-- **A run already in progress keeps the deadline in `run.json`.** The duration in the prompt
-  is what REMAINS, and it is there for the case where no run exists yet. Do not recompute a
-  deadline from `now` when `run.json` already has one - that is how an externally paced run
-  silently becomes an unbounded one.
-- **Nothing carries over except `.improve/`.** The next cycle starts with no memory of this
-  one and does not see what you printed. This is the arrangement the state files were written
-  for; it is the normal case here rather than recovery from compaction.
-- **Past the deadline** - as `improve-clock.sh` says, not as it feels - write the final
-  summary, set `outcome` in `run.json`, and stop without starting new work. Before the
-  deadline, an empty backlog means this cycle refills or sweeps; it does not write a final
-  summary, because the daemon will launch another cycle and a ledger that says `completed`
-  with time on the clock is a lie the human reads first. The daemon stops on its own clock too, but the ledger is what a
-  human reads.
-
-The daemon owns when a cycle starts, when to stop, and what happens when a cycle dies - a
-per-cycle timeout, and a breaker that gives up after three consecutive failures so a repo
-whose gate cannot run costs three launches rather than a night of them. An account usage
-limit is neither a failure nor a success: it is the one thing a relaunch provably cannot
-fix, so it is kept out of the breaker entirely, backed off on doubling (15m, 30m, 1h, 1h...),
-and written into `journal.md` as a gap the human can see, so a six-hour run that spent two
-of them waiting on the account says so in the same place as its results. It leaves the working
-tree alone: `--stop` lets the cycle in flight finish, because killing an agent mid-commit
-produces the one state a human cannot cheaply reason about.
+The runner requires Python 3.9+ and the Claude CLI, uses the skill files beside itself, and
+works on macOS/Linux without jq or GNU timeout. Each launch is one cycle with durable
+state, a fixed deadline, bounded retries, and a finalization pass. It invokes Claude with
+`--permission-mode bypassPermissions`; launch it only within the user-authorized unattended
+scope. See `references/continuation.md` and README for restart, stop, and new-run behavior.

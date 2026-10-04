@@ -6,7 +6,7 @@ metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus)
   created: 2026-09-17
   parent: improve
-  version: 0.2.0
+  version: 0.3.0
   install: symlink ~/.claude/skills/improve-max -> improve/max (this directory lives inside the improve skill's repo)
 ---
 
@@ -52,6 +52,9 @@ This skill inherits everything from `/improve` that it does not explicitly chang
 state files, the gates and their signals, the mutation check, the counter-scenario, the
 interleaved measurement rule, the hourly report, the daemon, and the honesty obligations.
 Read `../SKILL.md` (or `parent/SKILL.md` in a standalone copy) first. This file is the difference.
+The parent’s ten-question intake runs before the first-day timer. Save those answers and
+use their ordered journeys, boundaries, and success criteria when choosing bets. Resumed
+cycles reuse the answers and original deadline.
 
 ## What courage means here, and what it does not
 
@@ -219,7 +222,8 @@ small work does not stop because the big work is the point; a day of strangling 
 still has hours where the gate is running and a quality item could land.
 
 When every targeted journey has met its target, say so in the next report with the
-numbers, and either stop (`--stop-at-target`) or place no further bets and run the parent's
+numbers, and either record `outcome: "target reached"` and stop (`--stop-at-target`)
+or place no further bets and run the parent's
 cycle for the rest of the run. A target met early is not a reason to raise it; the human
 set it.
 
@@ -263,7 +267,7 @@ The parent's boundaries, plus:
 
     /improve-max 3d ~/Code/thing --target 5x --kinds design,data
     ../scripts/improve-daemon.sh --skill improve-max --repo ~/Code/thing --for 3d \
-        --args "--target 5x --kinds design,data"
+        --args "--target 5x --kinds design,data" --intake /path/to/intake.json
 
 Under the daemon, use `--skill improve-max` and expect long cycles; the daemon's default
 cycle timeout is raised for this skill. Everything the parent says about being one cycle of

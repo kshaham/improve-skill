@@ -8,6 +8,14 @@
       "baseline_commit": "8765b28",
       "started_at": "2026-09-05T14:03:00Z",
       "deadline":   "2026-09-05T18:03:00Z",
+      "focus": { "source": "intake.json", "priorities": [], "excluded": [] },
+      "phase": "discover",
+      "preflight_complete": true,
+      "last_activity_at": "2026-09-05T17:03:00Z",
+      "next_action": "Inspect the mobile cart error states against priority 1",
+      "continuation": { "mode": "foreground" },
+      "discovery": { "generation": 3, "cursor": "cart:error-states" },
+      "active_item": null,
       "cycle": 7,
       "tier": 2,
       "last_report_hour": 3,
@@ -36,7 +44,7 @@
       "outcome": null
     }
 
-`started_at` and `deadline` are ISO-8601 UTC with a `Z`, written from `date -u`, because
+`started_at` and `deadline` are ISO-8601 UTC with a `Z`, written from the system clock (or copied exactly from `supervisor.json`), because
 `scripts/improve-clock.sh` reads them and nothing else decides what time it is.
 `last_report_hour` is the wall-clock hour the latest hourly report covered (0 before the
 first); the clock compares it with elapsed time to say whether a report is due.
@@ -46,11 +54,16 @@ dry sweep uses to find ground nobody has looked at. `dry_sweep` is which step of
 
 `outcome` stays `null` while the run is live - that is what marks a run as resumable. It is
 set exactly once: `completed` when the clock has exited `10`, `halted: <reason>` for a halt
-condition, `stopped by user`. Never `completed` while the clock still says `RUNNING`.
+condition, `stopped by user`, or `target reached` for improve-max with explicit
+`--stop-at-target`. Never `completed` while the clock still says `RUNNING`. The supervisor
+repairs an agent’s premature completion and records it in the journal. `summary_pending`
+means the narrative final report still needs writing; it does not claim verification.
 
 ## backlog.jsonl
 
-One JSON object per line. Append new items; rewrite the file in place to change status.
+One JSON object per line. Append new items; change status by writing a temporary file and atomically renaming it.
+Apply the same temporary-file/rename rule to run.json. Only the main session owns these
+writes; finders return evidence to it and never race to update shared state.
 
     {"id":"q-0007","area":"quality","tier":1,"severity":3,"confidence":0.9,"blast":2,
      "file":"backend/internal/quest/bite.go","line":214,
@@ -61,8 +74,11 @@ One JSON object per line. Append new items; rewrite the file in place to change 
      "counter":null,"measurement":null}
 
 Fields: `area` is one of `quality|coverage|security|performance|concurrency|resilience|
-gate-speed|docs|accessibility|contracts`; only lanes in `lanes.active` may appear. `severity` 1-5,
+gate-speed|docs|accessibility|contracts|features|ui|assets`; only lanes in `lanes.active` may appear. `severity` 1-5,
 `confidence` 0-1, `blast` 1-5. `status` is `ready|done|rejected|benched|proposed`.
+`focus_priority` links to the ordered focus plan; `acceptance` records the observable
+requested result for feature/visual work; `reopens` links to a prior candidate only when
+new evidence permits reconsideration.
 `note` carries the rejection reason verbatim - the gate's actual output, not a paraphrase.
 
 `counter` is filled when an item reaches the counter-scenario check in step 4: the scenario
@@ -83,12 +99,12 @@ keeps its runs.
 
 ## Recipes
 
-    # ranked ready queue
+    # ranked ready queue: user focus first, then evidence-based importance
     jq -s 'map(select(.status=="ready"))
-           | sort_by(-(.severity * .confidence * .blast))' .improve/backlog.jsonl
+           | sort_by([(.focus_priority // 999), -(.severity * .confidence * .blast)])' .improve/backlog.jsonl
 
-    # security always preempts
-    jq -s 'map(select(.status=="ready" and .area=="security"))' .improve/backlog.jsonl
+    # inspect in-scope critical security findings for preemption
+    jq -s 'map(select(.status=="ready" and .area=="security" and .severity==5))' .improve/backlog.jsonl
 
     # is this finding already known (including dismissed)?
     jq -s --arg f "$FILE" 'map(select(.file==$f)) | map({claim,status,note})' .improve/backlog.jsonl
@@ -102,3 +118,33 @@ keeps its runs.
     jq -c --arg id "$ID" --arg s done --arg c "$SHA" \
        'if .id==$id then .status=$s | .commit=$c else . end' \
        .improve/backlog.jsonl > .improve/backlog.tmp && mv .improve/backlog.tmp .improve/backlog.jsonl
+
+
+## Intake, discovery, and supervision
+
+`intake.json` preserves all ten answers before any new run starts; see `intake.md`. Keep
+`run.json.focus` alongside it as the interpreted, ordered plan. User steering changes that
+plan with a dated journal note, never silently restarts the duration.
+
+`discovery.jsonl` records one row per scan:
+
+```json
+{"generation":3,"tier":2,"lane":"ui","focus_priority":1,"paths":["src/cart"],"hypothesis":"error state obscures retry control","revision":"a1b2c3d","status":"complete","accepted":0,"rejected":1,"evidence":"rendered network-error state; retry remained visible at 390px","next_scope":"cart keyboard focus","at":"2026-09-05T17:03:00Z"}
+```
+
+`supervisor.json` belongs to the daemon. Agents copy its start/deadline into their run
+ledger and do not edit it. It preserves the deadline even if preflight never finished.
+`daemon.lock` is an OS-held exclusive lock; its file may remain when no process is running.
+Use `--status` to inspect liveness. `stop.request` asks the supervisor to stop after the
+current cycle. `history/` contains state archived explicitly with `--new-run`.
+
+An interrupted item records `active_item: {"id":"q-0007","start_commit":"...",
+"owned_paths":["src/cart.ts"],"last_verification":"..."}`. Inspect both the actual git diff
+and this record before recovery. Never use the record as permission to erase unrelated work.
+
+
+`final-report.md` is the durable final handover. A report-only retry preserves the original
+outcome and `ended_at`; a new report's timestamp is not a new run end time. The supervisor
+stores `consecutive_failures`, `limit_waited_seconds`, `next_limit_wait`, `phase`, `child_pid`,
+`heartbeat_at` (last supervisor state update), and `retry_at`. Agents must not edit those
+fields. `--status --json` returns them with the current clock and the agent's run state.
