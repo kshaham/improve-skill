@@ -475,6 +475,11 @@ not promises. See [bets](max/references/bets.md) and
 
 ## Development checks
 
+For structural code navigation, optionally build a local CodeGraph index with
+`codegraph init -i` from this checkout. Generated `.codegraph/` data stays untracked.
+When the MCP server starts from a parent directory, pass this checkout's absolute path
+as `projectPath` to its tools. CodeGraph is a development aid; skill runs do not require it.
+
 From the skill checkout:
 
 ```sh
