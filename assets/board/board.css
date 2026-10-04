@@ -295,6 +295,30 @@ button {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+.run-health {
+  margin: -10px 0 24px;
+  padding: 13px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  color: #646a78;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.health-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 5px;
+}
+.health-heading strong {
+  color: var(--ink);
+}
+#run-notice {
+  color: #845920;
+  margin-top: 8px;
+  white-space: pre-line;
+}
 .warning {
   background: #fff5e6;
   border: 1px solid #f1dfbd;

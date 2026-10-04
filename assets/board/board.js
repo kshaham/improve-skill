@@ -183,6 +183,45 @@ function remaining() {
     ? (h ? h + "h " : "") + m + "m " + s + "s left"
     : "Deadline reached";
 }
+function renderHealth(run) {
+  $("run-health").hidden = !run.started_at && !run.supervised;
+  const metadata = [run.engine, run.model, "Cycle " + run.cycle].filter(
+    Boolean,
+  );
+  if (run.phase) metadata.push("Phase: " + run.phase);
+  $("run-meta").textContent = metadata.join(" · ");
+  const formatTime = (value) =>
+    Number.isFinite(Date.parse(value))
+      ? new Date(value).toLocaleString()
+      : "not recorded";
+  const checkpoints = ["Work checkpoint: " + formatTime(run.last_activity_at)];
+  if (run.supervised)
+    checkpoints.push("Supervisor checkpoint: " + formatTime(run.heartbeat_at));
+  $("run-checkpoint").textContent = checkpoints.join(" · ");
+  const notices = [];
+  if (run.summary_pending)
+    notices.push(
+      "Final report pending. Completion of the narrative report has not been verified.",
+    );
+  if (run.supervised && !run.daemon_running && !run.outcome)
+    notices.push(
+      "The daemon is not running. This board remains available, but no supervised work is currently running.",
+    );
+  if (run.retry_at)
+    notices.push(
+      (run.daemon_running
+        ? "Account-limit retry: "
+        : "Saved account-limit retry: ") + formatTime(run.retry_at),
+    );
+  if (run.consecutive_failures)
+    notices.push(
+      "Consecutive failed or uncheckpointed cycles: " +
+        run.consecutive_failures,
+    );
+  if (run.last_error) notices.push(readable(run.last_error));
+  $("run-notice").hidden = !notices.length;
+  $("run-notice").textContent = notices.join("\n");
+}
 function render(data) {
   snapshot = data;
   $("repo").textContent = data.repo;
@@ -209,19 +248,24 @@ function render(data) {
       : "In selected run";
   const run = data.current;
   $("run-state").textContent =
-    run.outcome ||
+    (run.daemon_running && run.phase === "finalize"
+      ? "Writing final report"
+      : run.outcome) ||
     (run.daemon_running
       ? run.phase === "account-limit"
         ? "Waiting for account limit"
         : "Running"
-      : run.started_at
-        ? "Last run checkpoint"
-        : "Tracking tasks");
+      : run.supervised
+        ? "Daemon not running"
+        : run.started_at
+          ? "Last run checkpoint"
+          : "Tracking tasks");
   $("run-detail").textContent =
     run.next_action ||
     (run.outcome
       ? "The run has ended. Its task history stays available."
       : "Tasks update from the project ledger.");
+  renderHealth(run);
   $("warning").hidden = !data.warnings.length;
   $("warning").textContent = data.warnings.join("\n");
   const investigations = data.discovery.slice(0, 6);

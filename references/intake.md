@@ -89,6 +89,15 @@ the interpretation so later cycles cannot quietly substitute their own goals.
 
 ## Resumption and unattended execution
 
+When an intake has a `status` field, unattended work requires `"complete"`. A file marked
+`"awaiting_answers"` is rejected even if all ten fields contain suggested text. Legacy
+files without a status remain valid when all ten answers are present and nonempty.
+
+Passing the original `--intake` file again checks that its answers match, but leaves the
+saved intake unchanged, including later authorization, exclusions, and steering metadata.
+Record steering in the active session; use `--new-run` with a fresh intake to replace it.
+Rejected recovery attempts do not install a newly supplied intake file.
+
 Wakeups, compaction, and daemon cycles with a saved intake resume without asking ten more
 questions. A user steering the active run changes the saved focus with a dated note; it
 does not restart the clock. A **new** run gets a new intake even in the same repo.
