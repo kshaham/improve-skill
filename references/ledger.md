@@ -134,6 +134,9 @@ plan with a dated journal note, never silently restarts the duration.
 
 `supervisor.json` belongs to the daemon. Agents copy its start/deadline into their run
 ledger and do not edit it. It preserves the deadline even if preflight never finished.
+Its `engine` is `codex` or `claude`, selected before the first cycle and kept on recovery.
+Older supervisor files lacking `engine` are migrated to `claude`, the historical provider.
+`codex_sandbox` saves an explicit Codex mode, or null to use the CLI's configuration.
 `daemon.lock` is an OS-held exclusive lock; its file may remain when no process is running.
 Use `--status` to inspect liveness. `stop.request` asks the supervisor to stop after the
 current cycle. `history/` contains state archived explicitly with `--new-run`.

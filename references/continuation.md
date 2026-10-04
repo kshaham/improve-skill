@@ -20,6 +20,16 @@ unless its platform explicitly supports that. The daemon can survive terminal cl
 launched under `nohup`/tmux, but cannot do work while the machine is asleep or powered off.
 On restart it keeps the original deadline and reports missed time honestly.
 
+Start the daemon with the current host: `--engine codex` in Codex, `--engine claude` in
+Claude Code. The engine is saved in `supervisor.json` before the first cycle. Restarts,
+resumes, and finalization keep that engine, even from another host; omit the engine argument
+for recovery. A conflicting explicit engine is rejected. Legacy supervisor files without
+an engine retain Claude. Only `--new-run` with a new intake can change providers. A missing
+CLI or account limit never switches providers. Both engines use the same deadline, lock,
+checkpoint, stop, timeout, and recovery machinery. For Codex, carry over the current session's
+sandbox with `--codex-sandbox`; it is saved for recovery and must not broaden that session's
+permissions. If unknown, omit it to inherit CLI configuration. See README for CLI settings.
+
 ## Checkpoint a useful cycle
 
 Atomically update `run.json` after each item or completed discovery pass:

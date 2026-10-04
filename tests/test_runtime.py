@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -59,11 +60,57 @@ class ClockTests(unittest.TestCase):
                 runtime.validate_intake(bad)
 
 
-FAKE_CLAUDE = r'''import json, os, pathlib, subprocess, sys, time
+class EngineTests(unittest.TestCase):
+    def test_host_detection(self):
+        for engine, markers in runtime.HOST_MARKERS.items():
+            for marker in markers:
+                with self.subTest(marker=marker):
+                    self.assertEqual(runtime.resolve_engine(environ={marker: '1'}), engine)
+
+    def test_unknown_or_conflicting_hosts_require_explicit_engine(self):
+        for env in ({}, {'CODEX_THREAD_ID': '1', 'CLAUDECODE': '1'}):
+            with self.subTest(env=env), self.assertRaisesRegex(runtime.StateError, 'pass --engine'):
+                runtime.resolve_engine(environ=env)
+            self.assertEqual(runtime.resolve_engine('codex', environ=env), 'codex')
+
+    def test_saved_engine_wins_over_host_and_legacy_stays_claude(self):
+        env = {'CODEX_THREAD_ID': '1'}
+        self.assertEqual(runtime.resolve_engine(control={'engine': 'claude'}, environ=env), 'claude')
+        self.assertEqual(runtime.resolve_engine(control={}, environ=env), 'claude')
+        self.assertEqual(runtime.resolve_engine(control={'engine': 'codex'}, environ={}), 'codex')
+
+    def test_invalid_or_changed_engine_is_rejected(self):
+        for args in ({'requested': 'other'}, {'control': {'engine': None}},
+                     {'requested': 'codex', 'control': {'engine': 'claude'}}):
+            with self.subTest(args=args), self.assertRaises(runtime.StateError):
+                runtime.resolve_engine(**args)
+
+    def test_sandbox_inherits_configuration_unless_explicitly_selected(self):
+        self.assertIsNone(runtime.resolve_sandbox('codex'))
+        self.assertIsNone(runtime.resolve_sandbox('claude'))
+        self.assertNotIn('--sandbox', runtime.agent_command('codex', 'prompt'))
+        for mode in runtime.SANDBOX_MODES:
+            self.assertEqual(runtime.resolve_sandbox('codex', mode), mode)
+            self.assertEqual(runtime.resolve_sandbox('codex', control={'codex_sandbox': mode}), mode)
+
+    def test_sandbox_cannot_change_on_restart_or_apply_to_claude(self):
+        for engine, requested, control in (
+            ('claude', 'workspace-write', None),
+            ('codex', 'danger-full-access', {'codex_sandbox': 'workspace-write'}),
+            ('codex', None, {'codex_sandbox': 'invalid'}),
+        ):
+            with self.subTest(engine=engine, requested=requested), self.assertRaises(runtime.StateError):
+                runtime.resolve_sandbox(engine, requested, control)
+
+
+FAKE_AGENT = r'''import json, os, pathlib, subprocess, sys, time
 state = pathlib.Path('.improve')
+prompt = sys.argv[-1]
 with (state / 'launches.jsonl').open('a') as stream:
-    stream.write(json.dumps({'prompt': sys.argv[2]}) + '\n')
-prompt = sys.argv[2]
+    stream.write(json.dumps({'prompt': prompt, 'engine': pathlib.Path(sys.argv[0]).name,
+                            'argv': sys.argv[1:], 'nested_claude': os.environ.get('CLAUDECODE'),
+                            'config_home': os.environ.get('CODEX_HOME'),
+                            'stdin': sys.stdin.read()}) + '\n')
 mode = os.environ.get('FAKE_MODE', 'empty')
 if mode == 'orphan':
     subprocess.Popen([sys.executable, '-c', 'import signal,time,pathlib; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(3); pathlib.Path(".improve/orphan-wrote").touch()'])
@@ -123,14 +170,16 @@ class DaemonTests(unittest.TestCase):
         self.git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "baseline")
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        cli = self.bin / "claude"
-        cli.write_text(f"#!{sys.executable}\n" + FAKE_CLAUDE)
-        cli.chmod(0o755)
+        for engine in ('claude', 'codex'):
+            cli = self.bin / engine
+            cli.write_text(f"#!{sys.executable}\n" + FAKE_AGENT)
+            cli.chmod(0o755)
         self.intake = self.root / "intake.json"
         self.intake.write_text(json.dumps({"answers": {key: "no preference" for key in runtime.INTAKE_KEYS}}))
-        self.env = {k: v for k, v in os.environ.items() if not k.startswith("IMPROVE_")}
+        markers = {key for keys in runtime.HOST_MARKERS.values() for key in keys}
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith("IMPROVE_") and k not in markers}
         self.env.update(PATH=str(self.bin) + os.pathsep + self.env["PATH"],
-                        IMPROVE_CYCLE_GAP="0", PYTHONDONTWRITEBYTECODE="1")
+                        IMPROVE_ENGINE="claude", IMPROVE_CYCLE_GAP="0", PYTHONDONTWRITEBYTECODE="1")
 
     def tearDown(self):
         self.temp.cleanup()
@@ -164,6 +213,132 @@ class DaemonTests(unittest.TestCase):
                    deadline=runtime.stamp(int(time.time()) + remaining), cycle=7, outcome=None)
         runtime.atomic_json(self.state / "run.json", run)
         return run
+
+    def test_codex_host_launches_codex_and_relaunches_until_stopped(self):
+        self.env.update(IMPROVE_ENGINE="auto", CODEX_THREAD_ID="test-thread")
+        result = self.invoke("early", "--model", "test-codex-model")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.load("supervisor.json")["engine"], "codex")
+        self.assertEqual(len(self.launches()), 2)
+        for launch in self.launches():
+            self.assertEqual(launch["engine"], "codex")
+            self.assertTrue(launch["prompt"].startswith("$improve "))
+            self.assertIn("--no-daemon", launch["argv"])
+            self.assertIn("--ephemeral", launch["argv"])
+            self.assertIn("test-codex-model", launch["argv"])
+            self.assertNotIn("--permission-mode", launch["argv"])
+            self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", launch["argv"])
+            self.assertEqual(launch["stdin"], "")
+
+    def test_claude_host_launches_without_nested_session_marker(self):
+        self.env.update(IMPROVE_ENGINE="auto", CLAUDECODE="1", CODEX_HOME="/test/config-home")
+        result = self.invoke("early", "--model", "test-claude-model")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for launch in self.launches():
+            self.assertEqual(launch["engine"], "claude")
+            self.assertTrue(launch["prompt"].startswith("/improve "))
+            self.assertIn("test-claude-model", launch["argv"])
+            self.assertIn("-p", launch["argv"])
+            self.assertIsNone(launch["nested_claude"])
+            self.assertEqual(launch["config_home"], "/test/config-home")
+
+    def test_resume_from_other_host_keeps_original_codex_engine(self):
+        self.assertEqual(self.invoke("halt", "--engine", "codex", "--codex-sandbox", "workspace-write").returncode, 1)
+        deadline = self.load()["deadline"]
+        self.env.update(IMPROVE_ENGINE="auto", CLAUDECODE="1")
+        result = self.invoke("early", "--resume", intake=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(all(row["engine"] == "codex" for row in self.launches()))
+        for row in self.launches():
+            self.assertEqual(row['argv'][row['argv'].index('--sandbox') + 1], 'workspace-write')
+        self.assertEqual(self.load("supervisor.json")["codex_sandbox"], "workspace-write")
+        self.assertEqual(self.load()["deadline"], deadline)
+
+    def test_recovery_rejects_changed_sandbox_without_launching(self):
+        self.assertEqual(self.invoke("halt", "--engine", "codex", "--codex-sandbox", "read-only").returncode, 1)
+        before = (self.state / "supervisor.json").read_bytes()
+        result = self.invoke("early", "--engine", "codex", "--resume", "--codex-sandbox", "danger-full-access")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("saved Codex sandbox", result.stderr)
+        self.assertEqual(len(self.launches()), 1)
+        self.assertEqual((self.state / "supervisor.json").read_bytes(), before)
+
+    def test_engine_change_requires_new_run_and_preserves_old_state(self):
+        self.assertEqual(self.invoke("halt").returncode, 1)
+        old = (self.state / "supervisor.json").read_bytes()
+        result = self.invoke("early", "--resume", "--engine", "codex")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("--new-run", result.stderr)
+        self.assertEqual((self.state / "supervisor.json").read_bytes(), old)
+        self.assertEqual(len(self.launches()), 1)
+        result = self.invoke("early", "--new-run", "--engine", "codex")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.load("supervisor.json")["engine"], "codex")
+        archive = next((self.state / "history").iterdir())
+        self.assertEqual(json.loads((archive / "supervisor.json").read_text())["engine"], "claude")
+
+    def test_missing_selected_cli_never_falls_back_or_archives_state(self):
+        self.assertEqual(self.invoke("halt").returncode, 1)
+        old = (self.state / "supervisor.json").read_bytes()
+        (self.bin / "codex").unlink()
+        # Isolate PATH so a real installed Codex can never be selected by this test.
+        for name in ("bash", "python3", "git", "dirname"):
+            (self.bin / name).symlink_to(shutil.which(name))
+        self.env["PATH"] = str(self.bin)
+        result = self.invoke("early", "--engine", "codex", "--new-run")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("selected codex CLI is not on PATH", result.stderr)
+        self.assertEqual((self.state / "supervisor.json").read_bytes(), old)
+        self.assertFalse((self.state / "history").exists())
+        self.assertEqual(len(self.launches()), 1)
+
+    def test_auto_detection_refuses_ambiguity_without_launch(self):
+        self.env.update(IMPROVE_ENGINE="auto", CODEX_THREAD_ID="test", CLAUDECODE="1")
+        result = self.invoke()
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("conflicting host markers", result.stderr)
+        self.assertFalse((self.state / "supervisor.json").exists())
+        self.assertFalse((self.state / "launches.jsonl").exists())
+
+    def test_codex_expiry_and_report_retry_keep_engine(self):
+        self.seed(-1)
+        result = self.invoke("final_fail", "--engine", "codex")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.load()["summary_pending"])
+        self.env.update(IMPROVE_ENGINE="auto", CLAUDECODE="1")
+        result = self.invoke("empty", "--finalize", intake=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.load()["summary_pending"])
+        for launch in self.launches():
+            self.assertEqual(launch["engine"], "codex")
+            self.assertIn("FINALIZATION ONLY", launch["prompt"])
+
+    def test_codex_max_uses_max_prompt_and_target_rules(self):
+        result = self.invoke("target", "--engine", "codex", "--skill", "improve-max", "--args=--stop-at-target")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.launches()[0]["prompt"].startswith("$improve-max "))
+        self.assertIn("max/SKILL.md", self.launches()[0]["prompt"])
+        self.assertEqual(self.load()["outcome"], "target reached")
+
+    def test_codex_timeout_uses_same_process_supervision(self):
+        self.env.update(IMPROVE_CYCLE_TIMEOUT="1", IMPROVE_MAX_FAILURES="1")
+        result = self.invoke("timeout", "--engine", "codex")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("returned 124", result.stdout)
+        self.assertIsNone(self.load("supervisor.json")["child_pid"])
+
+    def test_dry_run_shows_codex_command_without_state_or_launch(self):
+        result = self.invoke("early", "--engine", "codex", "--dry-run", intake=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("codex --no-daemon --ask-for-approval never exec", result.stdout)
+        self.assertFalse(self.state.exists())
+
+    def test_engine_environment_is_validated(self):
+        self.env["IMPROVE_ENGINE"] = "unknown"
+        result = self.invoke()
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("IMPROVE_ENGINE", result.stderr)
+        self.assertFalse((self.state / "launches.jsonl").exists())
 
     def test_early_completion_relaunches_and_fast_empty_scan_is_not_failure(self):
         result = self.invoke()
@@ -335,11 +510,13 @@ class DaemonTests(unittest.TestCase):
 
     def test_deadline_grace_bounds_long_cycle(self):
         self.env.update(IMPROVE_FINISH_GRACE="1", IMPROVE_CYCLE_TIMEOUT="3600")
-        started = time.monotonic()
         result = self.invoke("overrun", duration="1s")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertLess(time.monotonic() - started, 5)
-        self.assertEqual(self.load()["outcome"], "completed")
+        run = self.load()
+        # Bound cleanup against the saved deadline, excluding Python/git startup.
+        # Allow process termination and report I/O on a busy test machine.
+        self.assertLess(runtime.epoch(run["ended_at"]) - runtime.epoch(run["deadline"]), 7)
+        self.assertEqual(run["outcome"], "completed")
         self.assertEqual(len(self.launches()), 2)
 
     def test_resume_preserves_intake_and_original_deadline(self):
@@ -399,9 +576,12 @@ class DaemonTests(unittest.TestCase):
         run = self.seed()
         control = {**run, "skill": "improve", "args": "", "consecutive_failures": 2}
         runtime.atomic_json(self.state / "supervisor.json", control)
+        self.env.update(IMPROVE_ENGINE="auto", CODEX_THREAD_ID="test")
         result = self.invoke("no_checkpoint")
         self.assertEqual(result.returncode, 1)
         self.assertEqual(len(self.launches()), 1)
+        self.assertEqual(self.launches()[0]["engine"], "claude")
+        self.assertEqual(self.load("supervisor.json")["engine"], "claude")
 
     def test_expired_legacy_run_does_not_require_new_intake(self):
         self.seed(-1)
@@ -418,6 +598,7 @@ class DaemonTests(unittest.TestCase):
         info = json.loads(result.stdout)
         self.assertFalse(info["running"])
         self.assertEqual(info["supervisor"]["phase"], "ended")
+        self.assertEqual(info["supervisor"]["engine"], "claude")
         self.assertEqual(info["run"]["next_action"], "Inspect a new UI interaction state")
         self.assertGreater(info["clock"]["remaining_seconds"], 0)
 

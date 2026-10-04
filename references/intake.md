@@ -86,11 +86,12 @@ Wakeups, compaction, and daemon cycles with a saved intake resume without asking
 questions. A user steering the active run changes the saved focus with a dated note; it
 does not restart the clock. A **new** run gets a new intake even in the same repo.
 
-A noninteractive `claude -p` process cannot conduct this conversation. Finish it in the
-interactive session first, then pass the saved file:
+A noninteractive `codex exec` or `claude -p` process cannot conduct this conversation.
+Finish it in the interactive session first, then pass the saved file and current host
+(`--engine codex` from Codex, `--engine claude` from Claude Code):
 
 ```sh
-scripts/improve-daemon.sh --repo /path/to/repo --for 4h --intake /path/to/intake.json
+scripts/improve-daemon.sh --engine codex --repo /path/to/repo --for 4h --intake /path/to/intake.json
 ```
 
 The daemon checks that all ten keys have nonempty string answers before starting its
