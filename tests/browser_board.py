@@ -13,6 +13,7 @@ from playwright.sync_api import expect, sync_playwright
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import improve_board as board  # noqa: E402
+from browser_controls import check_controls  # noqa: E402
 
 
 def check_large_history(page, tasks, write_tasks, artifacts):
@@ -42,7 +43,7 @@ def check_large_history(page, tasks, write_tasks, artifacts):
     expect(page.locator("#history-list .task-row").first).to_have_attribute("data-key", "current:bulk-1999")
     page.screenshot(path=str(artifacts / "large-history.png"), full_page=True)
     page.locator("#history-list .task-row").last.scroll_into_view_if_needed()
-    assert page.locator(".history-pagination").bounding_box()["y"] >= 0, "Page controls should stay visible while reading history"
+    assert page.locator("#history-view .history-pagination").bounding_box()["y"] >= 0, "Page controls should stay visible while reading history"
     page.locator("#history-next").click()
     expect(page.locator("#history-list .task-row").first).to_have_attribute("data-key", "current:bulk-1979")
     # New completions do not displace the row being read on later pages.
@@ -276,6 +277,7 @@ def main():
                 expect(page.locator("#empty")).to_be_visible()
                 expect(page.locator(".task-card")).to_have_count(0)
                 check_large_history(page, tasks, write_tasks, artifacts)
+                check_controls(page, repo, tasks, write_tasks, artifacts)
                 assert not errors, errors
                 browser.close()
         finally:

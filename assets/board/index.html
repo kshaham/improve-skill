@@ -6,6 +6,7 @@
     <title>Improve · Task board</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/board.css" />
+    <script src="/controls.js" defer></script>
     <script src="/board.js" defer></script>
   </head>
   <body>
@@ -41,6 +42,7 @@
           <p>A live view of what’s next, what’s moving, and what’s done.</p>
         </div>
         <div class="actions">
+          <button id="open-report" type="button" disabled>Final report</button>
           <button id="refresh" type="button">↻ <span>Refresh</span></button
           ><button id="export" type="button" class="primary">
             Export tasks <span aria-hidden="true">↗</span>
@@ -87,8 +89,32 @@
         <div id="run-checkpoint"></div>
         <div id="run-notice" role="status" hidden></div>
       </section>
+      <section class="control-panel" aria-label="Control the current run">
+        <div class="control-heading">
+          <h2>Run controls</h2>
+          <span id="control-state">Connecting…</span>
+        </div>
+        <div class="control-actions">
+          <div>
+            <button id="pause-run" type="button" disabled>
+              Pause after cycle</button
+            ><button id="stop-run" class="danger" type="button" disabled>
+              Stop run
+            </button>
+          </div>
+          <div>
+            <button id="send-guidance" type="button" disabled>
+              Send guidance</button
+            ><button id="new-task" class="primary" type="button" disabled>
+              + New task
+            </button>
+          </div>
+        </div>
+        <p id="control-note">Checking the current run…</p>
+        <p id="control-feedback" role="status" hidden></p>
+      </section>
       <div id="warning" class="warning" role="status" hidden></div>
-      <section class="toolbar" aria-label="Board filters">
+      <section id="task-toolbar" class="toolbar" aria-label="Board filters">
         <label class="search"
           ><span aria-hidden="true">⌕</span
           ><input
@@ -132,8 +158,18 @@
         >
           History <span id="history-count" class="view-count">0</span>
         </button>
+        <button
+          id="requests-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="requests-view"
+          tabindex="-1"
+        >
+          Requests <span id="requests-count" class="view-count">0</span>
+        </button>
         <span class="view-hint"
-          >Active work on the board. Finished work in history.</span
+          >Your work, its history, and your direction.</span
         >
       </div>
       <section id="board-view" role="tabpanel" aria-labelledby="board-tab">
@@ -224,6 +260,45 @@
           No finished tasks match these filters.
         </p>
       </section>
+      <section
+        id="requests-view"
+        role="tabpanel"
+        aria-labelledby="requests-tab"
+        hidden
+      >
+        <div class="history-heading">
+          <div>
+            <h2>Your requests</h2>
+            <p>
+              Current run · Saved immediately, reviewed at the next checkpoint.
+            </p>
+          </div>
+          <label class="outcome-filter"
+            >Status
+            <select id="request-status">
+              <option value="all">All requests</option>
+              <option value="pending">Pending</option>
+              <option value="applied">Applied</option>
+              <option value="declined">Declined</option>
+            </select></label
+          >
+        </div>
+        <p class="request-explainer">
+          Applied means the skill updated its plan or task ledger. Completed
+          work and verification appear on the board.
+        </p>
+        <nav class="history-pagination" aria-label="Request pages">
+          <span id="request-range" role="status"></span>
+          <div>
+            <button id="request-prev" type="button">← Previous</button
+            ><button id="request-next" type="button">Next →</button>
+          </div>
+        </nav>
+        <div id="request-list" class="request-list"></div>
+        <p id="requests-empty" class="history-empty">
+          No requests yet. Add a task or send guidance above.
+        </p>
+      </section>
       <section id="discovery-section" class="discovery-section" hidden>
         <div class="section-heading">
           <h2>Recent investigations</h2>
@@ -232,7 +307,7 @@
         <div id="discovery" class="discovery-list"></div>
       </section>
       <footer>
-        <span>Reading your project’s improvement ledger · View only</span
+        <span>Local to this computer · Changes are saved in your project</span
         ><span id="updated">Waiting for data</span>
       </footer>
     </main>
@@ -248,7 +323,110 @@
         </button>
       </div>
       <h2 id="detail-title"></h2>
+      <section
+        id="task-controls"
+        class="task-controls"
+        aria-label="Task requests"
+        hidden
+      >
+        <button id="change-priority" type="button">Change priority</button
+        ><button id="approve-proposal" type="button">Approve proposal</button
+        ><button id="reject-proposal" class="danger" type="button">
+          Decline proposal
+        </button>
+        <p>
+          Decisions are saved for the skill to apply at its next checkpoint.
+        </p>
+      </section>
       <div id="detail-content"></div>
+    </dialog>
+    <dialog id="request-dialog" aria-labelledby="request-title">
+      <form id="request-form">
+        <div class="dialog-top">
+          <strong id="request-title">New task</strong
+          ><button
+            type="button"
+            data-close="request-dialog"
+            aria-label="Close request"
+          >
+            ✕
+          </button>
+        </div>
+        <p id="request-context" class="dialog-context"></p>
+        <label id="request-title-field"
+          >Task title<input
+            id="request-task-title"
+            maxlength="200"
+            placeholder="What should be improved?"
+        /></label>
+        <div class="form-pair">
+          <label id="request-area-field"
+            >Area<select id="request-area"></select></label
+          ><label id="request-priority-field"
+            >Priority<select id="request-priority">
+              <option value="high">High</option>
+              <option value="normal" selected>Normal</option>
+              <option value="low">Low</option>
+            </select></label
+          >
+        </div>
+        <label
+          >Details<textarea
+            id="request-text"
+            rows="5"
+            maxlength="8000"
+            placeholder="Desired result, constraints, or acceptance checks…"
+          ></textarea>
+        </label>
+        <p id="request-error" class="form-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" data-close="request-dialog">Cancel</button
+          ><button id="request-submit" type="submit" class="primary">
+            Save request
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="stop-dialog" aria-labelledby="stop-title">
+      <div class="dialog-top">
+        <strong id="stop-title">Stop this improvement run?</strong
+        ><button
+          type="button"
+          data-close="stop-dialog"
+          aria-label="Close stop dialog"
+        >
+          ✕
+        </button>
+      </div>
+      <p class="dialog-context">
+        The skill gets a cleanup window to settle current work, then ends the
+        run. Saved history stays available. Restarting an ended run requires
+        recovery from your assistant.
+      </p>
+      <p id="stop-error" class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" data-close="stop-dialog">Keep running</button
+        ><button id="confirm-stop" type="button" class="danger">
+          Stop run
+        </button>
+      </div>
+    </dialog>
+    <dialog id="report-dialog" aria-labelledby="report-title">
+      <div class="dialog-top">
+        <strong id="report-title">Saved final report</strong
+        ><button
+          type="button"
+          data-close="report-dialog"
+          aria-label="Close report"
+        >
+          ✕
+        </button>
+      </div>
+      <p id="report-note" class="dialog-context"></p>
+      <pre id="report-text"></pre>
+      <div class="dialog-actions">
+        <button id="download-report" type="button">Download report</button>
+      </div>
     </dialog>
   </body>
 </html>
