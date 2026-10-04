@@ -189,6 +189,9 @@ class DaemonTests(unittest.TestCase):
                         IMPROVE_ENGINE="claude", IMPROVE_CYCLE_GAP="0", PYTHONDONTWRITEBYTECODE="1")
 
     def tearDown(self):
+        if (self.state / "board.json").exists():
+            subprocess.run([str(ROOT / "scripts/improve-board.sh"), "--repo", str(self.repo), "--stop"],
+                           capture_output=True, timeout=5)
         self.temp.cleanup()
 
     def git(self, *args):
@@ -199,7 +202,46 @@ class DaemonTests(unittest.TestCase):
         return self.repo / ".improve"
 
     def command(self, *extra):
-        return [str(ROOT / "scripts/improve-daemon.sh"), "--repo", str(self.repo), *extra]
+        board_args = [] if getattr(self, "with_board", False) else ["--no-board"]
+        return [str(ROOT / "scripts/improve-daemon.sh"), "--repo", str(self.repo), *board_args, *extra]
+
+    def test_board_stays_available_and_survives_new_run(self):
+        self.with_board = True
+        result = self.invoke("early", "--board-port", "0", "--engine", "codex")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        saved = self.load("board.json")
+        lock_inode = (self.state / "board.lock").stat().st_ino
+        status = subprocess.run(self.command("--status", "--json"), env=self.env,
+                                capture_output=True, text=True, timeout=5)
+        info = json.loads(status.stdout)
+        self.assertFalse(info["running"])
+        self.assertTrue(info["board"]["running"])
+        self.assertEqual(info["board"]["url"], saved["url"])
+        result = self.invoke("early", "--new-run", "--engine", "claude")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.load("board.json"), saved)
+        self.assertEqual((self.state / "board.lock").stat().st_ino, lock_inode)
+        archive = next((self.state / "history").iterdir())
+        self.assertTrue((archive / "run.json").exists())
+        self.assertFalse((archive / "board.json").exists())
+        self.assertEqual(self.load("supervisor.json")["engine"], "claude")
+
+    def test_board_failure_does_not_stop_work(self):
+        import socket
+        self.with_board = True
+        with socket.socket() as occupied:
+            occupied.bind(("127.0.0.1", 0))
+            occupied.listen()
+            result = self.invoke("early", "--board-port", str(occupied.getsockname()[1]))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Kanban board unavailable", result.stdout)
+        self.assertEqual(self.load()["cycle"], 2)
+
+    def test_no_board_keeps_board_disabled_in_worker_prompt(self):
+        result = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.state / "board.json").exists())
+        self.assertIn("disabled by --no-board", self.launches()[0]["prompt"])
 
     def invoke(self, mode="early", *extra, intake=True, duration="60s"):
         args = ["--for", duration, *extra]

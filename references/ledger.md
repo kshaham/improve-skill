@@ -78,11 +78,23 @@ writes; finders return evidence to it and never race to update shared state.
 
 Fields: `area` is one of `quality|coverage|security|performance|concurrency|resilience|
 gate-speed|docs|accessibility|contracts|features|ui|assets`; only lanes in `lanes.active` may appear. `severity` 1-5,
-`confidence` 0-1, `blast` 1-5. `status` is `ready|done|rejected|benched|proposed`.
+`confidence` 0-1, `blast` 1-5. `status` is `ready|in_progress|done|rejected|blocked|proposed`.
+Legacy `benched` tasks display in the board's Blocked column. A benched lane remains
+separately recorded in `run.json.benched_areas`.
 `focus_priority` links to the ordered focus plan; `acceptance` records the observable
 requested result for feature/visual work; `reopens` links to a prior candidate only when
 new evidence permits reconsideration.
 `note` carries the rejection reason verbatim - the gate's actual output, not a paraphrase.
+
+For the live board, add a concise `title`, `kind` (`change` or `investigation`), and UTC
+`created_at`/`updated_at`; record `started_at` and `completed_at` when applicable. These
+fields are optional for old records. Set `in_progress` before editing, then save the
+settled status, verification evidence, and actual commit SHA. Investigations may finish
+without a commit when their findings/checks are recorded. Do not delete finished or
+rejected tasks, renumber IDs, or mark an unverified change done. The viewer supports old
+append-only updates by merging repeated IDs in file order; skill writers should continue
+using one canonical row per ID with atomic rewrites so queue queries remain correct.
+See [board.md](board.md) for column meanings and service lifecycle.
 
 `counter` is filled when an item reaches the counter-scenario check in step 4: the scenario
 verbatim as the subagent returned it, or `"none"`. An item `rejected` by its counter-scenario

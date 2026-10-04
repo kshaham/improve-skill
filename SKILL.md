@@ -6,8 +6,9 @@ metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus) in plan mode
   created: 2026-09-05
   origin: Designed to spec in the ~/Code/bonsai session (plan shimmying-roaming-goose.md); daemon added 2026-09-06 after the first 6h run hit ENOSPC
-  version: 1.7.0
+  version: 1.8.0
   changelog: |
+    1.8.0 (2026-10-04) - live local Kanban board, automatic daemon startup, searchable task history, explicit task transitions, archived runs, local-only service and browser tests
     1.7.0 (2026-10-04) - authoritative clocks before preflight, durable rate-limit recovery, saved model selection, verified report freshness, explicit authorization continuity, installation and troubleshooting docs
     1.6.0 (2026-10-04) - host-aware Codex/Claude daemon routing, persisted engine across recovery, native skill invocation, isolated cycle input and engine regression tests
     1.5.0 (2026-10-04) - evidence-based progress detection, bounded deadline cleanup, recoverable halts and final reports, verification-aware work selection, persistent retry counters and live status
@@ -43,6 +44,22 @@ most effort. Technical cleanup supports that plan; it must not quietly replace i
 continuation mechanism and checkpoint the next action. Foreground continuation is the
 default when no scheduler is available. Use `references/work-selection.md` to turn the
 answers into observable goals, prioritize discovery fairly, and budget verification.
+
+## Live task board
+
+Create a local Kanban board for every run and share its verified URL at launch and in
+reports. In foreground/scheduler mode, after intake and repo selection, run the installed
+skill's `scripts/improve-board.sh --repo <absolute-repo-root> --start`; it reuses an existing
+board. In daemon mode the supervisor starts it; child cycles must not start or stop it.
+Honor `--no-board` or an explicit user opt-out. If serving fails, report the error and
+continue improvement work. Never claim a URL is available without a successful start/status.
+
+Record each accepted task in `backlog.jsonl` before working on it. Set `in_progress` before
+edits; update to `done`, `rejected`, `blocked`, or `proposed` with evidence after settling it.
+Retain finished tasks. Keep meaningful investigations in `discovery.jsonl`; don't invent
+tasks or outcomes to fill columns. The board shows current and archived ledgers, refreshes
+automatically, and stays available after completion. See [references/board.md](references/board.md)
+for lifecycle, task fields, and local commands.
 
 ## What makes this different from ordinary work
 
@@ -103,6 +120,7 @@ and commit that housekeeping before the first item so it cannot leave a cycle di
     .improve/backlog.jsonl  one JSON object per candidate, appended and rewritten in place
     .improve/journal.md     every hourly report, appended
     .improve/final-report.md final handover, with evidence and actual stop reason
+    .improve/board.json     local board URL and private service identity; never commit
 
 Read `run.json`, `backlog.jsonl`, the focus plan, and the latest discovery checkpoint at
 the start of **every** cycle. Never carry loop state only in your context - assume you
@@ -261,7 +279,9 @@ of two simultaneous changes broke it. Keep the diff minimal and scoped to the it
 fix turns out to need a second unrelated change, that second change is a new backlog item.
 
 Match the surrounding code and design system. Before editing, record `active_item` with
-its ID, starting SHA, and owned paths. Clear it only after commit or scoped rollback.
+its ID, starting SHA, and owned paths; set the task's status to `in_progress`. After commit
+or scoped rollback, update its status/evidence and clear `active_item`. Interrupted work
+stays visible as `blocked` with the exact recovery needed; never silently drop the task.
 
 ### 4. Verify
 
@@ -486,6 +506,7 @@ build a real coverage profile) can miss the deadline entirely. So:
 - `references/intake.md` - the ten questions and persistent focus plan
 - `references/work-selection.md` - acceptance goals, evidence, scope, and verification budgets
 - `references/continuation.md` - execution modes, discovery checkpoints, recovery
+- `references/board.md` - local Kanban board, task history, startup and shutdown
 - `references/performance.md` - journey harnesses and profiling when performance is active
 
 - `scripts/improve-clock.sh` - elapsed, remaining, hour label, report due, deadline passed

@@ -98,6 +98,10 @@ are suggestions for the human after review; never run branch deletion automatica
 
 ## Focus and continuity
 
+Include the local Kanban URL confirmed by `scripts/improve-board.sh --status` in opening,
+hourly, and final reports. If unavailable or disabled, say so without claiming it is live.
+The board stays available after the run; stopping it is independent of stopping the daemon.
+
 Each report includes progress against the user's top priorities, the actual screens/features
 or paths examined, the number of completed discovery passes, and the next concrete action.
 Separate investigated, proposed, and committed work. For UI/assets include locations of
