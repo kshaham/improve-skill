@@ -95,10 +95,16 @@ improve_repo="$HOME/Code/my-app"
 The board includes:
 
 - **Four working columns:** Queued, In progress, Blocked, and Proposed.
+- **Active worklist:** switch Columns to Worklist for twenty compact active rows per page.
+  Sort either layout by priority, recent update, or title; filter high/normal/low priorities.
+  New arrivals keep your position while you browse older worklist pages.
 - **Recent completions:** five compact rows below the board, with a link to the full history.
 - **History view:** completed and rejected tasks in rows with title, outcome, area, recorded
   date, and commit. Twenty rows per page keep long runs manageable; click any row for details.
 - **Task details:** evidence, acceptance checks, verification, files, notes, and commits.
+- **Task links and bookmarks:** copy a task link or bookmark a view. The URL preserves
+  the tab, run, search, area, priority, layout, sort, and outcome/status filters.
+  Missing archives recover gracefully; old current-run links cannot open reused task IDs.
 - **Search and filters:** find tasks by text, area, or run, including archived history.
 - **Live progress:** task counts, deadline, latest checkpoint, and recent investigations.
 - **Run health:** engine/model, cycle, checkpoint times, retry schedule, failure count,
@@ -108,6 +114,12 @@ The board includes:
 - **New tasks and guidance:** send desired outcomes, acceptance checks, or updated focus
   directly from the board. Change a current task's priority or approve/decline a proposal
   from its details.
+- **Follow-up tasks:** create a separate request from any task's details, including archived
+  or completed work. The form retains its source task and commit for context.
+- **Recoverable drafts:** forms save locally as you type. Close and reopen them or use
+  Resume draft after a reload. Different request contexts keep separate drafts; discard
+  removes one, and successful submission clears it. Drafts from old runs cannot be sent
+  into a replacement run.
 - **Requests:** search current and archived requests, including the skill's responses.
   Filter by run and status, browse twenty rows per page, and export every matching page.
   Live updates preserve your place on older pages.
@@ -115,8 +127,9 @@ The board includes:
   evidence, and verification. Links stay within their original run when IDs are reused.
 - **Reports:** browse and download saved final reports across runs. The selected run's
   report opens first when available; the picker lets you switch without leaving the board.
-- **Export:** download matching tasks as JSON. History includes all matching pages and
-  respects the outcome filter; Board exports all matching tasks, including finished work.
+- **Export:** download matching tasks as JSON. Worklist exports all matching active rows;
+  History exports all matching finished rows; Columns includes finished work as well.
+  Every export covers all pages.
 
 It reads `.improve/backlog.jsonl` directly, includes `improve-max` experiments from
 `bets.jsonl`, and refreshes every three seconds while visible.
@@ -144,6 +157,19 @@ Submitting a task or guidance while browsing an archive saves it to the current 
 returns the Requests view there. Search includes receipt text as well as request details.
 The worker reads its pending requests and run identity together under the archival lock.
 See [request handling and controls](references/board-control.md) for the checkpoint contract.
+
+Drafts are stored in this browser for the board's local origin and repository, with a
+maximum of fifty request contexts. A different browser profile or port has separate
+storage. If browser storage is blocked, the form explains that it cannot survive a reload;
+you can still submit it. Lost-response retry IDs survive with the draft, preventing duplicate
+requests after reloading. A service restart refreshes the control capability once; other
+failures remain visible for an explicit retry. Task links need the board running at that
+local URL and are not externally hosted links.
+
+The skill now consistently ranks eligible tasks by explicit board priority, then the intake
+focus order and evidence-based importance. Scope, critical-security checks, dependencies,
+verification requirements, and the original deadline still apply. Board sorting is a way
+to browse work; it does not by itself change priorities or launch tasks.
 
 The current run panel flags an inactive daemon and missing final report, and shows when a
 report-only retry is running. It uses the supervisor's confirmed outcome, so a worker's
@@ -550,6 +576,10 @@ acknowledgments, lost-response retries, preserved drafts, and saved-report downl
 Archive checks cover request search/export, links with reused IDs, task/bet status,
 damaged archives, safe report selection, late report responses, and request reads during
 run archival. Browser checks also verify archived views on mobile and stable pagination.
+Workflow checks use 1,500 active tasks and exercise worklist sorting/filtering/export,
+bookmarks, missing/stale task links, follow-up requests, draft recovery after reload,
+lost-response retry IDs, repository isolation, blocked browser storage, and bounded
+session-capability recovery.
 Screenshots are written to a temporary directory
 unless `--artifacts PATH` is supplied. Playwright is only a development dependency.
 

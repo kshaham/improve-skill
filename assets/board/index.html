@@ -7,6 +7,8 @@
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/board.css" />
     <script src="/controls.js" defer></script>
+    <script src="/workflow.js" defer></script>
+    <script src="/drafts.js" defer></script>
     <script src="/board.js" defer></script>
   </head>
   <body>
@@ -112,8 +114,10 @@
         </div>
         <p id="control-note">Checking the current run…</p>
         <p id="control-feedback" role="status" hidden></p>
+        <button id="resume-draft" type="button" hidden>Resume draft</button>
       </section>
       <div id="warning" class="warning" role="status" hidden></div>
+      <div id="view-notice" class="warning" role="status" hidden></div>
       <section id="task-toolbar" class="toolbar" aria-label="Board filters">
         <label class="search"
           ><span aria-hidden="true">⌕</span
@@ -135,7 +139,16 @@
             <select id="area">
               <option value="all">All areas</option>
             </select></label
-          ><span id="visible-count" class="visible-count">0 tasks</span>
+          ><label id="priority-filter-label"
+            >Priority<select id="priority-filter">
+              <option value="all">All priorities</option>
+              <option value="high">High</option>
+              <option value="normal">Normal</option>
+              <option value="low">Low</option>
+            </select></label
+          >
+          <button id="clear-filters" type="button">Clear filters</button>
+          <span id="visible-count" class="visible-count">0 tasks</span>
         </div>
       </section>
       <div class="view-tabs" role="tablist" aria-label="Task views">
@@ -173,6 +186,24 @@
         >
       </div>
       <section id="board-view" role="tabpanel" aria-labelledby="board-tab">
+        <div class="work-toolbar">
+          <label
+            >View<select id="work-layout">
+              <option value="columns">Columns</option>
+              <option value="rows">Worklist</option>
+            </select></label
+          >
+          <label
+            >Sort<select id="work-sort">
+              <option value="priority">Priority</option>
+              <option value="updated">Recently updated</option>
+              <option value="title">Title</option>
+            </select></label
+          >
+          <span id="work-sort-note"
+            >High → normal → low · then focus order</span
+          >
+        </div>
         <div id="empty" class="empty-state" hidden>
           <span aria-hidden="true">▥</span>
           <h2>Your next improvement starts here.</h2>
@@ -191,6 +222,22 @@
           </div>
         </div>
         <section id="board" class="board" aria-label="Kanban board"></section>
+        <section id="worklist" aria-label="Active worklist" hidden>
+          <nav class="history-pagination" aria-label="Worklist pages">
+            <span id="work-range" role="status"></span>
+            <div>
+              <button id="work-first" type="button">First</button
+              ><button id="work-prev" type="button">← Previous</button
+              ><button id="work-next" type="button">Next →</button>
+            </div>
+          </nav>
+          <div
+            id="work-list"
+            class="task-rows"
+            role="list"
+            aria-label="Active tasks"
+          ></div>
+        </section>
         <section
           id="recent-section"
           class="recent-section"
@@ -324,6 +371,14 @@
         </button>
       </div>
       <h2 id="detail-title"></h2>
+      <div class="task-actions">
+        <button id="copy-task-link" type="button">Copy task link</button
+        ><button id="follow-up-task" type="button">Create follow-up</button>
+      </div>
+      <div id="task-link-field" hidden>
+        <p id="task-link-note" role="status"></p>
+        <input id="task-link" aria-label="Task link" readonly />
+      </div>
       <section
         id="task-controls"
         class="task-controls"
@@ -380,8 +435,10 @@
           ></textarea>
         </label>
         <p id="request-error" class="form-error" role="alert" hidden></p>
+        <p id="draft-status" class="dialog-context" role="status"></p>
         <div class="dialog-actions">
-          <button type="button" data-close="request-dialog">Cancel</button
+          <button id="discard-draft" type="button">Discard draft</button
+          ><button type="button" data-close="request-dialog">Close</button
           ><button id="request-submit" type="submit" class="primary">
             Save request
           </button>

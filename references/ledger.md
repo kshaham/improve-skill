@@ -119,9 +119,10 @@ keeps its runs.
 
 ## Recipes
 
-    # ranked ready queue: user focus first, then evidence-based importance
+    # ranked ready queue after scope and critical-security checks
     jq -s 'map(select(.status=="ready"))
-           | sort_by([(.focus_priority // 999), -(.severity * .confidence * .blast)])' .improve/backlog.jsonl
+           | sort_by([(if .user_priority=="high" then 0 elif .user_priority=="low" then 2 else 1 end),
+                      (.focus_priority // 999), -((.severity // 0) * (.confidence // 0) * (.blast // 0))])' .improve/backlog.jsonl
 
     # inspect in-scope critical security findings for preemption
     jq -s 'map(select(.status=="ready" and .area=="security" and .severity==5))' .improve/backlog.jsonl

@@ -3,6 +3,7 @@
 
 import argparse
 import contextlib
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
@@ -262,7 +263,8 @@ def board_snapshot(repo, selected="current"):
             if target in task_keys and target not in links:
                 links.append(target)
         row["task_keys"] = links
-    return {"repo": repo.name, "selected_run": selected, "runs": runs, "current": current,
+    return {"repo": repo.name, "workspace_id": hashlib.sha256(str(repo.resolve()).encode()).hexdigest(),
+            "selected_run": selected, "runs": runs, "current": current,
             "columns": [{"id": key, "label": label} for key, label in COLUMNS],
             "tasks": tasks, "requests": requests, "counts": counts, "discovery": discovery[:24],
             "controls": controls, "warnings": warnings, "updated_at": stamp()}
@@ -361,6 +363,8 @@ class BoardHandler(BaseHTTPRequestHandler):
         assets = {"/": ("index.html", "text/html; charset=utf-8"),
                   "/board.js": ("board.js", "text/javascript; charset=utf-8"),
                   "/controls.js": ("controls.js", "text/javascript; charset=utf-8"),
+                  "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),
+                  "/drafts.js": ("drafts.js", "text/javascript; charset=utf-8"),
                   "/board.css": ("board.css", "text/css; charset=utf-8")}
         if target.path in assets:
             name, mime = assets[target.path]
