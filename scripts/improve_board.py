@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
 from improve_runtime import StateError, atomic_json, git, lock_active, read_json, recorded_timing, repo_lock, stamp
-from improve_control import operator_lock, pause_requested, queue_request, read_local, request_view, request_view_at, require_run, set_pause
+from improve_control import operator_lock, pause_requested, queue_request, queue_submission, read_local, request_view, request_view_at, require_run, set_pause
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets/board"
 SERVICE_FILES = {"board.json", "board.lock", "board.log", "operator.lock"}
@@ -31,7 +31,7 @@ TASK_FIELDS = ("id", "title", "claim", "area", "kind", "file", "line", "paths", 
                "note", "evidence", "failure", "acceptance", "verification", "counter", "measurement",
                "commit", "focus_priority", "priority", "created_at", "updated_at", "started_at",
                "completed_at", "reopens", "last_verification", "bet_status", "journey",
-               "target", "claimed_gain", "spike", "landed", "pieces", "kill", "branch", "user_priority", "board_request_id")
+               "target", "claimed_gain", "spike", "landed", "pieces", "kill", "branch", "user_priority", "board_request_id", "user_notes")
 MAX_FILE_BYTES = 32 * 1024 * 1024
 
 
@@ -365,6 +365,8 @@ class BoardHandler(BaseHTTPRequestHandler):
                   "/controls.js": ("controls.js", "text/javascript; charset=utf-8"),
                   "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),
                   "/drafts.js": ("drafts.js", "text/javascript; charset=utf-8"),
+                  "/triage.js": ("triage.js", "text/javascript; charset=utf-8"),
+                  "/overview.js": ("overview.js", "text/javascript; charset=utf-8"),
                   "/board.css": ("board.css", "text/css; charset=utf-8")}
         if target.path in assets:
             name, mime = assets[target.path]
@@ -386,7 +388,7 @@ class BoardHandler(BaseHTTPRequestHandler):
         if (not same_origin or not secrets.compare_digest(token, self.server.ui_token.encode()) or
                 self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none")):
             return self.reply(403, {"error": "Refresh the board to reconnect its controls."})
-        if self.path not in ("/api/control", "/api/requests"):
+        if self.path not in ("/api/control", "/api/requests", "/api/requests/batch"):
             return self.reply(404, {"error": "not found"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -404,9 +406,12 @@ class BoardHandler(BaseHTTPRequestHandler):
                 require_run(self.server.repo, data.get("run_id"))
                 snapshot = board_snapshot(self.server.repo, "current")
                 controls = snapshot["controls"]
-                if self.path == "/api/requests":
+                if self.path in ("/api/requests", "/api/requests/batch"):
                     if not controls["requests_available"]:
                         raise StateError(controls["reason"])
+                    if self.path.endswith("/batch"):
+                        requests = queue_submission(self.server.repo, data, snapshot["tasks"], batch=True)
+                        return self.reply(200, {"requests": requests, "message": f"Saved {len(requests)} priority requests. Each will be reviewed at a checkpoint."})
                     request = queue_request(self.server.repo, data, snapshot["tasks"])
                     return self.reply(200, {"request": request, "message": "Request saved. The skill will review it at its next checkpoint."})
                 if not controls["available"]:

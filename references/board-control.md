@@ -31,15 +31,25 @@ unimplemented work; it must not extend the deadline.
 | `task` | Add a task with the requested title, area, details, and observable acceptance checks. Use `id: "user-<request UUID>"` and `board_request_id: "<UUID>"`; preserve the UUID across recovery. Set `ready` when within scope or `proposed` when a concrete decision is still needed. |
 | `guidance` | Update the saved focus/constraints and next action, recording the request UUID and the user's intent in the journal. Carry that guidance into subsequent cycles. |
 | `priority` | Find the current task by its exact `task_key`; for a bet use `bets.jsonl`. Record `user_priority` as `high`, `normal`, or `low`, and rank accordingly within the user's scope and focus plan. Do not overwrite severity or fabricate supporting evidence. |
+| `note` | Append `{request_id: "<UUID>", text: "<user text>", at: "<UTC timestamp>"}` to the target's `user_notes`, only if that UUID is absent. Notes can annotate finished current tasks/bets; preserve status, evidence, verification, measurements, and rejection reasons. Acknowledge after saving. |
 | `decision` | Verify that the named item still awaits that decision. An approved ordinary proposal becomes eligible `ready` work; a declined proposal becomes `rejected` with the user's reason. For improve-max, preserve its required characterization/spike gates; approval does not mean a bet has landed or passed measurement. |
 
 Never apply an old request to a similarly named task in another run. Finished targets
-remain finished; explain that follow-up work needs a new task. When a target changed
+remain finished; notes add context, while follow-up work needs a new task. When a target changed
 since submission, explain whether the decision still applies. Conflicting requests are
 handled in order, with the later explicit direction taking precedence where applicable.
 The helper includes `expected_status` for targeted requests: compare it with the current
 ledger before acting. Its run identity, flags, and requests are read under the archival
 lock so they always belong to the same run. Reread at each checkpoint.
+
+Bulk priority changes validate and save 1–50 selected targets atomically. Invalid or stale
+targets reject the whole submission without partial requests. A successful batch creates
+ordinary `priority` requests with independent IDs and responses, not an all-or-nothing
+worker operation. Recheck each target at its checkpoint; decline one that has since
+finished without blocking the others. Browser retry IDs persist with the batch draft,
+including after a lost response. Never apply notes or priorities as verification evidence.
+If a note asks for more implementation, create separate follow-up work under the existing
+scope and gates, retaining the note's request UUID for recovery; do not reopen its source.
 
 ## Acknowledge an actual result
 
@@ -57,6 +67,7 @@ does not mean implementation is finished. The task's normal verification determi
 After interruption, look for its `board_request_id` or journal UUID before applying again,
 then acknowledge the existing result. Repeating the same acknowledgment is idempotent;
 changing an existing response is rejected so history stays truthful.
+For notes, also check `user_notes[].request_id` before appending again after interruption.
 
 `operator.json` holds immutable submitted requests. `board-receipts.json` holds responses.
 Only the helper updates these files, using a shared lock and atomic writes. The board

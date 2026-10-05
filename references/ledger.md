@@ -96,7 +96,8 @@ append-only updates by merging repeated IDs in file order; skill writers should 
 using one canonical row per ID with atomic rewrites so queue queries remain correct.
 See [board.md](board.md) for column meanings and service lifecycle.
 
-Task lifecycle timestamps, IDs, titles, and status labels are bookkeeping for the viewer,
+Task lifecycle timestamps, IDs, titles, status labels, `user_priority`, `focus_priority`,
+`board_request_id`, and `user_notes` are bookkeeping for the viewer,
 not proof of new work. Pair a transition with evidence or verification. The daemon also
 checks `bets.jsonl`, including measurements and actual implementation-piece commits;
 changing a piece's status without evidence does not reset its failure breaker.
@@ -154,6 +155,9 @@ Board submissions live in `operator.json`; acknowledged outcomes live in
 `board-receipts.json`. Consume them at item boundaries using `scripts/improve_control.py`,
 and link created tasks with `board_request_id`. `user_priority` records high/normal/low
 without changing evidence-based severity. The board never writes worker-owned ledgers.
+`user_notes` is an optional array of `{request_id, text, at}` objects for operator context.
+Append each request UUID once, preserving the task's original `note`, status, verification,
+and evidence. User context and priority edits do not satisfy the daemon's progress check.
 `pause.json` belongs to the user and is scoped to the supervisor's immutable `run_id`;
 the supervisor alone writes its `paused` phase. See [board-control.md](board-control.md).
 

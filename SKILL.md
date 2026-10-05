@@ -6,8 +6,9 @@ metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus) in plan mode
   created: 2026-09-05
   origin: Designed to spec in the ~/Code/bonsai session (plan shimmying-roaming-goose.md); daemon added 2026-09-06 after the first 6h run hit ENOSPC
-  version: 1.13.0
+  version: 1.14.0
   changelog: |
+    1.14.0 (2026-10-04) - atomic bulk priority requests, task notes and request threads, run overview with recorded activity and exports, and progress checks that exclude operator bookkeeping
     1.13.0 (2026-10-04) - prioritized worklists, durable browser drafts, bookmarkable views and task links, follow-up requests, session reconnection, and explicit operator-priority ranking
     1.12.0 (2026-10-04) - searchable archived requests, links to resulting tasks and bets, report browsing across runs, stable request pagination, and consistent request checkpoints during archival
     1.11.0 (2026-10-04) - cooperative board pause/resume/stop, durable task and guidance requests, proposal decisions, priorities, request receipts, saved reports, and authenticated local controls
@@ -70,7 +71,7 @@ for lifecycle, task fields, and local commands.
 
 Before selecting work and after each settled item, read pending board requests with the
 installed `scripts/improve_control.py --repo <repo> pending` helper. Apply user task,
-priority, guidance, and proposal decisions at checkpoints; acknowledge only after saving
+priority, guidance, task notes, and proposal decisions at checkpoints; acknowledge only after saving
 the resulting plan/ledger change. Follow [references/board-control.md](references/board-control.md)
 for request handling, idempotent recovery, and cooperative pause/resume. If pause is
 requested during a supervised cycle, settle current work and return a clean checkpoint;
@@ -79,6 +80,10 @@ the supervisor waits without resetting the deadline.
 Preserve `board_request_id` on work created from a request so the board can link it to
 its status and evidence across archived runs. Read only the current run's pending helper
 output when applying requests; archived pending requests are history, not a new work queue.
+Save task notes as deduplicated `user_notes` context without replacing verification or
+reopening finished work. Bulk priorities arrive as individual requests; validate and
+acknowledge each target. Notes, priority changes, and request IDs are bookkeeping, not
+new improvement evidence. Continue discovery and verified work until the deadline.
 
 ## What makes this different from ordinary work
 

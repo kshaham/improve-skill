@@ -8,7 +8,7 @@ function draftKey(descriptor = requestDraft, context = draftContext) {
   return JSON.stringify([
     descriptor.run_id,
     descriptor.type,
-    descriptor.task_key || "",
+    descriptor.task_key || descriptor.task_keys || "",
     descriptor.decision || "",
     context.followup || "",
   ]);
@@ -33,9 +33,23 @@ function savedDrafts() {
     for (const [key, row] of Object.entries(value.items)) {
       if (
         !row?.descriptor ||
-        !["task", "guidance", "priority", "decision"].includes(
+        !["task", "guidance", "priority", "decision", "note"].includes(
           row.descriptor.type,
         ) ||
+        (row.descriptor.task_keys !== undefined &&
+          (row.descriptor.type !== "priority" ||
+            !Array.isArray(row.descriptor.task_keys) ||
+            row.descriptor.task_keys.length < 1 ||
+            row.descriptor.task_keys.length > 50 ||
+            !row.descriptor.task_keys.every(
+              (key) => typeof key === "string" && key.length <= 500,
+            ) ||
+            new Set(row.descriptor.task_keys).size !==
+              row.descriptor.task_keys.length ||
+            (row.retry &&
+              (!Array.isArray(row.retry.ids) ||
+                row.retry.ids.length !== row.descriptor.task_keys.length ||
+                !row.retry.ids.every((id) => typeof id === "string"))))) ||
         !row.context ||
         typeof row.context !== "object" ||
         !row.fields ||
@@ -110,7 +124,7 @@ function saveDraft() {
   if (
     !fields.title &&
     !fields.text &&
-    ["task", "guidance"].includes(requestDraft.type)
+    ["task", "guidance", "note"].includes(requestDraft.type)
   ) {
     delete items[draftKey()];
     storeDrafts(items);
@@ -145,6 +159,9 @@ function restoreDraft(row) {
   draftContext = row.context;
   requestRetry = row.retry;
   $("request-context").textContent = draftContext.text || "Saved request";
+  if (requestDraft.task_keys)
+    $("request-title").textContent =
+      "Set priority for " + requestDraft.task_keys.length + " tasks";
   $("request-task-title").value = row.fields.title;
   $("request-text").value = row.fields.text;
   $("request-area").value = row.fields.area;

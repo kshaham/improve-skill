@@ -105,6 +105,20 @@ class EngineTests(unittest.TestCase):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_user_notes_and_priority_edits_are_not_improvement_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "backlog.jsonl"
+            row = dict(id="a", claim="An existing finding", evidence="Reproduction saved")
+            path.write_text(json.dumps(row) + "\n")
+            before = runtime.evidence_rows(path)
+            row.update(user_priority="high", focus_priority=2, board_request_id="request-uuid",
+                       user_notes=[dict(request_id="note-uuid", text="Please check mobile", at="new")])
+            path.write_text(json.dumps(row) + "\n")
+            self.assertEqual(runtime.evidence_rows(path), before)
+            row["verification"] = "New failing mobile scenario reproduced"
+            path.write_text(json.dumps(row) + "\n")
+            self.assertNotEqual(runtime.evidence_rows(path), before)
+
     def test_lifecycle_edits_do_not_count_as_new_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "backlog.jsonl"

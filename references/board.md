@@ -87,7 +87,7 @@ Search covers task text, files, evidence, and commits across every page. Filters
 by run and area, and History adds an outcome filter. Filter changes return to the first
 page. On older pages, background updates preserve the first visible task when it still
 matches; **Latest** returns to the newest results. Page controls remain visible while
-scrolling. Tab arrows switch Board/History; Enter opens the focused card or row, and
+scrolling. Tab arrows switch Board/History/Overview/Requests; Enter opens the focused card or row, and
 Escape closes its details.
 
 Open a card or row for evidence, acceptance checks, verification, files, and commit
@@ -106,6 +106,32 @@ layouts support priority, update-time, and title sorting. Priority means `user_p
 high/normal/low (absent is normal), then numeric `focus_priority`; sorting does not execute
 work or override the skill's scope and verification gates. Worklist export includes all
 matching active rows, including off-page work.
+
+Worklist checkboxes select up to fifty unfinished current tasks across pages and filters.
+**Select page** toggles that page; the selection count identifies hidden matches. **Change
+selected priorities** lists every target before submission. Selection clears when the run
+changes and drops tasks that finish. The server validates the whole batch before saving;
+each priority request then receives its own checkpoint response. A changed target can
+reject a new batch without saving a subset. Lost-response retries preserve the original IDs.
+
+Task details include linked requests and their responses, ten initially with **Show more**.
+**Add note** submits context for a current task, even when finished. The worker appends it
+to `user_notes` without replacing evidence or reopening work. Archived threads stay
+readable; adding a note requires a current target and an active request-accepting run.
+
+**Overview** uses all tasks and requests in the selected runs, independently of task search,
+area, and priority filters. It shows area totals, active work, completed work, and attention
+counts (blocked/proposed, also included in active). Metrics show high-priority queued tasks,
+pending requests, and completed tasks with nonempty verification entries. This last count
+does not assert that checks passed. Rejected work contributes to totals but not active/done.
+
+Recorded activity uses one saved timestamp per task (completion, update, then creation)
+and each request's submission/response timestamps. It is not a complete audit log and does
+not reconstruct earlier task transitions. Undated tasks remain in totals but are omitted
+from activity, with a notice. Filter task/request events, browse twenty per page, and click
+an event to open its task or request. Live updates preserve an older page's first event.
+Overview JSON export includes summary/area totals and all matching events across pages;
+its activity filter is bookmarkable.
 
 The URL fragment records view filters and layout. **Copy task link** adds its exact task
 key and, for current work, run identity. Links to a removed archive fall back to available
@@ -137,7 +163,8 @@ but preserves these service files and the existing URL. Daemon `--status --json`
 board liveness and its URL without exposing the token.
 
 Run controls always target the current run, even while browsing archived tasks. Task
-actions are available only for unfinished current tasks. A replacement run has a new
+priority/decision actions require unfinished current tasks; notes may target finished
+current work, and follow-up requests may reference any run. A replacement run has a new
 identity, so forms opened before it started are rejected with their drafts intact.
 Requests have stable IDs for safe retry after a lost response. The board shows their
 pending/applied/declined responses in a separate tab. `operator.lock` serializes submissions
