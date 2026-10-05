@@ -76,7 +76,8 @@ the interpretation so later cycles cannot quietly substitute their own goals.
 - `features`, `ui`, and `assets` are opt-in lanes. Enable only the ones requested and
   supported by the target. Map performance/bugs/security to `performance`/`quality`/`security`.
   Enable the other technical lanes as relevant supporting work, honoring explicit exclusions.
-- Rank eligible findings first by the user's priority, then severity × confidence × impact.
+- Rank eligible findings by explicit task-level `user_priority`, then the ordered focus
+  priorities, then severity × confidence × impact; preserve scope and critical-security checks.
   A confirmed critical vulnerability in scope preempts lower-risk work. A reportable issue
   outside the user's scope stays a proposal; it does not authorize edits.
 - Feature and visual findings may be an evidenced gap against the user's stated acceptance

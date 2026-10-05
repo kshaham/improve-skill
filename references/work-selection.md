@@ -20,6 +20,12 @@ running out of ideas does not meet a goal. A blocked goal names its missing capa
 decision and the condition that would make it workable again. Preserve the user's ordering.
 Every candidate links to `focus_priority` and at least one acceptance check or failure.
 
+At a checkpoint, apply board priority requests and acknowledge the saved changes before
+choosing the next eligible item: `high`, then `normal` or absent, then `low`; use the ordered focus
+plan and evidence-based importance. Scope, critical-security preemption, dependencies,
+and verification gates still apply. A high priority cannot make blocked work executable
+or extend the deadline. When bypassing it, record the concrete blocker and next useful work.
+
 Before each refill, look at what the last two generations actually investigated. If a top
 active priority received no scan, give it the next scope before another supporting cleanup.
 If a priority is met, continue on the next active priority; do not raise the completed target

@@ -30,7 +30,11 @@ async function boardJSON(path, options = {}) {
     const data = await response.json();
     if (!response.ok) {
       if (response.status === 403) controlsToken = null;
-      throw new Error(data.error || "The board could not save this action.");
+      const error = new Error(
+        data.error || "The board could not save this action.",
+      );
+      error.status = response.status;
+      throw error;
     }
     return data;
   } finally {
@@ -43,20 +47,28 @@ async function boardAction(path, data) {
     throw new Error(
       "Reconnect the board before sending changes. Your draft is still here.",
     );
-  if (!controlsToken) {
-    const session = await boardJSON("/api/session", {
-      headers: { "X-Improve-Client": "board" },
-    });
-    controlsToken = session.token;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!controlsToken) {
+      const session = await boardJSON("/api/session", {
+        headers: { "X-Improve-Client": "board" },
+      });
+      controlsToken = session.token;
+    }
+    try {
+      return await boardJSON(path, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Improve-Board-Token": controlsToken,
+        },
+        body: JSON.stringify(data),
+      });
+    } catch (error) {
+      // A restarted service rejects the old capability before applying anything.
+      // Refresh it once; never replay timeouts, lost responses, or validation failures.
+      if (error.status !== 403 || attempt === 1) throw error;
+    }
   }
-  return boardJSON(path, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Improve-Board-Token": controlsToken,
-    },
-    body: JSON.stringify(data),
-  });
 }
 
 function feedback(message, error = false) {
@@ -84,6 +96,7 @@ function renderControls() {
     "change-priority",
     "approve-proposal",
     "reject-proposal",
+    "follow-up-task",
   ])
     $(id).disabled = !connected || sending || !controls.requests_available;
   $("open-report").disabled =
@@ -111,6 +124,9 @@ function renderControls() {
   $("requests-count").textContent = countText(pending);
   $("requests-tab").title =
     countText(pending) + " pending requests in selected runs";
+  prepareDrafts();
+  if ($("request-dialog").open) draftStatus();
+  $("discard-draft").disabled = sending;
 }
 
 function filteredRequests() {
@@ -243,11 +259,11 @@ function renderRequests() {
       .focus({ preventScroll: true });
 }
 
-function openRequest(kind, task = null, decision = null) {
+function openRequest(kind, task = null, decision = null, restored = null) {
   requestDraft = {
     type: kind,
     run_id: snapshot.current.control_id || null,
-    task_key: task?.key,
+    task_key: kind === "task" ? undefined : task?.key,
     decision,
   };
   requestRetry = null;
@@ -264,14 +280,35 @@ function openRequest(kind, task = null, decision = null) {
     : kind === "guidance"
       ? "Tell the skill what to focus on, change, or avoid. It will review your guidance before choosing its next task."
       : "Describe a result you want. The skill will turn this request into a task with acceptance checks.";
+  draftContext = {
+    text: $("request-context").textContent,
+    followup: kind === "task" ? task?.key : null,
+  };
   $("request-title-field").hidden = kind !== "task";
   $("request-task-title").required = kind === "task";
   $("request-area-field").hidden = kind !== "task";
   $("request-priority-field").hidden = !["task", "priority"].includes(kind);
   $("request-text").required = kind === "guidance";
   $("request-priority").value = task?.user_priority || "normal";
+  if (kind === "task" && task) {
+    $("request-title").textContent = "Create follow-up task";
+    $("request-task-title").value = ("Follow up: " + task.title).slice(0, 200);
+    $("request-area").value = [...$("request-area").options].some(
+      (option) => option.value === task.area,
+    )
+      ? task.area
+      : "general";
+    $("request-text").value =
+      `Follow-up to ${(task.key + ": " + task.title).slice(0, 2000)}\nRecorded status: ${labels[task.status]}${task.commit ? "\nCommit: " + readable(task.commit).slice(0, 200) : ""}\n\nDesired result:\n`;
+    draftContext.text =
+      "Create a separate task in the current run. The original task and its evidence stay unchanged.";
+    $("request-context").textContent = draftContext.text;
+  }
+  const saved = restored || savedDrafts()[draftKey()];
+  if (saved) restoreDraft(saved);
   if (task) $("task-dialog").close();
   $("request-dialog").showModal();
+  draftStatus();
   (kind === "task"
     ? $("request-task-title")
     : kind === "priority"
@@ -295,11 +332,13 @@ async function submitRequest(event) {
   if (requestRetry?.signature !== signature)
     requestRetry = { signature, id: crypto.randomUUID() };
   payload.id = requestRetry.id;
+  saveDraft();
   sending = true;
   renderControls();
   $("request-error").hidden = true;
   try {
     const result = await boardAction("/api/requests", payload);
+    forgetDraft();
     $("request-dialog").close();
     requestOffset = 0;
     requestAnchor = null;
@@ -340,6 +379,7 @@ async function controlRun(action, runId) {
 }
 
 function taskControls(task) {
+  $("follow-up-task").onclick = () => openRequest("task", task);
   const editable = task.run_id === "current" && !FINISHED.has(task.status);
   $("task-controls").hidden = !editable;
   $("approve-proposal").hidden = $("reject-proposal").hidden =
@@ -405,6 +445,7 @@ function initControls() {
     requestOffset = 0;
     requestAnchor = null;
     renderRequests();
+    writeViewLocation();
   });
   for (const [id, direction] of [
     ["request-prev", -1],
@@ -467,4 +508,5 @@ function initControls() {
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
+  initDrafts();
 }

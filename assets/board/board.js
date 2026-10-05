@@ -53,10 +53,13 @@ function filteredTasks() {
   return snapshot.tasks.filter(
     (task) =>
       ($("area").value === "all" || task.area === $("area").value) &&
+      ($("priority-filter").value === "all" ||
+        userPriority(task) === $("priority-filter").value) &&
       (!query || readable(task).toLowerCase().includes(query)),
   );
 }
 function openTask(task) {
+  if (selectedTask !== task.key) $("task-link-field").hidden = true;
   selectedTask = task.key;
   taskControls(task);
   $("detail-meta").textContent = [task.id, labels[task.status], task.area].join(
@@ -110,6 +113,7 @@ function openTask(task) {
       }),
   );
   if (!$("task-dialog").open) $("task-dialog").showModal();
+  writeViewLocation();
 }
 function taskCard(task) {
   const card = element("button", "task-card");
@@ -143,7 +147,10 @@ function taskCard(task) {
   return card;
 }
 function recordedDate(task) {
-  for (const field of ["completed_at", "updated_at", "created_at"]) {
+  const fields = FINISHED.has(task.status)
+    ? ["completed_at", "updated_at", "created_at"]
+    : ["updated_at", "created_at", "completed_at"];
+  for (const field of fields) {
     const epoch = Date.parse(task[field]);
     if (Number.isFinite(epoch)) return { epoch, field };
   }
@@ -190,7 +197,7 @@ function taskRow(task) {
   const outcome = element(
     "span",
     "row-outcome " + task.status,
-    task.status === "done" ? "Completed" : "Rejected",
+    task.status === "done" ? "Completed" : labels[task.status],
   );
   const area = element("span", "row-area", task.area);
   const recorded = recordedDate(task),
@@ -218,7 +225,19 @@ function taskRow(task) {
       ? task.commit.slice(0, 7)
       : "—",
   );
-  row.append(title, outcome, area, date, commit);
+  row.append(
+    title,
+    outcome,
+    area,
+    date,
+    FINISHED.has(task.status)
+      ? commit
+      : element(
+          "span",
+          "row-priority " + userPriority(task),
+          userPriority(task),
+        ),
+  );
   row.addEventListener("click", () => openTask(task));
   item.append(row);
   return item;
@@ -321,7 +340,7 @@ function renderHistory(tasks) {
 function renderCards() {
   if (!snapshot) return;
   const tasks = filteredTasks(),
-    active = tasks.filter((task) => !FINISHED.has(task.status));
+    active = orderedWork(tasks.filter((task) => !FINISHED.has(task.status)));
   $("visible-count").textContent = countText(tasks.length) + " matching tasks";
   $("board-count").textContent = countText(active.length);
   $("history-count").textContent = countText(tasks.length - active.length);
@@ -329,6 +348,8 @@ function renderCards() {
   $("history-view").hidden = activeView !== "history";
   $("requests-view").hidden = activeView !== "requests";
   $("area-filter").hidden = activeView === "requests";
+  $("priority-filter-label").hidden = activeView === "requests";
+  $("work-sort-note").hidden = $("work-sort").value !== "priority";
   $("search").placeholder =
     activeView === "requests"
       ? "Search requests and responses…"
@@ -344,7 +365,9 @@ function renderCards() {
       ? "Export all matching requests, including every page"
       : activeView === "history"
         ? "Export all matching history, including every page"
-        : "Export all matching tasks, including finished work";
+        : $("work-layout").value === "rows"
+          ? "Export every matching active task, including every worklist page"
+          : "Export all matching tasks, including finished work";
   for (const view of ["board", "history", "requests"]) {
     $(view + "-tab").setAttribute("aria-selected", String(activeView === view));
     $(view + "-tab").tabIndex = activeView === view ? 0 : -1;
@@ -355,14 +378,28 @@ function renderCards() {
     $("empty").hidden = snapshot.tasks.length !== 0;
     $("active-empty").hidden = !snapshot.tasks.length || active.length !== 0;
     $("active-empty-note").textContent =
-      $("search").value || $("area").value !== "all"
+      $("search").value ||
+      $("area").value !== "all" ||
+      $("priority-filter").value !== "all"
         ? "No active tasks match these filters. Finished matches are available in History."
         : "Completed and rejected work is available in History.";
-    $("board").hidden = !active.length;
-    renderBoard(active);
+    const rows = $("work-layout").value === "rows";
+    $("board").hidden = !active.length || rows;
+    $("worklist").hidden = !rows;
+    if (rows) {
+      $("board").replaceChildren();
+      cardSignature = "";
+      renderWorklist(active);
+    } else {
+      $("work-list").replaceChildren();
+      workSignature = "";
+      renderBoard(active);
+    }
     renderRecent(tasks);
   } else {
     $("board").replaceChildren();
+    $("work-list").replaceChildren();
+    workSignature = "";
     $("recent-list").replaceChildren();
     cardSignature = recentSignature = "";
     if (activeView === "history") renderHistory(tasks);
@@ -372,6 +409,7 @@ function renderCards() {
       renderRequests();
     }
   }
+  writeViewLocation();
 }
 function resetHistory() {
   historyOffset = 0;
@@ -387,6 +425,7 @@ function selectView(view, outcome) {
 }
 function changeFilters() {
   resetHistory();
+  resetWork();
   requestOffset = 0;
   requestAnchor = null;
   renderCards();
@@ -453,6 +492,17 @@ function renderHealth(run) {
   $("run-notice").textContent = notices.join("\n");
 }
 function render(data) {
+  if (
+    snapshot &&
+    snapshot.current.control_id !== data.current.control_id &&
+    selectedTask?.startsWith("current:")
+  ) {
+    $("task-dialog").close();
+    selectedTask = null;
+    viewNotice(
+      "The current run changed. Reopen a task from the updated board.",
+    );
+  }
   snapshot = data;
   $("repo").textContent = data.repo;
   document.title = data.repo + " · Improve board";
@@ -466,6 +516,7 @@ function render(data) {
       .sort()
       .map((area) => [area, area]),
   ]);
+  finishViewRestore();
   $("total").textContent = countText(data.tasks.length);
   $("working").textContent = countText(data.counts.in_progress);
   $("completed").textContent = countText(data.counts.done);
@@ -556,6 +607,16 @@ async function refresh() {
       { cache: "no-store", signal: controller.signal },
     );
     const data = await response.json();
+    if ($("run").value !== requestedRun) return;
+    if (!response.ok && data.error === "unknown run") {
+      $("run").value = "all";
+      pendingView = null;
+      viewNotice(
+        "The bookmarked run is no longer available. Showing all available runs.",
+      );
+      writeViewLocation();
+      return;
+    }
     if (!response.ok)
       throw new Error(data.error || "Unable to read the ledger");
     connected = true;
@@ -586,6 +647,7 @@ $("search").addEventListener("input", changeFilters);
 $("area").addEventListener("change", changeFilters);
 $("run").addEventListener("change", () => {
   resetHistory();
+  resetWork();
   requestOffset = 0;
   requestAnchor = null;
   refresh();
@@ -631,6 +693,8 @@ $("task-dialog").addEventListener("click", (event) => {
 });
 $("task-dialog").addEventListener("close", () => {
   selectedTask = null;
+  $("task-link-field").hidden = true;
+  writeViewLocation();
 });
 $("export").addEventListener("click", () => {
   if (!snapshot) return;
@@ -644,7 +708,15 @@ $("export").addEventListener("click", () => {
             ? { requests: filteredRequests() }
             : {
                 tasks:
-                  activeView === "history" ? historyTasks() : filteredTasks(),
+                  activeView === "history"
+                    ? historyTasks()
+                    : $("work-layout").value === "rows"
+                      ? orderedWork(
+                          filteredTasks().filter(
+                            (task) => !FINISHED.has(task.status),
+                          ),
+                        )
+                      : filteredTasks(),
               }),
         },
         null,
@@ -666,4 +738,5 @@ document.addEventListener("visibilitychange", () => {
 });
 setInterval(remaining, 1000);
 initControls();
+initWorkflow();
 refresh();

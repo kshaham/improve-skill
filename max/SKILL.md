@@ -6,7 +6,7 @@ metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus)
   created: 2026-09-17
   parent: improve
-  version: 0.7.0
+  version: 0.8.0
   install: symlink improve-max to this directory beside the improve skill in the host's skills folder
 ---
 
@@ -133,6 +133,8 @@ approval preserves this skill's characterization and spike gates. A requested pa
 settles the current piece and returns to the supervisor; the original deadline stays fixed.
 Retain `board_request_id` on requested bets so their archived requests link to measured
 results. Archived pending requests are historical; consume only the current helper output.
+Rank eligible bets by explicit `user_priority` before focus order and expected measured
+gain. A priority change does not skip characterization, spike, or verification gates.
 
 ## Preflight - the first day is mostly this
 

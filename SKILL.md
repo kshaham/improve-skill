@@ -6,8 +6,9 @@ metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus) in plan mode
   created: 2026-09-05
   origin: Designed to spec in the ~/Code/bonsai session (plan shimmying-roaming-goose.md); daemon added 2026-09-06 after the first 6h run hit ENOSPC
-  version: 1.12.0
+  version: 1.13.0
   changelog: |
+    1.13.0 (2026-10-04) - prioritized worklists, durable browser drafts, bookmarkable views and task links, follow-up requests, session reconnection, and explicit operator-priority ranking
     1.12.0 (2026-10-04) - searchable archived requests, links to resulting tasks and bets, report browsing across runs, stable request pagination, and consistent request checkpoints during archival
     1.11.0 (2026-10-04) - cooperative board pause/resume/stop, durable task and guidance requests, proposal decisions, priorities, request receipts, saved reports, and authenticated local controls
     1.10.0 (2026-10-04) - compact completed-history rows, four working columns, paginated searchable history, stable live browsing, keyboard navigation, and large-history browser checks
@@ -283,7 +284,8 @@ against the user’s acceptance checks. Use `references/work-selection.md` when 
 work or deciding whether a priority is met, blocked, or still active.
 
 Filter by user scope and guardrails first. A confirmed critical vulnerability in scope
-preempts lower-risk work. Otherwise rank by the user’s ordered focus priorities, then by
+preempts lower-risk work. Otherwise honor explicit task-level `user_priority` first
+(`high`, then `normal` or absent, then `low`), then the user’s ordered focus priorities, then by
 
     severity x confidence x blast-radius
 

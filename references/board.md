@@ -101,6 +101,18 @@ they produce warnings rather than breaking the browser's entire task response.
 
 ## State and boundaries
 
+Switch **View** from Columns to Worklist to browse active work in twenty-row pages. Both
+layouts support priority, update-time, and title sorting. Priority means `user_priority`
+high/normal/low (absent is normal), then numeric `focus_priority`; sorting does not execute
+work or override the skill's scope and verification gates. Worklist export includes all
+matching active rows, including off-page work.
+
+The URL fragment records view filters and layout. **Copy task link** adds its exact task
+key and, for current work, run identity. Links to a removed archive fall back to available
+runs; links to a replaced current run never silently open reused IDs. These links require
+the local board and the same port. A task's **Create follow-up** action starts a separate
+request with its original context, leaving completed evidence untouched.
+
 The **Current run** health panel shows the saved engine/model, cycle/phase, work and
 supervisor checkpoint times, account-limit retry, consecutive failures, and pending final
 report. Checkpoint timestamps are saved observations, not proof of continuous activity.

@@ -935,6 +935,88 @@ dialog h2 {
   background: white;
   color: var(--ink);
 }
+.work-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.work-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.work-toolbar select {
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  color: var(--ink);
+}
+.filters {
+  flex-wrap: wrap;
+}
+.toolbar {
+  flex-wrap: wrap;
+}
+.toolbar .search {
+  min-width: min(280px, 100%);
+}
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+#task-link-field {
+  font-size: 12px;
+  color: var(--muted);
+}
+#task-link {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.row-priority {
+  font-size: 11px;
+  text-transform: capitalize;
+  color: var(--muted);
+}
+.row-priority.high {
+  font-weight: 650;
+  color: #995326;
+}
+.row-outcome.in_progress {
+  background: #efecff;
+  color: #7053bc;
+}
+.row-outcome.blocked,
+.row-outcome.proposed {
+  background: #fff3e2;
+  color: #995326;
+}
+#resume-draft {
+  margin-top: 12px;
+}
+@media (max-width: 700px) {
+  .work-toolbar > span {
+    flex-basis: 100%;
+  }
+  #work-list .row-priority {
+    display: inline;
+    grid-column: auto;
+  }
+  #work-list .row-date {
+    display: none;
+  }
+  #request-form .dialog-actions {
+    flex-wrap: wrap;
+  }
+}
 .task-rows {
   border: 1px solid var(--line);
   background: white;
@@ -1067,6 +1149,7 @@ dialog h2 {
     grid-template-columns: minmax(0, 1fr) 90px 85px 100px;
     gap: 12px;
   }
+  #work-list .row-date,
   .row-commit,
   .row-head > :last-child {
     display: none;
