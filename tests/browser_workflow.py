@@ -60,7 +60,10 @@ def check_workflow(page, repo, tasks, write_tasks, artifacts):
     # A delayed failure from the previous bookmark cannot replace the newer selection.
     delayed = []
     page.route("**/api/board?run=missing-hold", lambda route: delayed.append(route))
-    page.evaluate("location.hash = 'run=missing-hold'")
+    page.evaluate("""() => {
+        location.hash = 'run=missing-hold';
+        document.getElementById('task-dialog').dispatchEvent(new Event('close'));
+    }""")
     expect(page.locator("#run")).to_have_value("missing-hold")
     page.wait_for_timeout(100)
     assert delayed
@@ -82,10 +85,10 @@ def check_workflow(page, repo, tasks, write_tasks, artifacts):
     page.screenshot(path=str(artifacts / "worklist-desktop.png"), full_page=True)
     for width in (768, 1024):
         page.set_viewport_size({"width": width, "height": 900})
-        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), page.evaluate("({width:innerWidth,scroll:document.documentElement.scrollWidth,body:document.body.scrollWidth,x:scrollX,overflow:[...document.querySelectorAll('body *')].filter(x=>x.getBoundingClientRect().right>innerWidth-.5).slice(0,8).map(x=>[x.id||x.className,x.getBoundingClientRect().right])})")
     page.set_viewport_size({"width": 390, "height": 844})
     page.screenshot(path=str(artifacts / "worklist-mobile.png"), full_page=True)
-    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), page.evaluate("({width:innerWidth,scroll:document.documentElement.scrollWidth,body:document.body.scrollWidth,x:scrollX,overflow:[...document.querySelectorAll('body *')].filter(x=>x.getBoundingClientRect().right>innerWidth-.5).slice(0,12).map(x=>[x.id||x.className,x.getBoundingClientRect().right])})")
     # A broken bookmark must recover, while reused current IDs cannot open a different run's task.
     page.goto(link.replace("run=current", "run=removed-archive"))
     expect(page.locator("#connection")).to_have_text("Board connected")

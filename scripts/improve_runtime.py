@@ -24,7 +24,7 @@ import uuid
 if __name__ == "__main__":
     sys.modules.setdefault("improve_runtime", sys.modules[__name__])
 
-VERSION = "1.13.0"
+VERSION = "1.14.0"
 HOST_MARKERS = {"codex": ("CODEX_THREAD_ID", "CODEX_CI"),
                 "claude": ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
 SANDBOX_MODES = ("read-only", "workspace-write", "danger-full-access")
@@ -243,7 +243,8 @@ def evidence_rows(path):
     if not path.exists():
         return set()
     ignored = {"at", "timestamp", "created_at", "updated_at", "started_at", "completed_at",
-               "ended_at", "placed_at", "generation", "next_scope", "id", "title", "status"}
+               "ended_at", "placed_at", "generation", "next_scope", "id", "title", "status",
+               "user_priority", "focus_priority", "board_request_id", "user_notes"}
     fingerprints = set()
     with path.open() as stream:
         for number, line in enumerate(stream, 1):

@@ -14,6 +14,67 @@ import improve_control as control
 
 
 class ControlTests(LedgerFixture):
+    def batch(self, keys, **updates):
+        return dict(run_id=control.run_identity(self.repo), priority="high", text="Focus on these tasks",
+                    items=[dict(id=str(uuid.uuid4()), task_key=key) for key in keys], **updates)
+
+    def test_batch_priority_saves_atomically_and_retries_after_targets_finish(self):
+        self.rows([dict(id="a", status="ready"), dict(id="b", status="proposed")])
+        before = (self.state / "backlog.jsonl").read_bytes()
+        payload = self.batch(["current:a", "current:b"])
+        response = self.http("/api/requests/batch", payload)
+        self.assertEqual(len(response["requests"]), 2)
+        self.assertEqual({row["priority"] for row in response["requests"]}, {"high"})
+        self.assertEqual((self.state / "backlog.jsonl").read_bytes(), before)
+        self.rows([dict(id="a", status="done"), dict(id="b", status="rejected")])
+        self.assertEqual(self.http("/api/requests/batch", payload), response)
+        self.assertEqual(len(control.request_view(self.repo)), 2)
+        first = response["requests"][0]["id"]
+        control.acknowledge(self.repo, first, "applied", "Priority recorded before completion")
+        self.assertEqual([row["status"] for row in control.request_view(self.repo)], ["applied", "pending"])
+        self.rejected("/api/requests/batch", {**payload, "priority": "low"})
+
+    def test_batch_rejects_invalid_targets_and_duplicate_ids_without_partial_writes(self):
+        self.rows([dict(id="a", status="ready"), dict(id="b", status="done")])
+        self.http("/api/requests", self.request_data())
+        before = (self.state / "operator.json").read_bytes()
+        for keys in (["current:a", "current:b"], ["current:a", "older:b"], ["current:a", "current:missing"], ["current:a"] * 2, [], ["current:a"] * 51):
+            self.rejected("/api/requests/batch", self.batch(keys))
+            self.assertEqual((self.state / "operator.json").read_bytes(), before)
+        data = self.batch(["current:a", "current:a"])
+        data["items"][1]["id"] = data["items"][0]["id"]
+        for payload in (data, {**self.batch(["current:a"]), "run_id": "stale"}, {**self.batch(["current:a"]), "items": [None]}):
+            self.rejected("/api/requests/batch", payload)
+            self.assertEqual((self.state / "operator.json").read_bytes(), before)
+        self.rejected("/api/requests/batch", self.batch(["current:a"]), code=403, headers={"Origin": "https://outside.invalid"})
+
+    def test_batch_capacity_and_concurrent_submissions_preserve_all_requests(self):
+        self.rows([dict(id="a", status="ready"), dict(id="b", status="ready")])
+        existing = [dict(id=str(uuid.uuid4()), type="guidance", text="Existing") for _ in range(999)]
+        board.atomic_json(self.state / "operator.json", {"requests": existing})
+        before = (self.state / "operator.json").read_bytes()
+        self.rejected("/api/requests/batch", self.batch(["current:a", "current:b"]))
+        self.assertEqual((self.state / "operator.json").read_bytes(), before)
+        (self.state / "operator.json").unlink()
+        payloads = [self.batch(["current:a", "current:b"]) for _ in range(10)]
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            list(executor.map(lambda data: self.http("/api/requests/batch", data), payloads))
+        self.assertEqual(len(control.request_view(self.repo)), 20)
+
+    def test_task_notes_preserve_finished_evidence_and_link_to_the_target(self):
+        self.rows([dict(id="a", status="done", verification="Actual test passed", note="Original decision")])
+        before = (self.state / "backlog.jsonl").read_bytes()
+        payload = self.request_data("note", task_key="current:a")
+        self.http("/api/requests", payload)
+        self.assertEqual((self.state / "backlog.jsonl").read_bytes(), before)
+        row = self.http("/api/board")["requests"][0]
+        self.assertEqual(row["task_keys"], ["current:a"])
+        self.assertEqual(row["expected_status"], "done")
+        self.assertEqual(control.request_view(self.repo)[0]["type"], "note")
+        for key in ("archived:a", "current:missing"):
+            self.rejected("/api/requests", self.request_data("note", task_key=key))
+        self.rejected("/api/requests", {**self.request_data("note", task_key="current:a"), "text": ""})
+
     def setUp(self):
         super().setUp()
         self.info = board.start_board(self.repo, 0)

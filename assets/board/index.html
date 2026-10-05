@@ -9,6 +9,8 @@
     <script src="/controls.js" defer></script>
     <script src="/workflow.js" defer></script>
     <script src="/drafts.js" defer></script>
+    <script src="/triage.js" defer></script>
+    <script src="/overview.js" defer></script>
     <script src="/board.js" defer></script>
   </head>
   <body>
@@ -172,6 +174,16 @@
           History <span id="history-count" class="view-count">0</span>
         </button>
         <button
+          id="overview-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="overview-view"
+          tabindex="-1"
+        >
+          Overview
+        </button>
+        <button
           id="requests-tab"
           type="button"
           role="tab"
@@ -223,6 +235,14 @@
         </div>
         <section id="board" class="board" aria-label="Kanban board"></section>
         <section id="worklist" aria-label="Active worklist" hidden>
+          <div class="bulk-toolbar" aria-label="Selected tasks">
+            <span id="selection-count" role="status">0 selected</span
+            ><button id="select-page" type="button">Select page</button
+            ><button id="clear-selection" type="button">Clear selection</button
+            ><button id="bulk-priority" type="button" disabled>
+              Change selected priorities
+            </button>
+          </div>
           <nav class="history-pagination" aria-label="Worklist pages">
             <span id="work-range" role="status"></span>
             <div>
@@ -347,6 +367,69 @@
           No requests yet. Add a task or send guidance above.
         </p>
       </section>
+      <section
+        id="overview-view"
+        role="tabpanel"
+        aria-labelledby="overview-tab"
+        hidden
+      >
+        <div class="history-heading">
+          <div>
+            <h2>Run overview</h2>
+            <p>Task totals and recorded activity for the selected runs.</p>
+          </div>
+        </div>
+        <div class="overview-metrics">
+          <div>
+            <span>High-priority tasks queued</span
+            ><strong id="overview-priority">0</strong>
+          </div>
+          <div>
+            <span>Requests awaiting a response</span
+            ><strong id="overview-pending">0</strong>
+          </div>
+          <div>
+            <span>Done tasks with a verification entry</span
+            ><strong id="overview-verification">0 / 0</strong>
+          </div>
+        </div>
+        <h3>Work by area</h3>
+        <div class="overview-table">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Area</th>
+                <th scope="col">Total</th>
+                <th scope="col">Active</th>
+                <th scope="col">Done</th>
+                <th scope="col">Needs attention</th>
+              </tr>
+            </thead>
+            <tbody id="area-summary"></tbody>
+          </table>
+        </div>
+        <p id="overview-empty" hidden>No recorded tasks in these runs.</p>
+        <div class="history-heading">
+          <h3>Recorded activity</h3>
+          <label class="outcome-filter"
+            >Show<select id="activity-type">
+              <option value="all">All activity</option>
+              <option value="task">Tasks</option>
+              <option value="request">Requests</option>
+            </select></label
+          >
+        </div>
+        <p id="overview-note" class="dialog-context"></p>
+        <nav class="history-pagination" aria-label="Activity pages">
+          <span id="activity-range" role="status"></span>
+          <div>
+            <button id="activity-first" type="button">Latest</button
+            ><button id="activity-prev" type="button">← Previous</button
+            ><button id="activity-next" type="button">Next →</button>
+          </div>
+        </nav>
+        <div id="activity-list" class="activity-list"></div>
+      </section>
       <section id="discovery-section" class="discovery-section" hidden>
         <div class="section-heading">
           <h2>Recent investigations</h2>
@@ -372,6 +455,7 @@
       </div>
       <h2 id="detail-title"></h2>
       <div class="task-actions">
+        <button id="add-task-note" type="button">Add note</button>
         <button id="copy-task-link" type="button">Copy task link</button
         ><button id="follow-up-task" type="button">Create follow-up</button>
       </div>
@@ -395,6 +479,16 @@
         </p>
       </section>
       <div id="detail-content"></div>
+      <section
+        id="task-thread-section"
+        hidden
+        aria-labelledby="task-thread-title"
+      >
+        <h3 id="task-thread-title">Requests for this task</h3>
+        <p id="task-thread-count" class="dialog-context"></p>
+        <div id="task-thread"></div>
+        <button id="task-thread-more" type="button">Show more requests</button>
+      </section>
     </dialog>
     <dialog id="request-dialog" aria-labelledby="request-title">
       <form id="request-form">
