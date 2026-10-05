@@ -76,6 +76,17 @@ when updating ledgers; an applied receipt alone does not imply the task is done.
 links mean no matching work was recorded. Damaged archived request files show a warning
 without disabling the current run's controls.
 
+**Create follow-up** submits a new task request with the source task key/status and commit
+in its details. Preserve that context and create separate work with acceptance checks;
+do not reopen or overwrite the source task merely because the form came from its details.
+
+Unsubmitted drafts live only in this browser, separated by repository, run, request type,
+target, and proposal decision. They are not user requests until explicitly submitted.
+Closing keeps a draft; Resume draft opens the most recently edited one. Submission clears
+that draft; Discard draft removes it. A stale draft can be copied into a new request but
+must never be silently retargeted to a new run. Retry IDs persist across reloads so a
+response lost after a successful save can be retried without creating duplicate work.
+
 The **Reports** button lists saved final reports for all runs. It starts with the selected
 run's report when available, otherwise the current or latest archived report. Reports are
 bounded to 512 KiB, displayed as plain text, and downloadable with the run in the filename.

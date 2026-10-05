@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import improve_board as board  # noqa: E402
 from browser_controls import check_controls  # noqa: E402
+from browser_workflow import check_workflow  # noqa: E402
 
 
 def check_large_history(page, tasks, write_tasks, artifacts):
@@ -278,6 +279,7 @@ def main():
                 expect(page.locator(".task-card")).to_have_count(0)
                 check_large_history(page, tasks, write_tasks, artifacts)
                 check_controls(page, repo, tasks, write_tasks, artifacts)
+                check_workflow(page, repo, tasks, write_tasks, artifacts)
                 assert not errors, errors
                 browser.close()
         finally:
