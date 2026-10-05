@@ -2,7 +2,8 @@
 let workOffset = 0,
   workAnchor = null,
   workSignature = "",
-  pendingView = null;
+  pendingView = null,
+  viewFragment = location.hash;
 const viewFields = {
   run: ["run", "all"],
   area: ["area", "all"],
@@ -12,6 +13,7 @@ const viewFields = {
   sort: ["work-sort", "priority"],
   outcome: ["history-outcome", "all"],
   status: ["request-status", "all"],
+  activity: ["activity-type", "all"],
 };
 
 function userPriority(task) {
@@ -60,6 +62,7 @@ function renderWorklist(rows) {
       Math.floor((rows.length - 1) / PAGE_SIZE) * PAGE_SIZE,
     );
   const page = rows.slice(workOffset, workOffset + PAGE_SIZE);
+  workPageKeys = page.filter(selectableTask).map((task) => task.key);
   workAnchor = workOffset > 0 ? page[0]?.key : null;
   $("work-range").textContent = rows.length
     ? `${countText(workOffset + 1)}–${countText(workOffset + page.length)} of ${countText(rows.length)} active tasks`
@@ -79,7 +82,9 @@ function viewNotice(message) {
 }
 
 function writeViewLocation() {
-  if (pendingView) return;
+  // A new bookmark may be waiting for its hashchange event. Delayed dialog
+  // close events and refreshes must not replace it with the previous view.
+  if (pendingView || location.hash !== viewFragment) return;
   const params = new URLSearchParams();
   if (activeView !== "board") params.set("view", activeView);
   for (const [key, [id, fallback]] of Object.entries(viewFields)) {
@@ -97,14 +102,16 @@ function writeViewLocation() {
     "",
     location.pathname + location.search + (fragment ? "#" + fragment : ""),
   );
+  viewFragment = location.hash;
 }
 
 function readViewLocation() {
+  viewFragment = location.hash;
   pendingView = new URLSearchParams(location.hash.slice(1));
   viewNotice("");
   if ($("task-dialog").open) $("task-dialog").close();
   selectedTask = null;
-  activeView = ["board", "history", "requests"].includes(
+  activeView = ["board", "history", "overview", "requests"].includes(
     pendingView.get("view"),
   )
     ? pendingView.get("view")
@@ -127,6 +134,8 @@ function readViewLocation() {
     if ($(id).value !== value) $(id).value = fallback;
   }
   resetHistory();
+  resetActivity();
+  clearSelection();
   resetWork();
   requestOffset = 0;
   requestAnchor = null;
@@ -170,6 +179,7 @@ async function copyTaskLink() {
 }
 
 function initWorkflow() {
+  initOverview();
   readViewLocation();
   window.addEventListener("hashchange", () => {
     readViewLocation();

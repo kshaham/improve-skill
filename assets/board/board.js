@@ -62,6 +62,7 @@ function openTask(task) {
   if (selectedTask !== task.key) $("task-link-field").hidden = true;
   selectedTask = task.key;
   taskControls(task);
+  renderTaskThread(task);
   $("detail-meta").textContent = [task.id, labels[task.status], task.area].join(
     " · ",
   );
@@ -73,6 +74,20 @@ function openTask(task) {
     ["Acceptance checks", task.acceptance],
     ["Verification", task.verification || task.last_verification],
     ["Notes", task.note],
+    [
+      "User notes",
+      Array.isArray(task.user_notes)
+        ? task.user_notes
+            .map((note) =>
+              typeof note?.text === "string"
+                ? (Number.isFinite(Date.parse(note.at))
+                    ? new Date(note.at).toLocaleString() + "\n"
+                    : "") + note.text
+                : readable(note),
+            )
+            .join("\n\n")
+        : task.user_notes,
+    ],
     ["Failure scenario", task.failure],
     ["Counter-scenario", task.counter],
     [
@@ -243,12 +258,23 @@ function taskRow(task) {
   return item;
 }
 function replaceRows(id, tasks) {
+  const focusSelector = document.activeElement?.classList.contains(
+    "task-select",
+  )
+    ? ".task-select"
+    : ".task-row";
   const focus = $(id).contains(document.activeElement)
     ? document.activeElement.dataset.key
     : null;
-  $(id).replaceChildren(...tasks.map(taskRow));
+  $(id).replaceChildren(
+    ...tasks.map((task) => {
+      const item = taskRow(task);
+      if (id === "work-list") selectTaskRow(item, task);
+      return item;
+    }),
+  );
   if (focus)
-    [...$(id).querySelectorAll(".task-row")]
+    [...$(id).querySelectorAll(focusSelector)]
       .find((row) => row.dataset.key === focus)
       ?.focus({ preventScroll: true });
 }
@@ -347,8 +373,13 @@ function renderCards() {
   $("board-view").hidden = activeView !== "board";
   $("history-view").hidden = activeView !== "history";
   $("requests-view").hidden = activeView !== "requests";
-  $("area-filter").hidden = activeView === "requests";
-  $("priority-filter-label").hidden = activeView === "requests";
+  $("overview-view").hidden = activeView !== "overview";
+  $("area-filter").hidden = ["requests", "overview"].includes(activeView);
+  $("priority-filter-label").hidden = ["requests", "overview"].includes(
+    activeView,
+  );
+  $("search").closest("label").hidden = activeView === "overview";
+  $("clear-filters").hidden = activeView === "overview";
   $("work-sort-note").hidden = $("work-sort").value !== "priority";
   $("search").placeholder =
     activeView === "requests"
@@ -359,16 +390,22 @@ function renderCards() {
     activeView === "requests" ? "Search requests" : "Search tasks",
   );
   $("export").textContent =
-    activeView === "requests" ? "Export requests ↗" : "Export tasks ↗";
-  $("export").title =
     activeView === "requests"
-      ? "Export all matching requests, including every page"
-      : activeView === "history"
-        ? "Export all matching history, including every page"
-        : $("work-layout").value === "rows"
-          ? "Export every matching active task, including every worklist page"
-          : "Export all matching tasks, including finished work";
-  for (const view of ["board", "history", "requests"]) {
+      ? "Export requests ↗"
+      : activeView === "overview"
+        ? "Export overview ↗"
+        : "Export tasks ↗";
+  $("export").title =
+    activeView === "overview"
+      ? "Export area totals and all matching recorded activity"
+      : activeView === "requests"
+        ? "Export all matching requests, including every page"
+        : activeView === "history"
+          ? "Export all matching history, including every page"
+          : $("work-layout").value === "rows"
+            ? "Export every matching active task, including every worklist page"
+            : "Export all matching tasks, including finished work";
+  for (const view of ["board", "history", "overview", "requests"]) {
     $(view + "-tab").setAttribute("aria-selected", String(activeView === view));
     $(view + "-tab").tabIndex = activeView === view ? 0 : -1;
   }
@@ -406,10 +443,12 @@ function renderCards() {
     else {
       $("history-list").replaceChildren();
       historySignature = "";
-      renderRequests();
+      if (activeView === "overview") renderOverview();
+      else renderRequests();
     }
   }
   writeViewLocation();
+  renderSelection();
 }
 function resetHistory() {
   historyOffset = 0;
@@ -646,6 +685,8 @@ async function refresh() {
 $("search").addEventListener("input", changeFilters);
 $("area").addEventListener("change", changeFilters);
 $("run").addEventListener("change", () => {
+  clearSelection();
+  resetActivity();
   resetHistory();
   resetWork();
   requestOffset = 0;
@@ -673,14 +714,15 @@ $("history-next").addEventListener("click", () => historyPage(1));
 document.querySelector(".view-tabs").addEventListener("keydown", (event) => {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
   event.preventDefault();
-  const views = ["board", "history", "requests"];
+  const views = ["board", "history", "overview", "requests"];
   const view =
     event.key === "Home"
       ? "board"
       : event.key === "End"
         ? "requests"
         : views[
-            (views.indexOf(activeView) + (event.key === "ArrowRight" ? 1 : 2)) %
+            (views.indexOf(activeView) +
+              (event.key === "ArrowRight" ? 1 : views.length - 1)) %
               views.length
           ];
   selectView(view);
@@ -692,12 +734,14 @@ $("task-dialog").addEventListener("click", (event) => {
   if (event.target === $("task-dialog")) $("task-dialog").close();
 });
 $("task-dialog").addEventListener("close", () => {
+  if ($("task-dialog").open) return;
   selectedTask = null;
   $("task-link-field").hidden = true;
   writeViewLocation();
 });
 $("export").addEventListener("click", () => {
   if (!snapshot) return;
+  if (activeView === "overview") return exportOverview();
   const blob = new Blob(
     [
       JSON.stringify(

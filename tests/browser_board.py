@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import improve_board as board  # noqa: E402
 from browser_controls import check_controls  # noqa: E402
 from browser_workflow import check_workflow  # noqa: E402
+from browser_triage import check_triage  # noqa: E402
 
 
 def check_large_history(page, tasks, write_tasks, artifacts):
@@ -280,6 +281,7 @@ def main():
                 check_large_history(page, tasks, write_tasks, artifacts)
                 check_controls(page, repo, tasks, write_tasks, artifacts)
                 check_workflow(page, repo, tasks, write_tasks, artifacts)
+                check_triage(page, repo, tasks, write_tasks, artifacts)
                 assert not errors, errors
                 browser.close()
         finally:

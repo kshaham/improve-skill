@@ -6,7 +6,7 @@ metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus)
   created: 2026-09-17
   parent: improve
-  version: 0.8.0
+  version: 0.9.0
   install: symlink improve-max to this directory beside the improve skill in the host's skills folder
 ---
 
@@ -135,6 +135,10 @@ Retain `board_request_id` on requested bets so their archived requests link to m
 results. Archived pending requests are historical; consume only the current helper output.
 Rank eligible bets by explicit `user_priority` before focus order and expected measured
 gain. A priority change does not skip characterization, spike, or verification gates.
+Bulk priority submissions arrive as separate requests with separate responses; recheck
+each bet before applying. Append task notes to `user_notes` using their request UUID for
+deduplication, preserving measurements and settled phases. Notes and priority edits do
+not count as measured progress; new work still needs the normal characterization gates.
 
 ## Preflight - the first day is mostly this
 

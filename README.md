@@ -98,10 +98,20 @@ The board includes:
 - **Active worklist:** switch Columns to Worklist for twenty compact active rows per page.
   Sort either layout by priority, recent update, or title; filter high/normal/low priorities.
   New arrivals keep your position while you browse older worklist pages.
+- **Bulk priorities:** select up to fifty unfinished current tasks across worklist pages
+  and filters, then send one priority change. The form lists every target; a stale target
+  rejects the entire submission. Each saved request gets its own checkpoint response.
 - **Recent completions:** five compact rows below the board, with a link to the full history.
 - **History view:** completed and rejected tasks in rows with title, outcome, area, recorded
   date, and commit. Twenty rows per page keep long runs manageable; click any row for details.
 - **Task details:** evidence, acceptance checks, verification, files, notes, and commits.
+- **Task notes and request history:** add context to current tasks, including completed
+  work, and read linked requests and responses in their details. Notes preserve existing
+  verification; follow-up implementation gets a separate task.
+- **Run overview:** compare task totals by area, see high-priority queued work, pending
+  requests, and how many completed tasks have recorded verification. Browse twenty saved
+  activity events at a time, filter task/request events, and open the associated details.
+  The overview uses the selected runs, independent of task search and priority filters.
 - **Task links and bookmarks:** copy a task link or bookmark a view. The URL preserves
   the tab, run, search, area, priority, layout, sort, and outcome/status filters.
   Missing archives recover gracefully; old current-run links cannot open reused task IDs.
@@ -130,6 +140,7 @@ The board includes:
 - **Export:** download matching tasks as JSON. Worklist exports all matching active rows;
   History exports all matching finished rows; Columns includes finished work as well.
   Every export covers all pages.
+  Overview export includes area totals, summary counts, and all matching recorded activity.
 
 It reads `.improve/backlog.jsonl` directly, includes `improve-max` experiments from
 `bets.jsonl`, and refreshes every three seconds while visible.
@@ -170,6 +181,14 @@ The skill now consistently ranks eligible tasks by explicit board priority, then
 focus order and evidence-based importance. Scope, critical-security checks, dependencies,
 verification requirements, and the original deadline still apply. Board sorting is a way
 to browse work; it does not by itself change priorities or launch tasks.
+Priority changes, task notes, and request bookkeeping do not count as improvement evidence
+or reset the daemon's no-progress breaker. Real findings, verification, and measured work
+still drive progress checks.
+
+Overview activity comes from each task's recorded completion/update/creation timestamp
+and request submission/response timestamps. It is not a complete audit log; undated tasks
+stay in the totals but are omitted from activity. Recorded verification means a nonempty
+verification entry exists, not that the board independently ran or passed a check.
 
 The current run panel flags an inactive daemon and missing final report, and shows when a
 report-only retry is running. It uses the supervisor's confirmed outcome, so a worker's
@@ -580,6 +599,9 @@ Workflow checks use 1,500 active tasks and exercise worklist sorting/filtering/e
 bookmarks, missing/stale task links, follow-up requests, draft recovery after reload,
 lost-response retry IDs, repository isolation, blocked browser storage, and bounded
 session-capability recovery.
+Triage checks cover atomic batch validation, capacity limits, concurrent batches, durable
+bulk retry IDs, selection across filters and pages, task-note recovery and archived threads,
+overview counts and activity links, stable activity pagination, and complete JSON exports.
 Screenshots are written to a temporary directory
 unless `--artifacts PATH` is supplied. Playwright is only a development dependency.
 

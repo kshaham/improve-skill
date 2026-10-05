@@ -15,7 +15,7 @@ from improve_runtime import StateError, atomic_json, stamp
 MAX_BYTES = 8 * 1024 * 1024
 AREAS = ("general", "features", "ui", "assets", "performance", "quality", "security",
          "coverage", "concurrency", "resilience", "gate-speed", "docs", "accessibility", "contracts")
-REQUEST_TYPES = {"task", "guidance", "priority", "decision"}
+REQUEST_TYPES = {"task", "guidance", "priority", "decision", "note"}
 
 
 def state_path(repo):
@@ -143,9 +143,8 @@ def text_field(data, field, limit, required=True):
     return value.strip()
 
 
-def queue_request(repo, data, tasks):
-    """Store user intent separately from worker-owned ledgers. Caller holds the lock."""
-    require_run(repo, data.get("run_id"))
+def prepare_request(data, tasks, value):
+    """Validate against an in-memory ledger before committing a whole submission."""
     try:
         request_id = str(uuid.UUID(data.get("id", "")))
     except (ValueError, TypeError, AttributeError) as exc:
@@ -154,7 +153,7 @@ def queue_request(repo, data, tasks):
     if kind not in REQUEST_TYPES:
         raise StateError("unknown request type")
     request = dict(id=request_id, type=kind, run_id=data.get("run_id"),
-                   text=text_field(data, "text", 8000, required=kind == "guidance"))
+                   text=text_field(data, "text", 8000, required=kind in ("guidance", "note")))
     if kind == "task":
         request["title"] = text_field(data, "title", 200)
         request["area"] = data.get("area", "general")
@@ -164,7 +163,7 @@ def queue_request(repo, data, tasks):
         request["priority"] = data.get("priority", "normal")
         if request["priority"] not in ("high", "normal", "low"):
             raise StateError("unknown priority")
-    if kind in ("priority", "decision"):
+    if kind in ("priority", "decision", "note"):
         key = text_field(data, "task_key", 500)
         # Idempotent retries still work after a worker settles the target.
         request["task_key"] = key
@@ -172,7 +171,6 @@ def queue_request(repo, data, tasks):
             request["decision"] = data.get("decision")
             if request["decision"] not in ("approve", "reject"):
                 raise StateError("decision must be approve or reject")
-    value = operator_state(repo)
     previous = next((row for row in value["requests"] if row["id"] == request_id), None)
     if previous:
         if any(previous.get(key) != item for key, item in request.items()):
@@ -180,21 +178,49 @@ def queue_request(repo, data, tasks):
         return previous
     if len(value["requests"]) >= 1000:
         raise StateError("This run has reached 1,000 board requests. Start a new run to archive them.")
-    if kind in ("priority", "decision"):
+    if kind in ("priority", "decision", "note"):
         task = next((item for item in tasks if item["key"] == request["task_key"]), None)
         if not task or task.get("run_id") != "current":
             raise StateError("Only tasks in the current run can receive changes.")
-        if task["status"] in ("done", "rejected"):
+        if kind != "note" and task["status"] in ("done", "rejected"):
             raise StateError("This task is already finished. Add a new task for follow-up work.")
         if kind == "decision" and task["status"] != "proposed":
             raise StateError("This task is no longer awaiting a proposal decision.")
         request.update(task_title=task["title"], expected_status=task["status"])
     request["created_at"] = stamp()
     value["requests"].append(request)
+    return request
+
+
+def queue_submission(repo, data, tasks, batch=False):
+    """Save a submission atomically. Caller holds the lock shared with archival."""
+    require_run(repo, data.get("run_id"))
+    value = operator_state(repo)
+    if batch:
+        items = data.get("items")
+        if not isinstance(items, list) or not 1 <= len(items) <= 50 or any(not isinstance(item, dict) for item in items):
+            raise StateError("Select 1–50 tasks for a priority change.")
+        payloads = [dict(id=item.get("id"), task_key=item.get("task_key"), type="priority",
+                         run_id=data.get("run_id"), priority=data.get("priority"), text=data.get("text", "")) for item in items]
+    else:
+        payloads = [data]
+    result, seen, targets = [], set(), set()
+    for payload in payloads:
+        request = prepare_request(payload, tasks, value)
+        if request["id"] in seen or batch and request["task_key"] in targets:
+            raise StateError("Each selected task and request id must be unique.")
+        seen.add(request["id"])
+        if batch:
+            targets.add(request["task_key"])
+        result.append(request)
     if len(json.dumps(value).encode()) > MAX_BYTES:
         raise StateError("The board request ledger is full. Saved requests were preserved.")
     atomic_json(state_path(repo) / "operator.json", value)
-    return request
+    return result
+
+
+def queue_request(repo, data, tasks):
+    return queue_submission(repo, data, tasks)[0]
 
 
 def acknowledge(repo, request_id, status, note):

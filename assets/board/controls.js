@@ -15,6 +15,7 @@ const requestLabels = {
   guidance: "Guidance",
   priority: "Priority change",
   decision: "Proposal decision",
+  note: "Task note",
 };
 const REQUEST_PAGE_SIZE = 20;
 
@@ -97,6 +98,7 @@ function renderControls() {
     "approve-proposal",
     "reject-proposal",
     "follow-up-task",
+    "add-task-note",
   ])
     $(id).disabled = !connected || sending || !controls.requests_available;
   $("open-report").disabled =
@@ -127,6 +129,7 @@ function renderControls() {
   prepareDrafts();
   if ($("request-dialog").open) draftStatus();
   $("discard-draft").disabled = sending;
+  renderSelection();
 }
 
 function filteredRequests() {
@@ -288,7 +291,7 @@ function openRequest(kind, task = null, decision = null, restored = null) {
   $("request-task-title").required = kind === "task";
   $("request-area-field").hidden = kind !== "task";
   $("request-priority-field").hidden = !["task", "priority"].includes(kind);
-  $("request-text").required = kind === "guidance";
+  $("request-text").required = ["guidance", "note"].includes(kind);
   $("request-priority").value = task?.user_priority || "normal";
   if (kind === "task" && task) {
     $("request-title").textContent = "Create follow-up task";
@@ -306,7 +309,11 @@ function openRequest(kind, task = null, decision = null, restored = null) {
   }
   const saved = restored || savedDrafts()[draftKey()];
   if (saved) restoreDraft(saved);
-  if (task) $("task-dialog").close();
+  if (task) {
+    $("task-dialog").close();
+    selectedTask = null;
+    writeViewLocation();
+  }
   $("request-dialog").showModal();
   draftStatus();
   (kind === "task"
@@ -330,14 +337,33 @@ async function submitRequest(event) {
     payload.priority = $("request-priority").value;
   const signature = JSON.stringify(payload);
   if (requestRetry?.signature !== signature)
-    requestRetry = { signature, id: crypto.randomUUID() };
+    requestRetry = {
+      signature,
+      id: crypto.randomUUID(),
+      ids: payload.task_keys?.map(() => crypto.randomUUID()),
+    };
   payload.id = requestRetry.id;
   saveDraft();
   sending = true;
   renderControls();
   $("request-error").hidden = true;
   try {
-    const result = await boardAction("/api/requests", payload);
+    const batch = Array.isArray(payload.task_keys);
+    const result = await boardAction(
+      batch ? "/api/requests/batch" : "/api/requests",
+      batch
+        ? {
+            run_id: payload.run_id,
+            priority: payload.priority,
+            text: payload.text,
+            items: payload.task_keys.map((task_key, index) => ({
+              task_key,
+              id: requestRetry.ids[index],
+            })),
+          }
+        : payload,
+    );
+    if (batch) selectedWork.clear();
     forgetDraft();
     $("request-dialog").close();
     requestOffset = 0;
@@ -379,6 +405,8 @@ async function controlRun(action, runId) {
 }
 
 function taskControls(task) {
+  $("add-task-note").hidden = task.run_id !== "current";
+  $("add-task-note").onclick = () => openRequest("note", task);
   $("follow-up-task").onclick = () => openRequest("task", task);
   const editable = task.run_id === "current" && !FINISHED.has(task.status);
   $("task-controls").hidden = !editable;
@@ -509,4 +537,5 @@ function initControls() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
   initDrafts();
+  initTriage();
 }
