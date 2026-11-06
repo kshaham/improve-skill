@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
 from improve_runtime import StateError, atomic_json, git, lock_active, read_json, recorded_timing, repo_lock, stamp
-from improve_control import AREAS, operator_lock, pause_requested, queue_request, queue_submission, read_local, request_view, request_view_at, require_run, set_pause
+from improve_control import AREAS, THEMES, operator_lock, pause_requested, queue_request, queue_submission, read_local, request_view, request_view_at, require_run, set_pause
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets/board"
 SERVICE_FILES = {"board.json", "board.lock", "board.log", "operator.lock"}
@@ -164,7 +164,9 @@ def focus_summary(focus):
             if isinstance(names, list):
                 areas.update({name: level for name in names if isinstance(name, str) and name in AREAS})
     excluded = focus.get("excluded")
+    themes = board.get("themes") if isinstance(board, dict) else None
     return {"areas": areas,
+            "themes": [theme for theme in THEMES if isinstance(themes, list) and theme in themes],
             "request_id": board.get("request_id") if isinstance(board, dict) else None,
             "applied_at": board.get("at") if isinstance(board, dict) else None,
             "excluded": [text_value(item)[:200] for item in excluded[:20]] if isinstance(excluded, list) else []}
@@ -286,7 +288,16 @@ def board_snapshot(repo, selected="current"):
             "selected_run": selected, "runs": runs, "current": current,
             "columns": [{"id": key, "label": label} for key, label in COLUMNS],
             "tasks": tasks, "requests": requests, "counts": counts, "discovery": discovery[:24],
-            "controls": controls, "warnings": warnings, "updated_at": stamp()}
+            "controls": controls, "warnings": warnings, "learning": learning_view(repo), "updated_at": stamp()}
+
+
+def learning_view(repo):
+    """Cross-run learning for the overview; a damaged store only hides the panel."""
+    from improve_learning import board_summary
+    try:
+        return board_summary(repo)
+    except (StateError, OSError, ValueError):
+        return None
 
 
 def local_request(url, **kwargs):
@@ -396,6 +407,7 @@ class BoardHandler(BaseHTTPRequestHandler):
                   "/drafts.js": ("drafts.js", "text/javascript; charset=utf-8"),
                   "/triage.js": ("triage.js", "text/javascript; charset=utf-8"),
                   "/focus.js": ("focus.js", "text/javascript; charset=utf-8"),
+                  "/categories.js": ("categories.js", "text/javascript; charset=utf-8"),
                   "/voice-intent.js": ("voice-intent.js", "text/javascript; charset=utf-8"),
                   "/voice.js": ("voice.js", "text/javascript; charset=utf-8"),
                   "/mobile.js": ("mobile.js", "text/javascript; charset=utf-8"),

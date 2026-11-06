@@ -15,6 +15,7 @@
     <script src="/drafts.js" defer></script>
     <script src="/triage.js" defer></script>
     <script src="/focus.js" defer></script>
+    <script src="/categories.js" defer></script>
     <script src="/voice-intent.js" defer></script>
     <script src="/voice.js" defer></script>
     <script src="/mobile.js" defer></script>
@@ -140,8 +141,16 @@
           </div>
         </div>
         <div id="focus-body">
-          <div id="focus-presets" class="focus-presets" aria-label="Focus presets"></div>
-          <div id="focus-grid" class="focus-grid"></div>
+          <div class="focus-subheading">
+            <h3>Improvement categories</h3>
+            <span id="focus-category-count">Pick one or more</span>
+            <button id="focus-balanced" class="link-button" type="button">Reset to balanced</button>
+          </div>
+          <div id="focus-categories" class="category-grid" aria-label="Improvement categories"></div>
+          <details id="focus-fine-tune" class="focus-fine-tune">
+            <summary>Fine-tune by area <span>Prefer, normal, or skip each task area</span></summary>
+            <div id="focus-grid" class="focus-grid"></div>
+          </details>
           <div class="focus-footer">
             <p id="focus-summary" class="focus-summary"></p>
             <input id="focus-note" type="text" maxlength="2000" placeholder="Optional note, e.g. “prioritize the checkout flow”" aria-label="Focus note" />
@@ -465,6 +474,15 @@
           </div>
         </nav>
         <div id="activity-list" class="activity-list"></div>
+        <section id="learning-panel" class="learning-panel" aria-labelledby="learning-title">
+          <h3 id="learning-title">What the skill has learned</h3>
+          <p id="learning-note">Learning builds up after each finished run.</p>
+          <div class="learning-columns">
+            <div><h4>Verified success by area</h4><div id="learning-areas"></div></div>
+            <div><h4>Lessons it follows</h4><ul id="learning-lessons"></ul></div>
+            <div><h4>Recurring blockers</h4><ul id="learning-blockers"></ul></div>
+          </div>
+        </section>
       </section>
       <section id="discovery-section" class="discovery-section" hidden>
         <div class="section-heading">

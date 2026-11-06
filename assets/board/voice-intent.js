@@ -15,6 +15,19 @@ const VOICE_AREA_WORDS = [
   ["concurrency", /\b(concurrency|race conditions?|races|threading|async)\b/],
   ["contracts", /\b(contracts?|apis?|schemas?|interfaces? between)\b/],
 ];
+// Spoken names for board improvement categories (categories.js ids).
+const VOICE_THEME_WORDS = [
+  ["animation", /\b(animations?|transitions?|motion|micro-?interactions)\b/],
+  ["scale", /\b(scal(e|ing|ability)|production( readiness)?|high load|load handling)\b/],
+  ["ux", /\b(ux|user experience|ui\/ux|usability|polish)\b/],
+  ["observability", /\b(observability|logging|logs|monitoring|metrics|telemetry)\b/],
+  ["seo", /\b(seo|search engines?|discoverability)\b/],
+  ["i18n", /\b(i18n|internationali[sz]ation|locali[sz]ation|translations?)\b/],
+  ["privacy", /\b(privacy|compliance|gdpr|personal data)\b/],
+  ["mobile", /\b(mobile|responsive|small screens?)\b/],
+  ["dx", /\b(developer experience|dx|onboarding)\b/],
+  ["code-health", /\b(code health|refactor(ing)?|tech(nical)? debt)\b/],
+];
 const VOICE_SKIP = /\b(skip|ignore|avoid|stop working on|don'?t (work on|touch)|no more|leave out|less)\b/;
 const VOICE_PREFER = /\b(focus( more)? on|prioriti[sz]e|prefer|concentrate on|work on|more (?=ui\b|tests?\b|docs\b|security\b|performance\b|features?\b|accessibility\b|coverage\b))/;
 const VOICE_NORMAL = /\b(back to normal|unskip|un-skip|stop (prioriti[sz]ing|preferring)|normal)\b/;
@@ -36,12 +49,13 @@ function voiceAreasIn(phrase) {
   return found;
 }
 
-function voiceFocus(lower, current) {
+function voiceFocus(lower, current, currentThemes = []) {
   if (/\b(reset|clear) (the )?focus\b|\bbalanced( focus)?\b|\bfocus on everything\b/.test(lower))
-    return { areas: {}, changed: true };
+    return { areas: {}, themes: [], changed: true };
   // Split into clauses so "focus on security and skip docs" maps each area to its verb.
   const clauses = lower.split(/[,.;]|\b(?:but|and then|then|also|while)\b|\band (?=(?:skip|ignore|avoid|focus|prioriti|prefer|stop|don'?t))/);
   const areas = { ...current };
+  const themes = new Set(currentThemes);
   let changed = false,
     mode = null;
   for (const clause of clauses) {
@@ -50,13 +64,19 @@ function voiceFocus(lower, current) {
     else if (VOICE_SKIP.test(clause)) mode = "skip";
     else if (VOICE_PREFER.test(clause)) mode = "prefer";
     if (!mode) continue;
+    for (const [theme, pattern] of VOICE_THEME_WORDS) {
+      if (!pattern.test(clause)) continue;
+      if (mode === "prefer") themes.add(theme);
+      else themes.delete(theme);
+      changed = true;
+    }
     for (const area of voiceAreasIn(clause)) {
       if (mode === "normal") delete areas[area];
       else areas[area] = mode;
       changed = true;
     }
   }
-  return { areas, changed };
+  return { areas, themes: [...themes], changed };
 }
 
 function voicePriority(lower) {
@@ -66,7 +86,7 @@ function voicePriority(lower) {
 }
 
 // Returns {type, label, ...payload fields}. `current` is the saved area focus map.
-function parseVoiceCommand(transcript, current = {}) {
+function parseVoiceCommand(transcript, current = {}, currentThemes = []) {
   const text = voiceClean(transcript);
   const lower = text.toLowerCase();
   if (!text) return { type: "empty", label: "Nothing heard" };
@@ -91,10 +111,10 @@ function parseVoiceCommand(transcript, current = {}) {
     };
   }
   if (VOICE_SKIP.test(lower) || VOICE_PREFER.test(lower) || VOICE_NORMAL.test(lower) || /\bfocus\b|\bbalanced\b/.test(lower)) {
-    const focus = voiceFocus(lower, current);
+    const focus = voiceFocus(lower, current, currentThemes);
     // Only an utterance that is mostly about areas becomes a focus change.
     if (focus.changed && text.split(" ").length <= 24)
-      return { type: "focus", areas: focus.areas, text: voiceSentence(text), label: "Focus areas" };
+      return { type: "focus", areas: focus.areas, themes: focus.themes, text: voiceSentence(text), label: "Focus areas" };
   }
   return { type: "guidance", text: voiceSentence(text), label: "Guidance" };
 }

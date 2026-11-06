@@ -3,6 +3,7 @@ from playwright.sync_api import expect
 
 import improve_board as board
 import improve_control as controls
+import improve_learning as learning
 
 
 def check_focus(page, repo, tasks, write_tasks, artifacts):
@@ -20,12 +21,23 @@ def check_focus(page, repo, tasks, write_tasks, artifacts):
     if page.locator("#run").input_value() != "current":
         expect(page.locator('.focus-tile[data-area="ui"] .focus-count')).to_have_text("Select the current run for counts")
         page.locator("#run").select_option("current")
+    if page.locator("#focus-fine-tune").get_attribute("open") is None:
+        page.locator("#focus-fine-tune summary").click()
     expect(page.locator(".focus-tile")).to_have_count(len(controls.AREAS))
+    expect(page.locator(".category-tile")).to_have_count(len(controls.THEMES))
     expect(page.locator("#focus-state")).to_have_text("Default")
     expect(page.locator("#focus-save")).to_be_disabled()
     expect(page.locator('.focus-tile[data-area="security"] .focus-count')).to_have_text("0 open · 1 finished")
-    page.locator('.focus-preset[data-preset="polish"]').click()
-    expect(page.locator('.focus-preset[data-preset="polish"]')).to_have_attribute("aria-pressed", "true")
+    page.locator('.category-tile[data-theme="ux"]').click()
+    page.locator('.category-tile[data-theme="animation"]').click()
+    expect(page.locator('.category-tile[data-theme="animation"]')).to_have_attribute("aria-pressed", "true")
+    expect(page.locator('.focus-tile[data-area="performance"]')).to_have_attribute("data-level", "prefer")
+    expect(page.locator("#focus-category-count")).to_have_text("2 selected")
+    # Deselecting keeps areas another chosen category still needs.
+    page.locator('.category-tile[data-theme="animation"]').click()
+    expect(page.locator('.focus-tile[data-area="performance"]')).to_have_attribute("data-level", "normal")
+    expect(page.locator('.focus-tile[data-area="ui"]')).to_have_attribute("data-level", "prefer")
+    expect(page.locator("#focus-summary")).to_contain_text("Categories: UI/UX polish")
     page.locator('.focus-tile[data-area="docs"] .focus-level.skip').click()
     expect(page.locator("#focus-state")).to_have_text("Unsaved changes")
     expect(page.locator("#focus-summary")).to_contain_text("Skip Docs")
@@ -37,14 +49,26 @@ def check_focus(page, repo, tasks, write_tasks, artifacts):
     page.locator("#focus-save").click()
     expect(page.locator("#focus-state")).to_have_text("Waiting for the next checkpoint")
     request = [row for row in controls.request_view(repo) if row["type"] == "focus"][-1]
-    assert request["areas"] == {"ui": "prefer", "assets": "prefer", "accessibility": "prefer", "docs": "skip"}, request
+    assert request["areas"] == {"ui": "prefer", "accessibility": "prefer", "docs": "skip"}, request
+    assert request["themes"] == ["ux"], request
     assert request["text"] == "Checkout screens first"
     assert all(task["status"] == "ready" for task in board.board_snapshot(repo)["tasks"] if task["id"] != "f-sec")
     expect(page.locator('.task-card[data-area="ui"]')).to_have_attribute("data-area-focus", "prefer")
     expect(page.locator('.task-card[data-area="docs"]')).to_have_attribute("data-area-focus", "skip")
-    controls.acknowledge(repo, request["id"], "applied", "Focus updated: prefer UI, assets, accessibility; skip docs.")
+    controls.acknowledge(repo, request["id"], "applied", "Focus updated: UI/UX polish; skip docs.")
     page.locator("#refresh").click()
     expect(page.locator("#focus-state")).to_have_text("Applied")
+    expect(page.locator('.category-tile[data-theme="ux"]')).to_have_attribute("aria-pressed", "true")
+    # Learning from finished runs appears in the overview.
+    learning.record_run(repo, dict(run_id="browser-learning"), [
+        dict(id="l1", area="ui", status="done"), dict(id="l2", area="ui", status="done"),
+        dict(id="l3", area="ui", status="rejected")])
+    learning.add_lesson(repo, "Run visual checks at 390px before committing UI work.")
+    page.locator("#overview-tab").click()
+    page.locator("#refresh").click()
+    expect(page.locator("#learning-lessons")).to_contain_text("390px")
+    expect(page.locator("#learning-areas")).to_contain_text("67%")
+    page.locator("#board-tab").click()
     page.locator('.focus-tile[data-area="ui"] .focus-filter').click()
     expect(page.locator(".task-card")).to_have_count(1)
     page.locator("#area").select_option("all")

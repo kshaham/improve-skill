@@ -174,8 +174,12 @@ class ControlTests(LedgerFixture):
         self.assertEqual(saved["areas"], {"ui": "prefer", "docs": "skip"})
         self.http("/api/requests", payload)  # Idempotent retry.
         self.http("/api/requests", self.request_data("focus", areas={}))  # Reset to balanced.
-        self.assertEqual(len(control.request_view(self.repo)), 2)
+        self.http("/api/requests", self.request_data("focus", areas={"ui": "prefer"}, themes=["seo", "animation"]))
+        self.assertEqual(control.request_view(self.repo)[-1]["themes"], ["animation", "seo"])
+        self.assertEqual(len(control.request_view(self.repo)), 3)
         before = (self.state / "operator.json").read_bytes()
+        for themes in ("animation", ["warp-drive"], [None]):
+            self.rejected("/api/requests", self.request_data("focus", areas={}, themes=themes))
         for areas in (None, [], {"unknown": "prefer"}, {"ui": "always"},
                       {area: "skip" for area in control.AREAS}):
             self.rejected("/api/requests", self.request_data("focus", areas=areas))
