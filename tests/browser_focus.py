@@ -14,6 +14,8 @@ def check_focus(page, repo, tasks, write_tasks, artifacts):
     page.locator("#board-tab").click()
     page.locator("#work-layout").select_option("columns")
     page.locator("#search").fill("")
+    if "collapsed" in (page.locator("#focus-panel").get_attribute("class") or ""):
+        page.locator("#focus-toggle").click()
     page.locator("#refresh").click()
     if page.locator("#run").input_value() != "current":
         expect(page.locator('.focus-tile[data-area="ui"] .focus-count')).to_have_text("Select the current run for counts")

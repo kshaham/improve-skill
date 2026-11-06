@@ -2,7 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#20212c" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Improve" />
     <title>Improve · Task board</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/board.css" />
@@ -11,6 +15,9 @@
     <script src="/drafts.js" defer></script>
     <script src="/triage.js" defer></script>
     <script src="/focus.js" defer></script>
+    <script src="/voice-intent.js" defer></script>
+    <script src="/voice.js" defer></script>
+    <script src="/mobile.js" defer></script>
     <script src="/overview.js" defer></script>
     <script src="/board.js" defer></script>
   </head>
@@ -108,7 +115,9 @@
             </button>
           </div>
           <div>
-            <button id="send-guidance" type="button" disabled>
+            <button id="steer-voice" class="voice-button" type="button" title="Steer by voice (Shift+V)">
+              <span class="mic-icon" aria-hidden="true"></span> Steer by voice</button
+            ><button id="send-guidance" type="button" disabled>
               Send guidance</button
             ><button id="new-task" class="primary" type="button" disabled>
               + New task
@@ -259,6 +268,7 @@
             </p>
           </div>
         </div>
+        <div id="mobile-columns" class="mobile-columns" aria-label="Choose a column"></div>
         <section id="board" class="board" aria-label="Kanban board"></section>
         <section id="worklist" aria-label="Active worklist" hidden>
           <div class="bulk-toolbar" aria-label="Selected tasks">
@@ -465,9 +475,40 @@
       </section>
       <footer>
         <span>Local to this computer · Changes are saved in your project</span
+        ><button id="layout-toggle" class="link-button" type="button">Switch to mobile view</button
         ><span id="updated">Waiting for data</span>
       </footer>
     </main>
+    <nav id="mobile-nav" class="mobile-nav" aria-label="Board sections">
+      <button type="button" data-view="board"><span class="nav-glyph" aria-hidden="true">▥</span>Board</button>
+      <button type="button" data-view="history"><span class="nav-glyph" aria-hidden="true">✓</span>History</button>
+      <button id="nav-steer" class="nav-steer" type="button" aria-label="Steer by voice"><span class="mic-icon" aria-hidden="true"></span></button>
+      <button type="button" data-view="focus"><span class="nav-glyph" aria-hidden="true">◎</span>Focus</button>
+      <button type="button" data-view="requests"><span class="nav-glyph" aria-hidden="true">✉</span>Requests<span id="nav-requests-count" class="nav-badge" hidden></span></button>
+    </nav>
+    <dialog id="voice-dialog" class="voice-dialog" aria-labelledby="voice-title">
+      <div class="dialog-top">
+        <strong id="voice-title">Steer by voice</strong
+        ><button type="button" data-close="voice-dialog" aria-label="Close voice steering">✕</button>
+      </div>
+      <p class="dialog-context">Say what you want, for example “focus on security and skip docs”, “new task: add dark mode to settings”, or “pause the run”.</p>
+      <p id="voice-support" class="form-error" role="alert" hidden></p>
+      <button id="voice-mic" class="voice-mic" type="button" aria-label="Start or stop listening"><span class="mic-icon" aria-hidden="true"></span></button>
+      <p id="voice-live" class="voice-live" role="status" aria-live="polite"></p>
+      <label>What I heard<textarea id="voice-transcript" rows="3" maxlength="8000" placeholder="Your words appear here. You can edit them."></textarea></label>
+      <div class="voice-preview">
+        <label>Send as<select id="voice-type"></select></label>
+        <p id="voice-summary" class="voice-summary"></p>
+      </div>
+      <p id="voice-blocked" class="form-error" hidden></p>
+      <label class="voice-check"><input id="voice-handsfree" type="checkbox" /> Hands-free: read it back, then listen for “send” or “cancel”</label>
+      <p id="voice-error" class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button id="voice-clear" type="button">Clear</button
+        ><button type="button" data-close="voice-dialog">Close</button
+        ><button id="voice-send" class="primary" type="button" disabled>Send</button>
+      </div>
+    </dialog>
     <dialog id="task-dialog" aria-labelledby="detail-title">
       <div class="dialog-top">
         <span id="detail-meta" class="eyebrow"></span

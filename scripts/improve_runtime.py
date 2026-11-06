@@ -801,7 +801,7 @@ def daemon(args):
         supervisor.log(f"using {supervisor.engine}; engine and deadline are fixed for this run")
         if not args.no_board:
             try:
-                board = start_board(repo, args.board_port)
+                board = start_board(repo, args.board_port, args.board_allow_host)
                 supervisor.log(f"Kanban board: {board['url']} (stays available after the run)")
             except (OSError, ValueError) as exc:
                 supervisor.log(f"Kanban board unavailable: {exc}; improvement work will continue")
@@ -840,6 +840,8 @@ def main(argv=None):
     runner.add_argument("--no-board", action="store_true", help="do not auto-start the local Kanban board")
     from improve_board import port_number
     runner.add_argument("--board-port", type=port_number, help="board port; 0 chooses a free port")
+    runner.add_argument("--board-allow-host", action="append", default=[], metavar="HOSTNAME",
+                        help="HTTPS tunnel hostname the board also accepts (phone access); repeatable")
     recovery = runner.add_mutually_exclusive_group()
     recovery.add_argument("--new-run", action="store_true", help="archive old state after a new intake")
     recovery.add_argument("--resume", action="store_true", help="resume a recovered halt/stop with its original deadline")

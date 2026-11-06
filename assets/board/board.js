@@ -455,6 +455,7 @@ function renderCards() {
   }
   writeViewLocation();
   renderSelection();
+  renderMobile();
 }
 function resetHistory() {
   historyOffset = 0;

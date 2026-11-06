@@ -58,6 +58,10 @@ session-capability recovery.
 Triage checks cover atomic batch validation, capacity limits, concurrent batches, durable
 bulk retry IDs, selection across filters and pages, task-note recovery and archived threads,
 overview counts and activity links, stable activity pagination, and complete JSON exports.
+Mobile checks cover automatic phone detection and the layout override, column chips and
+swipes, empty-column recovery after filtering, a scripted speech recognizer for hands-free
+focus/task/guidance commands, voice cancel, the explicit stop phrase, field dictation,
+unsupported browsers, and mobile overflow.
 Focus checks cover per-area prefer/normal/skip selection, presets, unsaved choices surviving
 live refresh, pending/applied states, area filtering from a tile, and mobile overflow.
 Screenshots are written to a temporary directory

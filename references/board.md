@@ -38,6 +38,10 @@ hourly, and final reports. The service survives terminal closure and run complet
 it ends when explicitly stopped, killed, or the machine restarts. After a restart,
 `--start` restores the view from disk. A remote machine's loopback URL is local to that
 machine; access it through an SSH local port forward when needed.
+For phone access, pass `--allow-host HOSTNAME` (daemon: `--board-allow-host`) for an HTTPS
+tunnel such as Tailscale Serve that forwards to the loopback port; the board accepts that
+Host only with an `https://` origin. Voice commands arrive as ordinary board requests and
+receive the same checkpoint handling.
 
 ## Keep the board faithful to the work
 
