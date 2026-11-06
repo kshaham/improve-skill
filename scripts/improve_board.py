@@ -310,7 +310,10 @@ def board_status(repo):
         health = local_request(url + "/api/health")
         running = (isinstance(health, dict) and health.get("service") == "improve-board" and health.get("instance") == saved.get("instance")
                    and health.get("repo") == str(repo))
-        return {"running": running, "url": url, "pid": saved.get("pid"), "started_at": saved.get("started_at")}
+        hosts = saved.get("allowed_hosts")
+        hosts = sorted(host for host in hosts if isinstance(host, str)) if isinstance(hosts, list) else []
+        return {"running": running, "url": url, "pid": saved.get("pid"), "started_at": saved.get("started_at"),
+                "allowed_hosts": hosts, "phone_urls": [f"https://{host}" for host in hosts]}
     except (OSError, ValueError, URLError):
         return {"running": False}
 
@@ -325,8 +328,14 @@ class BoardHandler(BaseHTTPRequestHandler):
 
     def allowed_host(self):
         port = self.server.server_port
-        allowed = (f"127.0.0.1:{port}", f"localhost:{port}")
-        return self.headers.get("Host") in allowed
+        host = self.headers.get("Host", "")
+        return host in (f"127.0.0.1:{port}", f"localhost:{port}") or host in self.server.allowed_hosts
+
+    def board_origin(self):
+        """The only Origin a same-origin browser request may carry for this Host."""
+        host = self.headers.get("Host", "")
+        # Extra hosts are HTTPS tunnels (for example Tailscale Serve) that a phone opens.
+        return ("https://" if host in self.server.allowed_hosts else "http://") + host
 
     def reply(self, code, body, content_type="application/json; charset=utf-8"):
         if not isinstance(body, bytes):
@@ -337,6 +346,7 @@ class BoardHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy", "microphone=(self), camera=(), geolocation=()")
         self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
         self.end_headers()
         with contextlib.suppress(BrokenPipeError, ConnectionResetError):
@@ -352,7 +362,7 @@ class BoardHandler(BaseHTTPRequestHandler):
             origin = self.headers.get("Origin")
             if (self.headers.get("X-Improve-Client") != "board" or
                     self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none") or
-                    origin not in (None, "http://" + self.headers.get("Host", ""))):
+                    origin not in (None, self.board_origin())):
                 return self.reply(403, {"error": "same-origin board session required"})
             return self.reply(200, {"token": self.server.ui_token})
         if target.path == "/api/report":
@@ -386,6 +396,9 @@ class BoardHandler(BaseHTTPRequestHandler):
                   "/drafts.js": ("drafts.js", "text/javascript; charset=utf-8"),
                   "/triage.js": ("triage.js", "text/javascript; charset=utf-8"),
                   "/focus.js": ("focus.js", "text/javascript; charset=utf-8"),
+                  "/voice-intent.js": ("voice-intent.js", "text/javascript; charset=utf-8"),
+                  "/voice.js": ("voice.js", "text/javascript; charset=utf-8"),
+                  "/mobile.js": ("mobile.js", "text/javascript; charset=utf-8"),
                   "/overview.js": ("overview.js", "text/javascript; charset=utf-8"),
                   "/board.css": ("board.css", "text/css; charset=utf-8")}
         if target.path in assets:
@@ -396,7 +409,7 @@ class BoardHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         origin = self.headers.get("Origin")
         token = self.headers.get("X-Improve-Board-Token", "").encode()
-        same_origin = origin == "http://" + self.headers.get("Host", "")
+        same_origin = origin == self.board_origin()
         if not self.allowed_host():
             return self.reply(403, {"error": "not authorized"})
         if self.path == "/api/stop":
@@ -458,7 +471,20 @@ class BoardHandler(BaseHTTPRequestHandler):
             return self.reply(400, {"error": str(exc)})
 
 
-def serve(repo, port=None):
+HOST_PATTERN = re.compile(r"(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+")
+
+
+def trusted_host(value):
+    """Validate an HTTPS tunnel hostname that forwards to this loopback board."""
+    value = value.strip().lower().rstrip(".")
+    if value.startswith(("http://", "https://")) or "/" in value or ":" in value:
+        raise argparse.ArgumentTypeError("--allow-host takes a bare hostname such as mymac.tailnet.ts.net")
+    if not HOST_PATTERN.fullmatch(value) or value in ("localhost", "127.0.0.1"):
+        raise argparse.ArgumentTypeError("--allow-host must be a fully qualified hostname")
+    return value
+
+
+def serve(repo, port=None, allowed_hosts=()):
     state = state_directory(repo)
     state.mkdir(exist_ok=True)
     if any((state / name).is_symlink() for name in SERVICE_FILES):
@@ -472,8 +498,11 @@ def serve(repo, port=None):
             server = BoardServer(("127.0.0.1", 0), BoardHandler)
         server.repo, server.instance, server.token = repo, secrets.token_hex(16), secrets.token_hex(32)
         server.ui_token = secrets.token_hex(32)
+        server.allowed_hosts = frozenset(allowed_hosts)
         info = dict(repo=str(repo), url=f"http://127.0.0.1:{server.server_port}", port=server.server_port,
-                    pid=os.getpid(), instance=server.instance, token=server.token, started_at=stamp())
+                    pid=os.getpid(), instance=server.instance, token=server.token, started_at=stamp(),
+                    allowed_hosts=sorted(server.allowed_hosts),
+                    phone_urls=[f"https://{host}" for host in sorted(server.allowed_hosts)])
         atomic_json(state / "board.json", info)
         def stop(*_):
             threading.Thread(target=server.shutdown, daemon=True).start()
@@ -486,19 +515,27 @@ def serve(repo, port=None):
             server.server_close()
 
 
-def start_board(repo, port=None):
+def start_board(repo, port=None, allowed_hosts=()):
     state = state_directory(repo)
     state.mkdir(exist_ok=True)
+    try:
+        allowed_hosts = sorted({trusted_host(host) for host in allowed_hosts})
+    except argparse.ArgumentTypeError as exc:
+        raise StateError(str(exc)) from exc
     existing = board_status(repo)
     if existing["running"]:
         if port not in (None, 0, urlsplit(existing["url"]).port):
             raise StateError(f"board already runs at {existing['url']}; stop it before changing the port")
+        if allowed_hosts and allowed_hosts != existing.get("allowed_hosts", []):
+            raise StateError("board already runs with different --allow-host values; stop it first")
         return existing
     if any((state / name).is_symlink() for name in SERVICE_FILES):
         raise StateError("board service files must not be symlinks")
     command = [sys.executable, str(Path(__file__).resolve()), "--repo", str(repo)]
     if port is not None:
         command += ["--port", str(port)]
+    for host in allowed_hosts:
+        command += ["--allow-host", host]
     with (state / "board.log").open("ab") as log:
         child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                  start_new_session=True, close_fds=True)
@@ -561,6 +598,8 @@ def main():
     action.add_argument("--status", action="store_true")
     action.add_argument("--stop", action="store_true", help="stop the board only, not the improvement run")
     parser.add_argument("--json", action="store_true", help="machine-readable start/status/stop output")
+    parser.add_argument("--allow-host", action="append", type=trusted_host, default=[], metavar="HOSTNAME",
+                        help="also accept this HTTPS tunnel hostname (for phone access); repeatable")
     args = parser.parse_args()
     try:
         repo = Path(args.repo).expanduser().resolve()
@@ -571,13 +610,18 @@ def main():
         elif args.stop:
             info = stop_board(repo)
         elif args.start:
-            info = start_board(repo, args.port)
+            info = start_board(repo, args.port, args.allow_host)
         else:
             if args.json:
                 raise StateError("--json requires --start, --status, or --stop")
-            serve(repo, args.port)
+            serve(repo, args.port, args.allow_host)
             return 0
-        print(json.dumps(info) if args.json else (info["url"] if info["running"] else "board is not running"))
+        if args.json:
+            print(json.dumps(info))
+        elif info["running"]:
+            print("\n".join([info["url"], *(f"Phone: {url}" for url in info.get("phone_urls", []))]))
+        else:
+            print("board is not running")
         return 0
     except (OSError, ValueError) as exc:
         print(f"improve-board: {exc}", file=sys.stderr)

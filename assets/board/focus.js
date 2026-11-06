@@ -279,7 +279,9 @@ function initFocus() {
     $("focus-toggle").textContent = collapsed ? "Show" : "Hide";
   };
   try {
-    setCollapsed(localStorage.getItem(FOCUS_COLLAPSED_KEY) === "1");
+    const stored = localStorage.getItem(FOCUS_COLLAPSED_KEY);
+    // Phones start collapsed so the board stays within reach.
+    setCollapsed(stored === null ? document.documentElement.classList.contains("mobile") : stored === "1");
   } catch (error) {
     // Blocked storage only loses the remembered panel state.
     setCollapsed(false);

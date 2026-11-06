@@ -55,6 +55,18 @@ The board includes:
   features, Harden, or Polish UI. Each tile shows open and finished work in that area and
   links to a filtered board. The skill applies a saved focus at its next checkpoint; cards in
   preferred areas are marked *Focus* and skipped areas are dimmed.
+- **Mobile layout:** phones and small touch screens switch to it automatically: a bottom
+  navigation bar, one board column at a time (tap a status chip or swipe left/right),
+  larger touch targets, a sticky run status strip, and full-width sheets for forms. Use
+  **Switch to mobile/desktop view** in the footer, or `?layout=mobile|desktop|auto`, to
+  override detection in that browser.
+- **Voice steering:** tap the microphone (bottom bar on phones, **Steer by voice** or
+  Shift+V on desktop) and speak a command: “focus on security and skip docs”, “new task:
+  add offline mode, high priority”, “the checkout should keep the cart after reload”,
+  “pause the run”, or “resume”. The board shows what it heard and how it will send it;
+  you can edit either. In hands-free mode it reads the command back and listens for
+  “send”, “cancel”, or “again”. Stopping a run requires saying “confirm stop”. Every
+  text field in request forms also has a dictation microphone.
 - **New tasks and guidance:** send desired outcomes, acceptance checks, or updated focus
   directly from the board. Change a current task's priority or approve/decline a proposal
   from its details.
@@ -106,6 +118,30 @@ Submitting a task or guidance while browsing an archive saves it to the current 
 returns the Requests view there. Search includes receipt text as well as request details.
 The worker reads its pending requests and run identity together under the archival lock.
 See [request handling and controls](../references/board-control.md) for the checkpoint contract.
+
+## Using the board from a phone
+
+The board listens only on `127.0.0.1`, and browsers allow microphone access only on
+HTTPS or localhost pages. To use it from a phone, put it behind an HTTPS tunnel that only
+your devices can reach, then tell the board to accept that hostname. For example, with
+Tailscale on the computer running the board:
+
+```sh
+tailscale serve --bg --https=443 http://127.0.0.1:8765
+"$improve_board" --repo "$improve_repo" --stop
+"$improve_board" --repo "$improve_repo" --start --port 8765 --allow-host mymac.example-tailnet.ts.net
+# Prints the local URL and "Phone: https://mymac.example-tailnet.ts.net"
+```
+
+Daemon runs take the same option as `--board-allow-host`. Requests through that hostname
+must come from an `https://` page on it; plain-HTTP origins and other hostnames are
+refused. Anyone who can open the tunnel URL can steer the run, so never expose it
+publicly (for example with Tailscale Funnel or an open port forward).
+
+Speech recognition is provided by the browser. Chrome and Edge send audio to their
+vendor's speech service; Safari may process it on the device or with Apple. Firefox has
+no speech recognition, so the microphone explains that and keyboard dictation still works.
+Nothing is sent to the skill until you confirm it.
 
 ## Drafts and links
 

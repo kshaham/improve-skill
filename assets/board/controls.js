@@ -547,4 +547,6 @@ function initControls() {
   initDrafts();
   initTriage();
   initFocus();
+  initVoice();
+  initMobile();
 }
