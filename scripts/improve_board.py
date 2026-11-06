@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
 from improve_runtime import StateError, atomic_json, git, lock_active, read_json, recorded_timing, repo_lock, stamp
-from improve_control import operator_lock, pause_requested, queue_request, queue_submission, read_local, request_view, request_view_at, require_run, set_pause
+from improve_control import AREAS, operator_lock, pause_requested, queue_request, queue_submission, read_local, request_view, request_view_at, require_run, set_pause
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets/board"
 SERVICE_FILES = {"board.json", "board.lock", "board.log", "operator.lock"}
@@ -152,6 +152,24 @@ def run_directories(repo):
     return directories
 
 
+def focus_summary(focus):
+    """Expose the worker-recorded area focus without trusting its shape."""
+    if not isinstance(focus, dict):
+        return {}
+    board = focus.get("board_areas")
+    areas = {}
+    if isinstance(board, dict):
+        for level in ("prefer", "skip"):
+            names = board.get(level)
+            if isinstance(names, list):
+                areas.update({name: level for name in names if isinstance(name, str) and name in AREAS})
+    excluded = focus.get("excluded")
+    return {"areas": areas,
+            "request_id": board.get("request_id") if isinstance(board, dict) else None,
+            "applied_at": board.get("at") if isinstance(board, dict) else None,
+            "excluded": [text_value(item)[:200] for item in excluded[:20]] if isinstance(excluded, list) else []}
+
+
 def board_snapshot(repo, selected="current"):
     state = state_directory(repo)
     warnings = []
@@ -195,7 +213,8 @@ def board_snapshot(repo, selected="current"):
                        "heartbeat_at": control.get("heartbeat_at"), "last_activity_at": run.get("last_activity_at"),
                        "consecutive_failures": control.get("consecutive_failures", 0),
                        "board_control_version": control.get("board_control_version", 0),
-                       "last_error": control.get("last_error"), "clock": clock}
+                       "last_error": control.get("last_error"), "clock": clock,
+                       "focus": focus_summary(run.get("focus"))}
             if not (state / "daemon.lock").is_symlink():
                 with contextlib.suppress(OSError):
                     current["daemon_running"] = lock_active(state / "daemon.lock")
@@ -366,6 +385,7 @@ class BoardHandler(BaseHTTPRequestHandler):
                   "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),
                   "/drafts.js": ("drafts.js", "text/javascript; charset=utf-8"),
                   "/triage.js": ("triage.js", "text/javascript; charset=utf-8"),
+                  "/focus.js": ("focus.js", "text/javascript; charset=utf-8"),
                   "/overview.js": ("overview.js", "text/javascript; charset=utf-8"),
                   "/board.css": ("board.css", "text/css; charset=utf-8")}
         if target.path in assets:

@@ -134,6 +134,9 @@ function taskCard(task) {
   const card = element("button", "task-card");
   card.type = "button";
   card.dataset.key = task.key;
+  card.dataset.area = task.area;
+  card.dataset.areaFocus = savedFocus().areas[task.area] || "normal";
+  card.style.setProperty("--hue", areaHue(task.area));
   card.setAttribute("aria-label", task.title + ", " + labels[task.status]);
   const eyebrow = element("div", "card-eyebrow");
   eyebrow.append(element("span", "task-id", task.id));
@@ -151,7 +154,9 @@ function taskCard(task) {
   const note = task.note || task.evidence || task.acceptance || task.file;
   if (note) card.append(element("p", "card-note", readable(note)));
   const footer = element("div", "card-footer");
-  footer.append(element("span", "area-tag", task.area));
+  const areaTag = element("span", "area-tag", task.area);
+  areaTag.style.setProperty("--hue", areaHue(task.area));
+  footer.append(areaTag);
   if (typeof task.commit === "string" && task.commit)
     footer.append(element("span", "commit-tag", task.commit.slice(0, 7)));
   else if (task.run_id !== "current")
@@ -215,6 +220,7 @@ function taskRow(task) {
     task.status === "done" ? "Completed" : labels[task.status],
   );
   const area = element("span", "row-area", task.area);
+  area.style.setProperty("--hue", areaHue(task.area));
   const recorded = recordedDate(task),
     date = element("span", "row-date", "Date not recorded");
   if (recorded.epoch !== null) {
