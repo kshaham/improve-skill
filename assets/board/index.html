@@ -10,6 +10,7 @@
     <script src="/workflow.js" defer></script>
     <script src="/drafts.js" defer></script>
     <script src="/triage.js" defer></script>
+    <script src="/focus.js" defer></script>
     <script src="/overview.js" defer></script>
     <script src="/board.js" defer></script>
   </head>
@@ -117,6 +118,31 @@
         <p id="control-note">Checking the current run…</p>
         <p id="control-feedback" role="status" hidden></p>
         <button id="resume-draft" type="button" hidden>Resume draft</button>
+      </section>
+      <section id="focus-panel" class="focus-panel" aria-labelledby="focus-title">
+        <div class="focus-heading">
+          <div>
+            <h2 id="focus-title">Focus areas</h2>
+            <p>Choose which kinds of work the skill should prefer or skip. It applies your choice before picking its next task.</p>
+          </div>
+          <div class="focus-heading-side">
+            <span id="focus-state" class="focus-state">Default</span>
+            <button id="focus-toggle" type="button" aria-expanded="true" aria-controls="focus-body">Hide</button>
+          </div>
+        </div>
+        <div id="focus-body">
+          <div id="focus-presets" class="focus-presets" aria-label="Focus presets"></div>
+          <div id="focus-grid" class="focus-grid"></div>
+          <div class="focus-footer">
+            <p id="focus-summary" class="focus-summary"></p>
+            <input id="focus-note" type="text" maxlength="2000" placeholder="Optional note, e.g. “prioritize the checkout flow”" aria-label="Focus note" />
+            <div class="focus-buttons">
+              <button id="focus-reset" type="button" disabled>Discard changes</button
+              ><button id="focus-save" class="primary" type="button" disabled>Save focus</button>
+            </div>
+          </div>
+          <p id="focus-feedback" role="status" hidden></p>
+        </div>
       </section>
       <div id="warning" class="warning" role="status" hidden></div>
       <div id="view-notice" class="warning" role="status" hidden></div>

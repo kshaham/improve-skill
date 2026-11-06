@@ -50,6 +50,11 @@ The board includes:
   and pending final report. A connected board is separate from a running daemon.
 - **Run controls:** pause after a clean checkpoint, resume, or stop a running daemon.
   Pause keeps the original wall-clock deadline; it works with either saved engine.
+- **Focus areas:** choose Prefer, Normal, or Skip for each task category (features, UI,
+  security, performance, tests, docs, and more), or start from a preset such as Ship
+  features, Harden, or Polish UI. Each tile shows open and finished work in that area and
+  links to a filtered board. The skill applies a saved focus at its next checkpoint; cards in
+  preferred areas are marked *Focus* and skipped areas are dimmed.
 - **New tasks and guidance:** send desired outcomes, acceptance checks, or updated focus
   directly from the board. Change a current task's priority or approve/decline a proposal
   from its details.

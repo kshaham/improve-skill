@@ -166,6 +166,34 @@ class ControlTests(LedgerFixture):
         self.assertEqual(control.request_view(self.repo)[0]["status"], "applied")
         self.rejected("/api/requests", {**payload, "title": "Different request"})
 
+    def test_focus_requests_validate_areas_and_store_only_changes(self):
+        payload = self.request_data("focus", areas={"ui": "prefer", "docs": "skip", "quality": "normal"})
+        self.http("/api/requests", payload)
+        saved = control.request_view(self.repo)[0]
+        self.assertEqual(saved["type"], "focus")
+        self.assertEqual(saved["areas"], {"ui": "prefer", "docs": "skip"})
+        self.http("/api/requests", payload)  # Idempotent retry.
+        self.http("/api/requests", self.request_data("focus", areas={}))  # Reset to balanced.
+        self.assertEqual(len(control.request_view(self.repo)), 2)
+        before = (self.state / "operator.json").read_bytes()
+        for areas in (None, [], {"unknown": "prefer"}, {"ui": "always"},
+                      {area: "skip" for area in control.AREAS}):
+            self.rejected("/api/requests", self.request_data("focus", areas=areas))
+        self.assertEqual((self.state / "operator.json").read_bytes(), before)
+
+    def test_snapshot_exposes_worker_recorded_focus_defensively(self):
+        run = {}
+        run["focus"] = {"excluded": ["payments"], "board_areas": {
+            "prefer": ["ui", "bogus", 3], "skip": ["docs"], "request_id": "r1", "at": "2026-11-06T00:00:00Z"}}
+        (self.state / "run.json").write_text(json.dumps(run))
+        focus = board.board_snapshot(self.repo)["current"]["focus"]
+        self.assertEqual(focus["areas"], {"ui": "prefer", "docs": "skip"})
+        self.assertEqual(focus["request_id"], "r1")
+        self.assertEqual(focus["excluded"], ["payments"])
+        run["focus"] = {"board_areas": "broken"}
+        (self.state / "run.json").write_text(json.dumps(run))
+        self.assertEqual(board.board_snapshot(self.repo)["current"]["focus"]["areas"], {})
+
     def test_concurrent_requests_are_not_lost(self):
         payloads = [self.request_data("task", title=f"Request {i}") for i in range(20)]
         with ThreadPoolExecutor(max_workers=8) as executor:

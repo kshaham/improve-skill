@@ -15,7 +15,23 @@ from improve_runtime import StateError, atomic_json, stamp
 MAX_BYTES = 8 * 1024 * 1024
 AREAS = ("general", "features", "ui", "assets", "performance", "quality", "security",
          "coverage", "concurrency", "resilience", "gate-speed", "docs", "accessibility", "contracts")
-REQUEST_TYPES = {"task", "guidance", "priority", "decision", "note"}
+REQUEST_TYPES = {"task", "guidance", "priority", "decision", "note", "focus"}
+FOCUS_LEVELS = ("prefer", "normal", "skip")
+
+
+def focus_areas(value):
+    """Validate a per-area focus map; keep only non-default levels in area order."""
+    if not isinstance(value, dict) or len(value) > len(AREAS):
+        raise StateError("focus areas must map task areas to prefer, normal, or skip")
+    for area, level in value.items():
+        if area not in AREAS:
+            raise StateError(f"unknown task area: {str(area)[:40]}")
+        if level not in FOCUS_LEVELS:
+            raise StateError("each focus area must be prefer, normal, or skip")
+    result = {area: value[area] for area in AREAS if value.get(area, "normal") != "normal"}
+    if sum(level == "skip" for level in result.values()) == len(AREAS):
+        raise StateError("Leave at least one area available for work.")
+    return result
 
 
 def state_path(repo):
@@ -122,7 +138,7 @@ def request_view_at(directory):
     receipts = local_json(directory / "board-receipts.json")
     result = []
     fields = ("id", "type", "created_at", "title", "text", "area", "priority",
-              "task_key", "task_title", "decision", "run_id", "expected_status")
+              "task_key", "task_title", "decision", "run_id", "expected_status", "areas")
     for row in value["requests"]:
         receipt = receipts.get(row["id"], {})
         if not isinstance(receipt, dict):
@@ -159,6 +175,8 @@ def prepare_request(data, tasks, value):
         request["area"] = data.get("area", "general")
         if request["area"] not in AREAS:
             raise StateError("unknown task area")
+    if kind == "focus":
+        request["areas"] = focus_areas(data.get("areas"))
     if kind in ("task", "priority"):
         request["priority"] = data.get("priority", "normal")
         if request["priority"] not in ("high", "normal", "low"):

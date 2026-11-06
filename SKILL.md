@@ -290,7 +290,8 @@ work or deciding whether a priority is met, blocked, or still active.
 
 Filter by user scope and guardrails first. A confirmed critical vulnerability in scope
 preempts lower-risk work. Otherwise honor explicit task-level `user_priority` first
-(`high`, then `normal` or absent, then `low`), then the user’s ordered focus priorities, then by
+(`high`, then `normal` or absent, then `low`), then board area focus (`prefer`, then
+unmarked; never start new work or finders in a `skip` area), then the user’s ordered focus priorities, then by
 
     severity x confidence x blast-radius
 
