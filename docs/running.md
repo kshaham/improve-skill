@@ -230,6 +230,39 @@ git log --oneline "$improve_baseline..$improve_branch"
 git diff "$improve_baseline..$improve_branch"
 ```
 
+## Staying productive through failures
+
+The daemon works around problems instead of stopping:
+
+- **A task fails or a tool is unavailable:** the task is marked Blocked with the reason, and
+  the next cycle is told to choose different work. Only a third consecutive worker halt ends
+  the run (`IMPROVE_MAX_WORKER_HALTS`).
+- **A cycle leaves uncommitted edits:** they are saved to a private ref such as
+  `refs/improve/quarantine/2026-11-06T22-43-05Z-cycle-4`, the tree is reset, and the task is
+  blocked for review. Recover them with `git checkout <ref> -- .`; list them with
+  `git for-each-ref refs/improve/quarantine`. Changes you make yourself before a run still halt it.
+- **Repeated empty or failed cycles:** after `IMPROVE_MAX_FAILURES` the supervisor blocks the
+  stuck item, cools down briefly, and steers to the least recently explored eligible lane.
+  It halts only after `IMPROVE_MAX_RECOVERIES` recoveries with no successful cycle between.
+- **Damaged ledgers:** invalid lines move to `<ledger>.damaged`; an invalid `run.json` is
+  restored from its pre-cycle copy.
+- **Empty queue:** each prompt names a fresh discovery lane, preferring board focus areas.
+
+These limits keep a truly broken environment from spending tokens indefinitely.
+
+## Learning across runs
+
+`.improve/learning.json` records each finished run: verified-success rate per area,
+recurring blockers, and lessons the skill recorded. It is kept when `--new-run` archives the
+previous run, and its guidance is added to every cycle prompt. Lessons that apply to any
+project go to `~/.config/improve/learning.json`. Inspect or add lessons yourself:
+
+```sh
+python3 scripts/improve_learning.py --repo "$improve_repo" guidance
+python3 scripts/improve_learning.py --repo "$improve_repo" lesson --area coverage \
+  --text 'Run the integration suite with --serial; parallel runs flake.'
+```
+
 ## Runner configuration
 
 | Environment variable        | Default                  | Purpose                                                                              |
@@ -240,7 +273,12 @@ git diff "$improve_baseline..$improve_branch"
 | `IMPROVE_FINISH_GRACE`      | `120`                    | Maximum cleanup seconds after deadline or stop                                       |
 | `IMPROVE_CYCLE_GAP`         | `2`                      | Seconds between daemon cycles; capped at deadline                                    |
 | `IMPROVE_TOO_FAST`          | `25`                     | Diagnostic threshold; speed alone never fails a checkpointed cycle                   |
-| `IMPROVE_MAX_FAILURES`      | `3`                      | Consecutive failed or uncheckpointed cycles before halt                              |
+| `IMPROVE_MAX_FAILURES`      | `3`                      | Consecutive failed or uncheckpointed cycles before a recovery                        |
+| `IMPROVE_MAX_RECOVERIES`    | `6`                      | Recoveries in a row (no successful cycle between) before halt; `0` restores strict halting |
+| `IMPROVE_RECOVERY_COOLDOWN` | `60`                     | First pause after a recovery; doubles each time, capped by `IMPROVE_RECOVERY_COOLDOWN_CAP` (`900`) |
+| `IMPROVE_MAX_WORKER_HALTS`  | `2`                      | Worker halts converted to blocked tasks before one is honored                        |
+| `IMPROVE_QUARANTINE`        | `1`                      | Save a cycle's uncommitted edits to `refs/improve/quarantine/*` and continue; `0` halts instead |
+| `IMPROVE_LEARNING_HOME`     | `~/.config/improve`      | Location of cross-project lessons (`learning.json`)                                  |
 | `IMPROVE_LIMIT_WAIT`        | `900`                    | First account-limit wait                                                             |
 | `IMPROVE_LIMIT_WAIT_CAP`    | `3600`                   | Maximum individual account-limit wait                                                |
 | `IMPROVE_LIMIT_WAIT_BUDGET` | `14400`                  | Total wall-clock account-limit wait budget, including downtime inside a pending wait |
