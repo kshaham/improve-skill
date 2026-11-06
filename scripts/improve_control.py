@@ -13,6 +13,7 @@ import uuid
 from improve_runtime import StateError, atomic_json, stamp
 
 MAX_BYTES = 8 * 1024 * 1024
+MAX_JSON_DEPTH = 64
 AREAS = ("general", "features", "ui", "assets", "performance", "quality", "security",
          "coverage", "concurrency", "resilience", "gate-speed", "docs", "accessibility", "contracts")
 REQUEST_TYPES = {"task", "guidance", "priority", "decision", "note", "focus"}
@@ -61,6 +62,20 @@ def read_local(path, default=None, limit=MAX_BYTES):
         raise StateError(f"{path.name} is not UTF-8") from exc
 
 
+def json_depth(value):
+    """Return container nesting depth iteratively; parser recursion limits vary by Python version."""
+    deepest, stack = 0, [(value, 1)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, (dict, list)):
+            deepest = max(deepest, depth)
+            if depth > MAX_JSON_DEPTH:
+                return depth
+            children = item.values() if isinstance(item, dict) else item
+            stack.extend((child, depth + 1) for child in children)
+    return deepest
+
+
 def local_json(path, default=None):
     raw = read_local(path)
     if raw is None:
@@ -71,6 +86,8 @@ def local_json(path, default=None):
         raise StateError(f"invalid {path.name}; saved requests were preserved") from exc
     if not isinstance(value, dict):
         raise StateError(f"{path.name} must contain an object")
+    if json_depth(value) > MAX_JSON_DEPTH:
+        raise StateError(f"{path.name} is nested too deeply; saved requests were preserved")
     return value
 
 
