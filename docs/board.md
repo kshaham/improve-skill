@@ -37,6 +37,8 @@ The board includes:
 - **Task notes and request history:** add context to current tasks, including completed
   work, and read linked requests and responses in their details. Notes preserve existing
   verification; follow-up implementation gets a separate task.
+- **What the skill has learned:** the Overview tab shows verified-success rates by area,
+  the lessons the skill follows, and recurring blockers, built from every finished run.
 - **Run overview:** compare task totals by area, see high-priority queued work, pending
   requests, and how many completed tasks have recorded verification. Browse twenty saved
   activity events at a time, filter task/request events, and open the associated details.
@@ -50,9 +52,13 @@ The board includes:
   and pending final report. A connected board is separate from a running daemon.
 - **Run controls:** pause after a clean checkpoint, resume, or stop a running daemon.
   Pause keeps the original wall-clock deadline; it works with either saved engine.
-- **Focus areas:** choose Prefer, Normal, or Skip for each task category (features, UI,
-  security, performance, tests, docs, and more), or start from a preset such as Ship
-  features, Harden, or Polish UI. Each tile shows open and finished work in that area and
+- **Improvement categories:** tap one or more of twenty tiles such as UI/UX polish,
+  Animation & transitions, Security hardening, Scaling & production, Logging & monitoring,
+  Mobile & responsive, Privacy, Internationalization, or SEO. Each tile prefers its task
+  areas and tells the skill exactly what to hunt for (see `references/categories.md`).
+  Voice works too: “focus on animations and scaling”.
+- **Focus areas:** under **Fine-tune by area**, choose Prefer, Normal, or Skip for each task
+  area (features, UI, security, performance, tests, docs, and more). Each tile shows open and finished work in that area and
   links to a filtered board. The skill applies a saved focus at its next checkpoint; cards in
   preferred areas are marked *Focus* and skipped areas are dimmed.
 - **Mobile layout:** phones and small touch screens switch to it automatically: a bottom

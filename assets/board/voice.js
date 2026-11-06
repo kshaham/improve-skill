@@ -129,7 +129,7 @@ function attachDictation(id) {
 
 function describeIntent(intent) {
   if (!intent || intent.type === "empty") return "Speak or type a command.";
-  if (intent.type === "focus") return focusSummary(intent.areas);
+  if (intent.type === "focus") return focusSummary(intent.areas, intent.themes);
   if (intent.type === "task")
     return `${intent.title} · ${intent.area} · ${intent.priority} priority`;
   if (intent.type === "control")
@@ -143,9 +143,20 @@ function intentKind(intent) {
   return intent?.type === "control" ? intent.action : intent?.type;
 }
 
+// A newly spoken category also prefers its areas, exactly like tapping its tile.
+function withCategoryAreas(intent, previous = []) {
+  if (intent.type !== "focus") return intent;
+  const areas = { ...intent.areas };
+  for (const [id, , , , categoryAreas] of IMPROVEMENT_CATEGORIES)
+    if (intent.themes?.includes(id) && !previous.includes(id))
+      for (const area of categoryAreas) areas[area] = "prefer";
+  return { ...intent, areas };
+}
+
 function interpretTranscript() {
   const text = $("voice-transcript").value;
-  let intent = parseVoiceCommand(text, savedFocus().areas);
+  const saved = savedFocus();
+  let intent = withCategoryAreas(parseVoiceCommand(text, saved.areas, saved.themes), saved.themes);
   if (voiceTypeLocked) {
     const kind = $("voice-type").value;
     if (["pause", "resume", "stop"].includes(kind))
@@ -155,7 +166,7 @@ function interpretTranscript() {
     else if (kind === "guidance")
       intent = { type: "guidance", text: voiceSentence(text), label: "Guidance" };
     else if (kind === "focus" && intent.type !== "focus")
-      intent = { type: "focus", areas: { ...savedFocus().areas }, text, label: "Focus areas" };
+      intent = { type: "focus", areas: { ...saved.areas }, themes: [...saved.themes], text, label: "Focus areas" };
   }
   voiceIntent = intent;
   renderVoice();
@@ -264,7 +275,8 @@ function voicePayload(intent) {
   const payload = { type: intent.type, run_id, text: (intent.text || "").slice(0, 8000) };
   if (intent.type === "task")
     Object.assign(payload, { title: intent.title, area: intent.area, priority: intent.priority });
-  if (intent.type === "focus") Object.assign(payload, { areas: intent.areas, text: (intent.text || "").slice(0, 2000) });
+  if (intent.type === "focus")
+    Object.assign(payload, { areas: intent.areas, themes: intent.themes || [], text: (intent.text || "").slice(0, 2000) });
   return ["/api/requests", payload];
 }
 

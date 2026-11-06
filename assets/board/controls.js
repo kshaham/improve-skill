@@ -209,7 +209,7 @@ function renderRequests() {
           "",
           row.title ||
             row.task_title ||
-            (row.type === "focus" ? focusSummary(row.areas) : row.text),
+            (row.type === "focus" ? focusSummary(row.areas, row.themes) : row.text),
         ),
       );
       summary.append(

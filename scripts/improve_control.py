@@ -18,6 +18,10 @@ AREAS = ("general", "features", "ui", "assets", "performance", "quality", "secur
          "coverage", "concurrency", "resilience", "gate-speed", "docs", "accessibility", "contracts")
 REQUEST_TYPES = {"task", "guidance", "priority", "decision", "note", "focus"}
 FOCUS_LEVELS = ("prefer", "normal", "skip")
+# Improvement categories chosen from board tiles; references/categories.md defines each one.
+THEMES = ("ux", "animation", "security", "scale", "performance", "accessibility", "reliability",
+          "observability", "tests", "features", "mobile", "dx", "docs", "api", "code-health",
+          "assets", "privacy", "i18n", "seo", "concurrency")
 
 
 def focus_areas(value):
@@ -155,7 +159,7 @@ def request_view_at(directory):
     receipts = local_json(directory / "board-receipts.json")
     result = []
     fields = ("id", "type", "created_at", "title", "text", "area", "priority",
-              "task_key", "task_title", "decision", "run_id", "expected_status", "areas")
+              "task_key", "task_title", "decision", "run_id", "expected_status", "areas", "themes")
     for row in value["requests"]:
         receipt = receipts.get(row["id"], {})
         if not isinstance(receipt, dict):
@@ -194,6 +198,11 @@ def prepare_request(data, tasks, value):
             raise StateError("unknown task area")
     if kind == "focus":
         request["areas"] = focus_areas(data.get("areas"))
+        themes = data.get("themes", [])
+        if not isinstance(themes, list) or len(themes) > len(THEMES) or any(theme not in THEMES for theme in themes):
+            raise StateError("unknown improvement category")
+        if themes:
+            request["themes"] = [theme for theme in THEMES if theme in themes]
     if kind in ("task", "priority"):
         request["priority"] = data.get("priority", "normal")
         if request["priority"] not in ("high", "normal", "low"):

@@ -16,32 +16,6 @@ const FOCUS_AREAS = [
   ["docs", "Docs", "Guides, references, comments", 88],
   ["general", "General", "Anything that fits no other area", 240],
 ];
-const FOCUS_PRESETS = [
-  ["balanced", "Balanced", {}],
-  ["product", "Ship features", { features: "prefer", ui: "prefer" }],
-  [
-    "harden",
-    "Harden",
-    {
-      security: "prefer",
-      resilience: "prefer",
-      concurrency: "prefer",
-      docs: "skip",
-      assets: "skip",
-    },
-  ],
-  [
-    "polish",
-    "Polish UI",
-    { ui: "prefer", accessibility: "prefer", assets: "prefer" },
-  ],
-  ["speed", "Speed up", { performance: "prefer", "gate-speed": "prefer" }],
-  [
-    "tests",
-    "Test debt",
-    { coverage: "prefer", quality: "prefer", features: "skip" },
-  ],
-];
 const FOCUS_COLLAPSED_KEY = "improve-board-focus-collapsed";
 const FOCUS_LEVEL_LABELS = { prefer: "Prefer", normal: "Normal", skip: "Skip" };
 let focusSelection = {},
@@ -53,13 +27,14 @@ function areaHue(area) {
   return FOCUS_AREAS.find((row) => row[0] === area)?.[3] ?? 240;
 }
 
-function focusSummary(areas = {}) {
+function focusSummary(areas = {}, themes = []) {
   const pick = (level) =>
     FOCUS_AREAS.filter((row) => areas[row[0]] === level).map((row) => row[1]);
   const prefer = pick("prefer"),
     skip = pick("skip");
-  if (!prefer.length && !skip.length) return "Balanced across all areas";
+  if (!prefer.length && !skip.length && !themes.length) return "Balanced across all areas";
   return [
+    themes.length ? "Categories: " + themes.map(categoryName).join(", ") : "",
     prefer.length ? "Prefer " + prefer.join(", ") : "",
     skip.length ? "Skip " + skip.join(", ") : "",
   ]
@@ -75,8 +50,8 @@ function savedFocus() {
   const latest = rows[rows.length - 1];
   const applied = snapshot?.current?.focus || {};
   if (latest && (latest.status === "pending" || !applied.request_id))
-    return { areas: latest.areas || {}, request: latest };
-  return { areas: applied.areas || {}, request: null, applied };
+    return { areas: latest.areas || {}, themes: latest.themes || [], request: latest };
+  return { areas: applied.areas || {}, themes: applied.themes || [], request: null, applied };
 }
 
 function sameFocus(left, right) {
@@ -136,18 +111,7 @@ function buildFocusGrid() {
     );
     grid.append(tile);
   }
-  const presets = $("focus-presets");
-  for (const [id, name, areas] of FOCUS_PRESETS) {
-    const button = element("button", "focus-preset", name);
-    button.type = "button";
-    button.dataset.preset = id;
-    button.addEventListener("click", () => {
-      focusSelection = { ...areas };
-      focusDirty = true;
-      renderFocus();
-    });
-    presets.append(button);
-  }
+  buildCategories();
 }
 
 function filterArea(area) {
@@ -171,7 +135,10 @@ function focusFeedback(message, error = false) {
 function renderFocus() {
   if (!snapshot) return;
   const saved = savedFocus();
-  if (!focusDirty) focusSelection = { ...saved.areas };
+  if (!focusDirty) {
+    focusSelection = { ...saved.areas };
+    focusThemes = [...saved.themes];
+  }
   const counts = focusCounts(),
     live = ["current", "all"].includes(snapshot.selected_run);
   const maxOpen = Math.max(1, ...Object.values(counts).map((row) => row.open));
@@ -193,11 +160,8 @@ function renderFocus() {
         ? `${countText(count.open)} open · ${countText(count.done)} finished`
         : "No tasks yet";
   }
-  for (const button of $("focus-presets").children) {
-    const preset = FOCUS_PRESETS.find((row) => row[0] === button.dataset.preset);
-    button.setAttribute("aria-pressed", String(sameFocus(preset[2], focusSelection)));
-  }
-  const changed = !sameFocus(focusSelection, saved.areas);
+  const changed =
+    !sameFocus(focusSelection, saved.areas) || !sameThemes(focusThemes, saved.themes);
   if (focusDirty && !changed) focusDirty = false;
   const allowed =
     connected && !focusSending && !!snapshot.controls?.requests_available;
@@ -205,7 +169,7 @@ function renderFocus() {
   $("focus-reset").disabled = !changed;
   for (const input of $("focus-grid").querySelectorAll("input"))
     input.disabled = !allowed;
-  for (const button of $("focus-presets").children) button.disabled = !allowed;
+  renderCategories(allowed);
   const state = $("focus-state");
   state.className = "focus-state";
   if (changed) {
@@ -221,7 +185,7 @@ function renderFocus() {
   $("focus-summary").textContent =
     skipped === FOCUS_AREAS.length
       ? "Leave at least one area available for work."
-      : focusSummary(focusSelection) +
+      : focusSummary(focusSelection, focusThemes) +
         (saved.applied?.excluded?.length
           ? ` · Run scope still excludes: ${saved.applied.excluded.join("; ")}`
           : "");
@@ -240,6 +204,7 @@ async function saveFocus() {
     type: "focus",
     run_id: snapshot.current.control_id || null,
     areas: { ...focusSelection },
+    themes: [...focusThemes],
     text: $("focus-note").value,
   };
   const signature = JSON.stringify(payload);

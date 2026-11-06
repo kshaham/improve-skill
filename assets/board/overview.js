@@ -131,7 +131,47 @@ function openActivity(event) {
   }
 }
 
+function renderLearning() {
+  const learning = snapshot?.learning;
+  const runs = learning?.runs || 0;
+  $("learning-note").textContent = runs
+    ? `Built from ${countText(runs)} finished ${runs === 1 ? "run" : "runs"} in this repository. It shapes how the skill ranks work and what it avoids.`
+    : "Learning builds up after each finished run: success rates by area, lessons, and recurring blockers.";
+  const areas = (learning?.areas || []).filter((row) => row.attempts > 0).slice(0, 8);
+  $("learning-areas").replaceChildren(
+    ...(areas.length
+      ? areas.map((row) => {
+          const line = element("div", "learning-rate");
+          line.style.setProperty("--hue", areaHue(row.area));
+          const meter = element("div", "focus-meter");
+          const bar = element("span", "focus-bar");
+          bar.style.width = Math.round(row.rate * 100) + "%";
+          meter.append(bar);
+          line.append(
+            element("span", "", row.area),
+            meter,
+            element("span", "", Math.round(row.rate * 100) + "%"),
+          );
+          line.title = `${row.done} of ${row.attempts} attempted tasks verified`;
+          return line;
+        })
+      : [element("p", "focus-hint", "No finished tasks yet.")]),
+  );
+  const list = (id, rows, text, empty) =>
+    $(id).replaceChildren(
+      ...(rows.length
+        ? rows.map((row) => element("li", "", text(row)))
+        : [element("li", "focus-hint", empty)]),
+    );
+  list("learning-lessons", learning?.lessons || [],
+    (row) => row.text + (row.reinforced > 1 ? ` (×${row.reinforced})` : ""),
+    "None recorded yet.");
+  list("learning-blockers", learning?.blockers || [],
+    (row) => `${row.example} (${row.count}×)`, "None recorded.");
+}
+
 function renderOverview() {
+  renderLearning();
   const data = overviewData();
   $("visible-count").textContent =
     countText(data.counts.tasks) + " tasks in selected runs";
