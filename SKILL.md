@@ -471,6 +471,30 @@ continue active, bounded discovery using a new hypothesis or evidence source. Ke
 quality bar intact. No commit quota and no 20-minute naps; useful investigation counts as
 work even when it produces no change. Follow the continuation reference until expiry.
 
+## Resilience and learning
+
+Never let one stuck task end the run. When a task fails, a gate or tool is unavailable, or
+an approach stops working, mark that task `blocked` in `backlog.jsonl` with a concrete
+`blocked_reason`, then continue with other eligible work or a fresh discovery lane. Record
+a `halted:` outcome only for a blocker that stops all remaining work. Under the daemon the
+supervisor backs this up: it converts a worker halt into a blocked task (only repeated
+halts end the run), saves leftover uncommitted edits to `refs/improve/quarantine/*` and
+restores a clean tree, repairs damaged ledger lines, and after repeated empty cycles
+blocks the stuck item and steers to the least recently explored eligible lane. Prompts
+list blocked tasks; do not retry one unless its blocker has changed.
+
+The skill learns across runs. `.improve/learning.json` keeps per-area verified-success
+rates, recurring blockers, and lessons; it survives `--new-run`. Each cycle prompt
+includes that guidance; use success rates only to break ties inside the user's focus.
+When you learn something non-obvious that would help a future run, record one sentence:
+
+```sh
+python3 /path/to/improve/scripts/improve_learning.py --repo /absolute/repo lesson --area AREA --text 'LESSON'
+```
+
+Add `--scope global` only for lessons true of any project. Never record secrets or
+personal data. At the final report, record the one to three most useful lessons.
+
 ## Cost, and where it goes
 
 Refill is the expensive phase, not fixing. Four parallel finders reading a large codebase cost
@@ -534,6 +558,7 @@ build a real coverage profile) can miss the deadline entirely. So:
 - `references/continuation.md` - execution modes, discovery checkpoints, recovery
 - `references/board.md` - local Kanban board, task history, startup and shutdown
 - `references/board-control.md` - run controls, user requests, and saved responses
+- `references/categories.md` - what to look for in each board improvement category
 - `references/performance.md` - journey harnesses and profiling when performance is active
 
 - `scripts/improve-clock.sh` - elapsed, remaining, hour label, report due, deadline passed
