@@ -91,6 +91,7 @@ function writeViewLocation() {
     const value = $(id).value;
     if (value !== fallback) params.set(key, value);
   }
+  if (activeView === "graph" && graphSelected) params.set("node", graphSelected);
   if (selectedTask) {
     params.set("task", selectedTask);
     if (selectedTask.startsWith("current:"))
@@ -111,11 +112,17 @@ function readViewLocation() {
   viewNotice("");
   if ($("task-dialog").open) $("task-dialog").close();
   selectedTask = null;
-  activeView = ["board", "history", "overview", "requests"].includes(
+  activeView = ["board", "history", "overview", "requests", "graph"].includes(
     pendingView.get("view"),
   )
     ? pendingView.get("view")
     : "board";
+  const node = activeView === "graph" ? pendingView.get("node")?.slice(0, 400) : null;
+  if (node && node !== graphSelected) {
+    graphSelected = graphFocus = node;
+    graphFitPending = true;
+    loadNodeDetail(node, true);
+  }
   for (const [key, [id, fallback]] of Object.entries(viewFields)) {
     const value = (pendingView.get(key) ?? fallback).slice(
       0,

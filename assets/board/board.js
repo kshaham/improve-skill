@@ -127,6 +127,7 @@ function openTask(task) {
         return section;
       }),
   );
+  renderTaskKnowledge(task);
   if (!$("task-dialog").open) $("task-dialog").showModal();
   writeViewLocation();
 }
@@ -380,12 +381,13 @@ function renderCards() {
   $("history-view").hidden = activeView !== "history";
   $("requests-view").hidden = activeView !== "requests";
   $("overview-view").hidden = activeView !== "overview";
-  $("area-filter").hidden = ["requests", "overview"].includes(activeView);
-  $("priority-filter-label").hidden = ["requests", "overview"].includes(
+  $("graph-view").hidden = activeView !== "graph";
+  $("area-filter").hidden = ["requests", "overview", "graph"].includes(activeView);
+  $("priority-filter-label").hidden = ["requests", "overview", "graph"].includes(
     activeView,
   );
-  $("search").closest("label").hidden = activeView === "overview";
-  $("clear-filters").hidden = activeView === "overview";
+  $("search").closest("label").hidden = ["overview", "graph"].includes(activeView);
+  $("clear-filters").hidden = ["overview", "graph"].includes(activeView);
   $("work-sort-note").hidden = $("work-sort").value !== "priority";
   $("search").placeholder =
     activeView === "requests"
@@ -400,9 +402,13 @@ function renderCards() {
       ? "Export requests ↗"
       : activeView === "overview"
         ? "Export overview ↗"
-        : "Export tasks ↗";
+        : activeView === "graph"
+          ? "Export graph ↗"
+          : "Export tasks ↗";
   $("export").title =
-    activeView === "overview"
+    activeView === "graph"
+      ? "Export the nodes and links currently shown"
+      : activeView === "overview"
       ? "Export area totals and all matching recorded activity"
       : activeView === "requests"
         ? "Export all matching requests, including every page"
@@ -411,7 +417,8 @@ function renderCards() {
           : $("work-layout").value === "rows"
             ? "Export every matching active task, including every worklist page"
             : "Export all matching tasks, including finished work";
-  for (const view of ["board", "history", "overview", "requests"]) {
+  renderGraphBadge();
+  for (const view of ["board", "history", "overview", "requests", "graph"]) {
     $(view + "-tab").setAttribute("aria-selected", String(activeView === view));
     $(view + "-tab").tabIndex = activeView === view ? 0 : -1;
   }
@@ -450,6 +457,7 @@ function renderCards() {
       $("history-list").replaceChildren();
       historySignature = "";
       if (activeView === "overview") renderOverview();
+      else if (activeView === "graph") renderGraphView();
       else renderRequests();
     }
   }
@@ -721,12 +729,12 @@ $("history-next").addEventListener("click", () => historyPage(1));
 document.querySelector(".view-tabs").addEventListener("keydown", (event) => {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
   event.preventDefault();
-  const views = ["board", "history", "overview", "requests"];
+  const views = ["board", "history", "overview", "requests", "graph"];
   const view =
     event.key === "Home"
       ? "board"
       : event.key === "End"
-        ? "requests"
+        ? "graph"
         : views[
             (views.indexOf(activeView) +
               (event.key === "ArrowRight" ? 1 : views.length - 1)) %
@@ -743,12 +751,14 @@ $("task-dialog").addEventListener("click", (event) => {
 $("task-dialog").addEventListener("close", () => {
   if ($("task-dialog").open) return;
   selectedTask = null;
+  taskKnowledgeKey = "";
   $("task-link-field").hidden = true;
   writeViewLocation();
 });
 $("export").addEventListener("click", () => {
   if (!snapshot) return;
   if (activeView === "overview") return exportOverview();
+  if (activeView === "graph") return exportGraph();
   const blob = new Blob(
     [
       JSON.stringify(
@@ -790,4 +800,5 @@ document.addEventListener("visibilitychange", () => {
 setInterval(remaining, 1000);
 initControls();
 initWorkflow();
+initGraph();
 refresh();

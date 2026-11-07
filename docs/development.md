@@ -62,6 +62,10 @@ Mobile checks cover automatic phone detection and the layout override, column ch
 swipes, empty-column recovery after filtering, a scripted speech recognizer for hands-free
 focus/task/guidance commands, voice cancel, the explicit stop phrase, field dictation,
 unsupported browsers, and mobile overflow.
+Knowledge checks (`tests/browser_graph.py`, also runnable alone) cover the graph view,
+node selection and links, pin/archive curation reaching the skill's brief, neighborhood
+focus, opening a task from the graph, the task dialog's knowledge section, adding knowledge
+with a retry-safe id, search, refinement, and phone overflow.
 Focus checks cover per-area prefer/normal/skip selection, presets, unsaved choices surviving
 live refresh, pending/applied states, area filtering from a tile, and mobile overflow.
 Screenshots are written to a temporary directory

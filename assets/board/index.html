@@ -20,6 +20,8 @@
     <script src="/voice.js" defer></script>
     <script src="/mobile.js" defer></script>
     <script src="/overview.js" defer></script>
+    <script src="/graph-layout.js" defer></script>
+    <script src="/graph.js" defer></script>
     <script src="/board.js" defer></script>
   </head>
   <body>
@@ -236,6 +238,16 @@
           tabindex="-1"
         >
           Requests <span id="requests-count" class="view-count">0</span>
+        </button>
+        <button
+          id="graph-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="graph-view"
+          tabindex="-1"
+        >
+          Knowledge <span id="graph-count" class="view-count">0</span>
         </button>
         <span class="view-hint"
           >Your work, its history, and your direction.</span
@@ -484,6 +496,70 @@
           </div>
         </section>
       </section>
+      <section id="graph-view" role="tabpanel" aria-labelledby="graph-tab" hidden>
+        <div class="history-heading">
+          <div>
+            <h2>Knowledge graph</h2>
+            <p>
+              What the skill has learned across runs: files, outcomes, gates,
+              blockers, and the knowledge it follows. It is refined after every
+              run and read before every task.
+            </p>
+          </div>
+          <div class="graph-heading-actions">
+            <button id="graph-refine" type="button">Refine now</button
+            ><button id="graph-add" type="button" class="primary">
+              + Add knowledge
+            </button>
+          </div>
+        </div>
+        <div class="overview-metrics graph-metrics">
+          <div><span>Nodes · links</span><strong id="graph-total">0</strong></div>
+          <div><span>Active knowledge</span><strong id="graph-insights">0</strong></div>
+          <div><span>Runs recorded</span><strong id="graph-runs">0</strong></div>
+          <div><span>Last refined</span><strong id="graph-refined">Never</strong></div>
+        </div>
+        <div class="graph-toolbar">
+          <label class="graph-search"
+            >Search<input
+              id="graph-query"
+              type="search"
+              maxlength="200"
+              placeholder="Knowledge, files, tasks, blockers…"
+          /></label>
+          <div id="graph-types" class="graph-types" role="group" aria-label="Node types"></div>
+          <label class="graph-check"
+            ><input id="graph-archived" type="checkbox" /> Show archived</label
+          ><button id="graph-reset" type="button" class="link-button">
+            Show strongest
+          </button>
+        </div>
+        <p id="graph-status" class="dialog-context" role="status"></p>
+        <div class="graph-layout">
+          <div class="graph-canvas-wrap">
+            <svg id="graph-canvas" role="group" aria-label="Knowledge graph. Use Tab to move between nodes and Enter to select one."></svg>
+            <div class="graph-zoom">
+              <button id="graph-zoom-in" type="button" aria-label="Zoom in">+</button
+              ><button id="graph-zoom-out" type="button" aria-label="Zoom out">−</button
+              ><button id="graph-fit" type="button">Fit</button>
+            </div>
+            <div id="graph-legend" class="graph-legend" aria-hidden="true"></div>
+            <p id="graph-empty" class="graph-empty" hidden>
+              The graph fills in as the skill works: after each cycle it records
+              tasks, files, gates, and blockers, and agents add what they learn.
+              You can add knowledge now.
+            </p>
+          </div>
+          <aside id="graph-detail" class="graph-detail" aria-label="Selected node">
+            <p class="focus-hint">Select a node to see what it is connected to.</p>
+          </aside>
+        </div>
+        <div class="learning-columns graph-lists">
+          <div><h4>Strongest knowledge</h4><ol id="graph-top"></ol></div>
+          <div><h4>Files that resist change</h4><ul id="graph-hotspots"></ul></div>
+          <div><h4>Refinement log</h4><ul id="graph-refines"></ul></div>
+        </div>
+      </section>
       <section id="discovery-section" class="discovery-section" hidden>
         <div class="section-heading">
           <h2>Recent investigations</h2>
@@ -574,6 +650,56 @@
         <div id="task-thread"></div>
         <button id="task-thread-more" type="button">Show more requests</button>
       </section>
+      <section id="task-knowledge" class="task-knowledge" aria-labelledby="task-knowledge-title" hidden>
+        <h3 id="task-knowledge-title">What the knowledge graph knows here</h3>
+        <div id="task-knowledge-body"></div>
+      </section>
+    </dialog>
+    <dialog id="graph-note-dialog" aria-labelledby="graph-note-title">
+      <form id="graph-note-form">
+        <div class="dialog-top">
+          <strong id="graph-note-title">Add knowledge</strong
+          ><button type="button" data-close="graph-note-dialog" aria-label="Close add knowledge">
+            ✕
+          </button>
+        </div>
+        <p class="dialog-context">
+          One thing the skill should know in future runs. It is shown in every
+          cycle until you archive it. Never include secrets.
+        </p>
+        <label
+          >Knowledge<textarea
+            id="graph-note-text"
+            rows="3"
+            maxlength="600"
+            required
+            placeholder="e.g. The payments tests need the Stripe mock running; start it with make mock."
+          ></textarea>
+        </label>
+        <div class="form-pair">
+          <label
+            >Kind<select id="graph-note-kind">
+              <option value="pitfall">Pitfall to avoid</option>
+              <option value="technique">Technique that works</option>
+              <option value="convention">Project convention</option>
+              <option value="decision">Decision already made</option>
+              <option value="fact" selected>Fact</option>
+            </select></label
+          ><label
+            >About (optional)<input
+              id="graph-note-about"
+              maxlength="600"
+              placeholder="src/app.ts, area:ui"
+          /></label>
+        </div>
+        <p id="graph-note-error" class="form-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" data-close="graph-note-dialog">Cancel</button
+          ><button id="graph-note-submit" type="submit" class="primary">
+            Save knowledge
+          </button>
+        </div>
+      </form>
     </dialog>
     <dialog id="request-dialog" aria-labelledby="request-title">
       <form id="request-form">

@@ -151,6 +151,8 @@ def check_controls(page, repo, tasks, write_tasks, artifacts):
     page.keyboard.press("Home")
     expect(page.locator("#board-tab")).to_have_attribute("aria-selected", "true")
     page.keyboard.press("End")
+    expect(page.locator("#graph-tab")).to_have_attribute("aria-selected", "true")
+    page.keyboard.press("ArrowLeft")
     expect(page.locator("#requests-tab")).to_have_attribute("aria-selected", "true")
     # Request history is also bounded and its export includes all matching pages.
     with controls.operator_lock(repo):

@@ -263,6 +263,27 @@ python3 scripts/improve_learning.py --repo "$improve_repo" lesson --area coverag
   --text 'Run the integration suite with --serial; parallel runs flake.'
 ```
 
+## Knowledge graph
+
+`.improve/graph.json` links runs, tasks, files, areas, gates, blockers, and recorded
+knowledge. The daemon syncs it after every cycle and refines it when a run ends: it merges
+duplicates, rescores, archives knowledge that was contradicted or unused, flags deleted
+files, and keeps a bounded size. Each cycle prompt includes a ranked brief, and agents
+query it before every task. It is kept when `--new-run` archives the previous run, and
+archived runs are backfilled on first use. Query or add to it yourself:
+
+```sh
+python3 scripts/improve_graph.py --repo "$improve_repo" brief
+python3 scripts/improve_graph.py --repo "$improve_repo" context --files src/api/db.py --area performance
+python3 scripts/improve_graph.py --repo "$improve_repo" note --kind decision \
+  --text 'Payments code is frozen until the audit ends.' --about area:security
+python3 scripts/improve_graph.py --repo "$improve_repo" sync --refine
+```
+
+Other commands: `search`, `node`, `path`, `hotspots`, `link`, `rate`, `stats`. See
+[the knowledge-graph reference](../references/knowledge-graph.md). The board's
+**Knowledge** tab shows and curates the same graph.
+
 ## Runner configuration
 
 | Environment variable        | Default                  | Purpose                                                                              |

@@ -1140,6 +1140,26 @@ class ResilienceTests(DaemonTests):
         self.assertEqual(len(self.load("learning.json")["runs"]), 2)
         self.assertIn("test database unavailable", self.load("learning.json")["blockers"][0]["example"])
 
+    def test_knowledge_graph_survives_new_runs_and_reaches_the_next_prompt(self):
+        self.assertEqual(self.invoke("once_halt").returncode, 0)
+        saved = self.load("graph.json")
+        self.assertEqual(len(saved["runs"]), 1)
+        self.assertTrue(saved["refine"]["history"], "a finished run is refined")
+        self.assertTrue(any(node["type"] == "task" for node in saved["nodes"].values()))
+        helper = [sys.executable, str(ROOT / "scripts/improve_graph.py"), "--repo", str(self.repo), "note",
+                  "--kind", "pitfall", "--text", "The fixture gate needs a warm cache first.", "--about", "area:ui"]
+        note = json.loads(subprocess.run(helper, env=self.env, check=True, capture_output=True, text=True).stdout)
+        (self.state / "once-done").unlink()
+        result = self.invoke("once_halt", "--new-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prompt = self.launches()[0]["prompt"]
+        self.assertIn("improve_graph.py", prompt)
+        self.assertIn("graph_refs", prompt)
+        self.assertIn(note["id"], prompt)
+        self.assertIn("warm cache", prompt)
+        self.assertEqual(len(self.load("graph.json")["runs"]), 2)
+        self.assertFalse(any((path / "graph.json").exists() for path in (self.state / "history").iterdir()))
+
 
 # Inherit DaemonTests' fixture, not its strict-mode assertions.
 for _name in [name for name in vars(DaemonTests) if name.startswith("test_")]:

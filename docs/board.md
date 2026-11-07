@@ -39,6 +39,18 @@ The board includes:
   verification; follow-up implementation gets a separate task.
 - **What the skill has learned:** the Overview tab shows verified-success rates by area,
   the lessons the skill follows, and recurring blockers, built from every finished run.
+- **Knowledge graph:** the Knowledge tab draws what the skill has learned across runs:
+  files, areas, tasks, gates, blockers, and knowledge, and how they connect. Search it,
+  filter by node type, drag nodes, zoom, and select a node to see its links, success rate,
+  and evidence. Focus a node to show its neighborhood, or open a task node in the task
+  dialog. Curate knowledge with **Pin** (shown every cycle), **Useful**, **Wrong**,
+  **Archive**/**Restore**, and **+ Add knowledge** (a pitfall, technique, convention,
+  decision, or fact, optionally about files or areas). The skill reads your changes at its
+  next cycle. **Refine now** merges duplicates and rescores; the refinement log lists each
+  pass. Task details include **What the knowledge graph knows here**: earlier attempts on
+  the same files, knowledge to apply, blockers, and files usually changed together. The
+  graph is kept across runs in `.improve/graph.json`. Knowledge export downloads the
+  nodes and links currently shown.
 - **Run overview:** compare task totals by area, see high-priority queued work, pending
   requests, and how many completed tasks have recorded verification. Browse twenty saved
   activity events at a time, filter task/request events, and open the associated details.
