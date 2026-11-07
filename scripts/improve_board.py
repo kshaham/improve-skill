@@ -33,6 +33,7 @@ TASK_FIELDS = ("id", "title", "claim", "area", "kind", "file", "line", "paths", 
                "completed_at", "reopens", "last_verification", "bet_status", "journey",
                "target", "claimed_gain", "spike", "landed", "pieces", "kill", "branch", "user_priority", "board_request_id", "user_notes")
 MAX_FILE_BYTES = 32 * 1024 * 1024
+MAX_CONTEXT_FILES = 20
 
 
 def state_directory(repo):
@@ -203,6 +204,7 @@ def board_snapshot(repo, selected="current"):
                    "report_available": (directory / "final-report.md").is_file() and not (directory / "final-report.md").is_symlink(),
                    "summary_pending": control.get("summary_pending", run.get("summary_pending")),
                    "started_at": (control if control else run).get("started_at"),
+                   "control_id": (control or run).get("run_id") or (control or run).get("started_at"),
                    "deadline": (control if control else run).get("deadline")}
         runs.append(summary)
         if run_id == "current":
@@ -288,7 +290,8 @@ def board_snapshot(repo, selected="current"):
             "selected_run": selected, "runs": runs, "current": current,
             "columns": [{"id": key, "label": label} for key, label in COLUMNS],
             "tasks": tasks, "requests": requests, "counts": counts, "discovery": discovery[:24],
-            "controls": controls, "warnings": warnings, "learning": learning_view(repo), "updated_at": stamp()}
+            "controls": controls, "warnings": warnings, "learning": learning_view(repo),
+            "graph": graph_summary(repo), "updated_at": stamp()}
 
 
 def learning_view(repo):
@@ -298,6 +301,84 @@ def learning_view(repo):
         return board_summary(repo)
     except (StateError, OSError, ValueError):
         return None
+
+
+def graph_summary(repo):
+    """Cheap graph counters; the Knowledge view fetches the graph itself only when they change."""
+    import improve_graph
+    try:
+        return improve_graph.summary(improve_graph.load_cached(improve_graph.graph_path(repo)))
+    except (StateError, OSError, ValueError):
+        return None
+
+
+def query_values(query, name, limit=200):
+    return [value[:limit] for value in query.get(name, [])]
+
+
+def graph_get(repo, path, query):
+    """Read-only graph endpoints for the Knowledge view and the task dialog."""
+    import improve_graph
+    graph = improve_graph.load_cached(improve_graph.graph_path(repo))
+    first = lambda name, fallback=None: (query_values(query, name) or [fallback])[0]
+    if path == "/api/graph":
+        types = [kind for kind in first("types", "").split(",") if kind in improve_graph.TYPES]
+        return improve_graph.board_view(graph, limit=int(first("limit", "250")), focus=first("focus"),
+                                        depth=int(first("depth", "1")), query=first("q"), types=types or None,
+                                        include_archived=first("archived") == "1")
+    if path == "/api/graph/node":
+        return improve_graph.node_detail(graph, first("id", ""))
+    if path == "/api/graph/context":
+        files = query_values(query, "file", 300)[:MAX_CONTEXT_FILES]
+        area = first("area")
+        if area is not None and area not in AREAS and not re.fullmatch(r"[a-z][a-z0-9_-]{0,39}", area):
+            area = None
+        exclude = first("exclude")
+        try:
+            result = improve_graph.context(graph, files, area, first("text"), 6, repo)
+        except improve_graph.GraphError:
+            result = {"seeds": [], "files": [], "insights": [], "past_tasks": [], "blockers": [], "gates": [], "co_changed": []}
+        result["past_tasks"] = [task for task in result["past_tasks"] if task["id"] != exclude]
+        return {**result, "total_nodes": len(graph["nodes"])}
+    raise StateError("not found")
+
+
+def graph_post(repo, data):
+    """Curate the graph from the board. Retried requests with the same request_id apply once."""
+    import improve_graph
+    action, request_id = data.get("action"), data.get("request_id")
+    if not isinstance(request_id, str) or not re.fullmatch(r"[\w-]{8,80}", request_id):
+        raise StateError("a request_id is required")
+    with improve_graph.locked(repo) as graph:
+        done = graph.setdefault("board_ops", [])
+        previous = next((row for row in done if row.get("request_id") == request_id), None)
+        if previous:
+            return previous["result"]
+        if action == "note":
+            about = data.get("about") or []
+            if not isinstance(about, list) or len(about) > 6 or not all(isinstance(item, str) and len(item) <= 300 for item in about):
+                raise StateError("about must list at most six file:PATH or area:NAME targets")
+            text, kind = data.get("text"), data.get("kind", "fact")
+            if not isinstance(text, str) or len(text) > improve_graph.MAX_SUMMARY:
+                raise StateError(f"knowledge must be text of at most {improve_graph.MAX_SUMMARY} characters")
+            node = improve_graph.add_insight(graph, text, kind, "user", [item for item in about if item.strip()], repo=repo)
+            node["score"] = round(improve_graph.score(node, improve_graph.run_seq(graph)), 4)
+            result = {"node": improve_graph.node_view(node), "message": "Saved. The skill will see this in its next cycle."}
+        elif action == "rate":
+            node = improve_graph.rate(graph, str(data.get("id", ""))[:400], data.get("verdict"), "user")
+            node["score"] = round(improve_graph.score(node, improve_graph.run_seq(graph)), 4)
+            result = {"node": improve_graph.node_view(node), "message": {
+                "useful": "Marked useful; it will rank higher.", "wrong": "Marked wrong; the skill will stop using it.",
+                "pin": "Pinned; the skill sees it every cycle.", "unpin": "Unpinned.",
+                "archive": "Archived; hidden from the skill.", "restore": "Restored."}[data.get("verdict")]}
+        elif action == "refine":
+            report = improve_graph.refine(graph, repo)
+            result = {"refine": report, "message": f"Refined: {report['merged']} merged, {report['faded']} faded, {report['stale_files']} stale files."}
+        else:
+            raise StateError("unknown graph action")
+        done.append({"request_id": request_id, "result": result})
+        del done[:-50]
+        return result
 
 
 def local_request(url, **kwargs):
@@ -389,6 +470,12 @@ class BoardHandler(BaseHTTPRequestHandler):
                 return self.reply(200, {"text": report, "run_id": selected})
             except (StateError, OSError, ValueError) as exc:
                 return self.reply(400, {"error": str(exc)})
+        if target.path in ("/api/graph", "/api/graph/node", "/api/graph/context"):
+            try:
+                query = parse_qs(target.query, max_num_fields=40)
+                return self.reply(200, graph_get(self.server.repo, target.path, query))
+            except (StateError, OSError, ValueError) as exc:
+                return self.reply(400, {"error": str(exc)})
         if target.path == "/api/health":
             return self.reply(200, {"service": "improve-board", "instance": self.server.instance,
                                     "repo": str(self.server.repo)})
@@ -412,6 +499,8 @@ class BoardHandler(BaseHTTPRequestHandler):
                   "/voice.js": ("voice.js", "text/javascript; charset=utf-8"),
                   "/mobile.js": ("mobile.js", "text/javascript; charset=utf-8"),
                   "/overview.js": ("overview.js", "text/javascript; charset=utf-8"),
+                  "/graph.js": ("graph.js", "text/javascript; charset=utf-8"),
+                  "/graph-layout.js": ("graph-layout.js", "text/javascript; charset=utf-8"),
                   "/board.css": ("board.css", "text/css; charset=utf-8")}
         if target.path in assets:
             name, mime = assets[target.path]
@@ -433,7 +522,7 @@ class BoardHandler(BaseHTTPRequestHandler):
         if (not same_origin or not secrets.compare_digest(token, self.server.ui_token.encode()) or
                 self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none")):
             return self.reply(403, {"error": "Refresh the board to reconnect its controls."})
-        if self.path not in ("/api/control", "/api/requests", "/api/requests/batch"):
+        if self.path not in ("/api/control", "/api/requests", "/api/requests/batch", "/api/graph"):
             return self.reply(404, {"error": "not found"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -447,6 +536,9 @@ class BoardHandler(BaseHTTPRequestHandler):
             data = json.loads(raw)
             if not isinstance(data, dict):
                 raise StateError("a JSON object is required")
+            if self.path == "/api/graph":
+                # Curating knowledge does not need a live run: it shapes the next one.
+                return self.reply(200, graph_post(self.server.repo, data))
             with operator_lock(self.server.repo) as state:
                 require_run(self.server.repo, data.get("run_id"))
                 snapshot = board_snapshot(self.server.repo, "current")

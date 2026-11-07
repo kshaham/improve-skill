@@ -620,6 +620,7 @@ class Supervisor:
         remaining = max(0, epoch(self.control["deadline"]) - int(time.time()))
         skill_path = Path(__file__).resolve().parent.parent / ("max/SKILL.md" if self.args.skill == "improve-max" else "SKILL.md")
         prefix = "$" if self.engine == "codex" else "/"
+        graph_script = Path(__file__).with_name("improve_graph.py")
         return f"""{prefix}{self.args.skill} {remaining}s {shlex.quote(str(self.repo))} {self.args.args}
 
 You are ONE CYCLE of an externally supervised improvement run. Read {skill_path}.
@@ -659,6 +660,12 @@ Learning: when you discover something non-obvious that would help a future run (
 quirk, a flaky test and its fix, a file to avoid, an approach that failed), record it with:
 python3 {shlex.quote(str(Path(__file__).with_name('improve_learning.py')))} --repo {shlex.quote(str(self.repo))} lesson --area AREA --text 'LESSON'
 Use --scope global only for lessons true of any project. Keep each lesson one sentence.
+Knowledge graph: before selecting or editing a task, query what earlier runs learned about its files:
+python3 {shlex.quote(str(graph_script))} --repo {shlex.quote(str(self.repo))} context --files PATH... --area AREA
+Add the ids of graph knowledge you relied on to that task's graph_refs list in backlog.jsonl.
+Record file-specific knowledge (a pitfall, technique, convention, or decision) with:
+python3 {shlex.quote(str(graph_script))} --repo {shlex.quote(str(self.repo))} note --kind pitfall --text 'ONE SENTENCE' --about file:PATH area:AREA
+Mark graph knowledge that proved false with `rate ID wrong`. Follow {Path(__file__).resolve().parent.parent / 'references/knowledge-graph.md'}.
 {self.memory_brief(final)}
 {"FINALIZATION ONLY: start no new work. This run ended or its deadline passed. Ignore pause for this report-only pass and report pending board requests as unimplemented. Preserve an existing halt/stop outcome and original end time. Write .improve/final-report.md from actual git and ledger evidence, append it to journal.md, set summary_pending false, and set completed only for deadline expiry. Never claim unverified changes passed." if final else "Complete a useful cycle, leave a clean tree, and return; the supervisor will relaunch you."}
 """
@@ -668,9 +675,13 @@ Use --scope global only for lessons true of any project. Keep each lesson one se
         if final:
             return ""
         try:
+            from improve_graph import brief, graph_path, load as load_graph
             from improve_learning import guidance
             from improve_resilience import recovery_brief
-            parts = [guidance(self.repo), recovery_brief(self.state, self.run_focus())]
+            graph = load_graph(graph_path(self.repo), repair=False)
+            knowledge = brief(graph, shlex.quote(str(Path(__file__).with_name("improve_graph.py"))),
+                              shlex.quote(str(self.repo)))
+            parts = [guidance(self.repo), knowledge, recovery_brief(self.state, self.run_focus())]
         except (StateError, OSError, ValueError) as exc:
             self.log(f"learning/recovery brief unavailable: {exc}")
             return ""
@@ -753,6 +764,19 @@ Use --scope global only for lessons true of any project. Keep each lesson one se
             record_run(self.repo, self.control, read_rows(self.state / "backlog.jsonl"))
         except (StateError, OSError, ValueError) as exc:
             self.log(f"could not record run learning: {exc}")
+        self.sync_graph(refine=True)
+
+    def sync_graph(self, refine=False):
+        """Fold the run into the knowledge graph; a graph problem never stops a run."""
+        try:
+            from improve_graph import sync
+            result = sync(self.repo, refine_after=refine)
+            if refine and result.get("refine"):
+                report = result["refine"]
+                self.log(f"knowledge graph refined: {report['nodes']} nodes, {report['merged']} merged, "
+                         f"{report['faded']} faded, {report['stale_files']} stale files")
+        except (StateError, OSError, ValueError, RecursionError) as exc:
+            self.log(f"could not update the knowledge graph: {exc}")
 
     def finalize(self):
         """A bounded report-only launch; retryable without granting more work time."""
@@ -860,6 +884,7 @@ Use --scope global only for lessons true of any project. Keep each lesson one se
             self.save_control(**changes)
             self.log(f"cycle returned {rc} in {human(elapsed)}; checkpoint {before['cycle']}->{after['cycle']}; failures={failures}"
                      + ("; fast but checkpointed" if not failed and elapsed < self.too_fast else ""))
+            self.sync_graph()
             self.wait(self.gap)
 
 
@@ -943,8 +968,9 @@ def daemon(args):
                 if not args.intake:
                     raise StateError("--new-run requires --intake FILE from a new ten-question intake")
                 intake = read_json(Path(args.intake).expanduser())
-                # learning.json is the cross-run memory; it stays with the repository.
-                old = [p for p in state.iterdir() if p.name not in {"history", "daemon.lock", "learning.json", *SERVICE_FILES}]
+                # learning.json and graph.json are the cross-run memory; they stay with the repository.
+                keep = {"history", "daemon.lock", "learning.json", "graph.json", "graph.lock", *SERVICE_FILES}
+                old = [p for p in state.iterdir() if p.name not in keep]
                 if old:
                     history = state / "history"
                     history.mkdir(exist_ok=True)

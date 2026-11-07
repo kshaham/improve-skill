@@ -495,6 +495,27 @@ python3 /path/to/improve/scripts/improve_learning.py --repo /absolute/repo lesso
 Add `--scope global` only for lessons true of any project. Never record secrets or
 personal data. At the final report, record the one to three most useful lessons.
 
+### Knowledge graph
+
+`.improve/graph.json` links every run, task, file, area, gate, blocker, and recorded insight.
+It also survives `--new-run`. Use it as the first source of history, before re-reading old
+ledgers. Follow [references/knowledge-graph.md](references/knowledge-graph.md):
+
+- Before selecting or editing a task, query its files and area. Do not retry an approach
+  the graph shows was rejected unless the evidence has changed.
+  ```sh
+  python3 <skill-directory>/scripts/improve_graph.py --repo /absolute/repo context --files PATH... --area AREA
+  ```
+- Add the ids of insights you relied on to the task's `graph_refs`. Outcomes then credit or
+  discredit them.
+- Record non-obvious, file-specific knowledge with `note --kind pitfall|technique|convention|decision|fact
+  --text '...' --about file:PATH area:AREA`. Use `rate ID wrong` on knowledge that proved false.
+- Knowledge the user added or pinned on the board is steering: treat a `decision` or
+  `convention` like an intake constraint.
+
+The daemon syncs the graph after each cycle and refines it when the run ends. In a
+foreground run, run `sync` at checkpoints and `sync --refine` after the final report.
+
 ## Cost, and where it goes
 
 Refill is the expensive phase, not fixing. Four parallel finders reading a large codebase cost
@@ -558,6 +579,7 @@ build a real coverage profile) can miss the deadline entirely. So:
 - `references/continuation.md` - execution modes, discovery checkpoints, recovery
 - `references/board.md` - local Kanban board, task history, startup and shutdown
 - `references/board-control.md` - run controls, user requests, and saved responses
+- `references/knowledge-graph.md` - querying and growing the cross-run knowledge graph
 - `references/categories.md` - what to look for in each board improvement category
 - `references/performance.md` - journey harnesses and profiling when performance is active
 

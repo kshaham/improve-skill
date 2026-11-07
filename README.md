@@ -24,6 +24,7 @@ Claude Code: /improve 90m ~/Code/api
 | Verified changes      | Evidence, acceptance checks, and relevant tests before work is marked done         |
 | Local control         | Task requests, notes, priorities, proposal decisions, and daemon pause/resume/stop |
 | Durable recovery      | Saved deadlines, checkpoints, requests, and reports across restarts                |
+| Knowledge graph       | Cross-run memory of files, outcomes, gates, and lessons, queried before each task  |
 | Either assistant      | Background work uses the originating or explicitly selected Codex/Claude engine    |
 
 ## Quick start
@@ -122,6 +123,13 @@ task activity and request responses. Click an event to open the associated work 
 the overview as JSON.
 
 ![Run overview showing area totals, verification entry counts, and recorded task activity](docs/screenshots/overview.png)
+
+### Knowledge graph
+
+The Knowledge tab draws the skill's cross-run memory: files, areas, tasks, gates,
+blockers, and the knowledge it has recorded. Search it, select a node to see its links and
+success rate, and pin, correct, archive, or add knowledge. The skill queries this graph before
+each task and refines it after every run.
 
 These screenshots show this repository's actual local board, captured while updating these
 docs. [Capture details](docs/screenshots/README.md). Recorded verification means an entry
@@ -233,6 +241,7 @@ until expiry unless `--stop-at-target` explicitly permits an early finish. Read 
 | [Skill instructions](SKILL.md)                  | The full agent execution contract                                 |
 | [Request protocol](references/board-control.md) | Checkpoint handling and idempotent acknowledgments                |
 | [State schema](references/ledger.md)            | Durable run, task, and discovery records                          |
+| [Knowledge graph](references/knowledge-graph.md) | Graph contents, query recipes, and refinement                    |
 
 ## Development
 

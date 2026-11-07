@@ -91,7 +91,7 @@ Search covers task text, files, evidence, and commits across every page. Filters
 by run and area, and History adds an outcome filter. Filter changes return to the first
 page. On older pages, background updates preserve the first visible task when it still
 matches; **Latest** returns to the newest results. Page controls remain visible while
-scrolling. Tab arrows switch Board/History/Overview/Requests; Enter opens the focused card or row, and
+scrolling. Tab arrows switch Board/History/Overview/Requests/Knowledge; Enter opens the focused card or row, and
 Escape closes its details.
 
 Open a card or row for evidence, acceptance checks, verification, files, and commit
