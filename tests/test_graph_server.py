@@ -154,7 +154,8 @@ class GraphReadEndpointTests(LargeBoardGraph):
         snapshot, seconds, _ = self.get("/api/board", run="all")
         self.assertEqual(snapshot["graph"]["runs"], 11)
         self.assertGreater(snapshot["graph"]["insights"], 0)
-        self.assertEqual(set(snapshot["graph"]), {"revision", "nodes", "edges", "runs", "insights", "last_refine"},
+        self.assertEqual(set(snapshot["graph"]), {"revision", "nodes", "edges", "runs", "insights", "last_refine",
+                                                  "last_dream", "tick", "inferred"},
                          "the polled snapshot carries counters only; the graph itself is fetched on demand")
         self.assertIsInstance(snapshot["graph"]["nodes"], int)
         self.assertLess(seconds, 3.0)
@@ -259,6 +260,88 @@ class GraphCurationTests(LargeBoardGraph):
         self.assertIn(result["node"]["id"], {node["id"] for node in after["nodes"]})
         self.assertGreater(self.get("/api/board")[0]["graph"]["revision"], summary)
         self.assertEqual(self.get("/api/graph/node", id=result["node"]["id"])[0]["node"]["source"], "user")
+
+
+class DreamEndpointTests(LargeBoardGraph):
+    def forget(self, node_id, reason="endpoint test"):
+        with graph.locked(self.repo) as value:
+            graph.remove_node(value, node_id, reason=reason, op="forgotten")
+
+    def test_history_lists_filters_pages_and_validates(self):
+        doomed = self.notes[40:46]
+        for node_id in doomed:
+            self.forget(node_id, reason=f"cleanup {node_id}")
+        listing = self.get("/api/graph/history", limit=3)[0]
+        self.assertGreaterEqual(listing["total"], 6)
+        self.assertEqual(len(listing["rows"]), 3)
+        self.assertEqual(listing["rows"][0]["id"], doomed[-1], "newest first")
+        second = self.get("/api/graph/history", limit=3, offset=3)[0]
+        self.assertFalse({row["id"] for row in listing["rows"]} & {row["id"] for row in second["rows"]})
+        self.assertEqual(self.get("/api/graph/history", q=doomed[0])[0]["rows"][0]["id"], doomed[0])
+        self.assertTrue(all(row["type"] == "insight" for row in self.get("/api/graph/history", types="insight")[0]["rows"]))
+        self.assertLessEqual(len(self.get("/api/graph/history", limit=5000)[0]["rows"]), 100)
+        self.assertEqual(self.error("/api/graph/history?limit=many")[0], 400)
+
+    def test_restore_brings_a_node_back_once_and_validates(self):
+        target = self.notes[60]
+        links = {key for key, edge in load(self.repo)["edges"].items() if target in (edge["src"], edge["dst"])}
+        self.forget(target)
+        request = {"action": "restore", "request_id": str(uuid.uuid4()), "id": target}
+        token = self.token()
+        first = self.post(request, token)
+        self.assertEqual(self.post(request, token), first, "a retried restore applies once")
+        self.assertEqual(first["node"]["id"], target)
+        value = load(self.repo)
+        self.assertEqual({key for key, edge in value["edges"].items() if target in (edge["src"], edge["dst"])}, links)
+        self.assertEqual(self.get("/api/graph/node", id=target)[0]["node"]["restored"]["by"], "user")
+        headers = {"Content-Type": "application/json", "Origin": self.url, "X-Improve-Board-Token": token}
+        for data in ({"action": "restore", "request_id": str(uuid.uuid4()), "id": target},
+                     {"action": "restore", "request_id": str(uuid.uuid4()), "id": "insight:never"}):
+            with self.subTest(data=data):
+                code, message = self.error("/api/graph", json.dumps(data).encode(), headers)
+                self.assertEqual(code, 400)
+                self.assertIn("history", message)
+
+    def test_dream_runs_once_per_request_and_reports(self):
+        tick = load(self.repo)["tick"]
+        request = {"action": "dream", "request_id": str(uuid.uuid4())}
+        token = self.token()
+        started = time.perf_counter()
+        first = self.post(request, token)
+        self.assertLess(time.perf_counter() - started, 10)
+        self.assertEqual(self.post(request, token), first)
+        self.assertEqual(load(self.repo)["tick"], tick + 1)
+        self.assertIn("Dreamed:", first["message"])
+        view = self.get("/api/graph")[0]
+        self.assertEqual(view["dreams"][-1]["tick"], tick + 1)
+        self.assertEqual(self.get("/api/board")[0]["graph"]["tick"], tick + 1)
+
+    def test_rejecting_an_inferred_link_from_the_board(self):
+        left, right = sorted(self.notes[70:72])
+        key = graph.edge_key(left, "co_cited", right)
+        with graph.locked(self.repo) as value:
+            value["edges"][key] = dict(src=left, rel="co_cited", dst=right, inferred=True, confidence=0.7,
+                                       rule="cited-together", generation=1, evidence={"tasks": {"task:r1:t1": "done"}})
+        detail = self.get("/api/graph/node", id=left)[0]
+        link = next(row for row in detail["links"] if row["id"] == right)
+        self.assertEqual((link["inferred"], link["confidence"], link["rule"]), (True, 0.7, "cited-together"))
+        self.assertIn("task:r1:t1", link["evidence"])
+        token = self.token()
+        result = self.post({"action": "reject_link", "request_id": str(uuid.uuid4()), "src": right, "rel": "co_cited",
+                            "dst": left, "reason": "unrelated"}, token)
+        self.assertTrue(result["removed"])
+        value = load(self.repo)
+        self.assertNotIn(key, value["edges"])
+        self.assertEqual(value["dream"]["rejected"][key]["by"], "user")
+        headers = {"Content-Type": "application/json", "Origin": self.url, "X-Improve-Board-Token": token}
+        about = next(edge for edge in value["edges"].values() if edge["rel"] == "about")
+        for data in ({"action": "reject_link", "request_id": str(uuid.uuid4()), "src": left, "rel": "co_cited"},
+                     {"action": "reject_link", "request_id": str(uuid.uuid4()), "src": about["src"], "rel": "about",
+                      "dst": about["dst"]},
+                     {"action": "reject_link", "request_id": str(uuid.uuid4()), "src": "insight:none", "rel": "co_cited",
+                      "dst": left}):
+            with self.subTest(data=data):
+                self.assertEqual(self.error("/api/graph", json.dumps(data).encode(), headers)[0], 400)
 
 
 class GraphCacheTests(LargeBoardGraph):

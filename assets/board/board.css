@@ -2858,3 +2858,38 @@ button.danger {
 .mobile .graph-detail {
   max-height: none;
 }
+/* Dreaming: inferred links, history, and restore */
+.graph-edge.inferred {
+  stroke: #b49ef0;
+  stroke-dasharray: 5 3;
+}
+.graph-edge.inferred.highlight {
+  stroke: var(--purple);
+}
+.inferred-tag {
+  color: #6747c6;
+  white-space: nowrap;
+}
+.reject-link {
+  margin-left: 22px;
+  font-size: 11px;
+  padding: 0;
+}
+.forgotten-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 8px;
+  align-items: baseline;
+}
+.forgotten-row span {
+  overflow-wrap: anywhere;
+}
+.forgotten-row small {
+  grid-column: 1;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.forgotten-row .link-button {
+  grid-column: 2;
+  grid-row: 1;
+}

@@ -497,8 +497,8 @@ personal data. At the final report, record the one to three most useful lessons.
 
 ### Knowledge graph
 
-`.improve/graph.json` links every run, task, file, area, gate, blocker, and recorded insight.
-It also survives `--new-run`. Use it as the first source of history, before re-reading old
+`.improve/graph.db` links every run, task, file, area, gate, blocker, and recorded insight,
+plus links that dreaming inferred from evidence. It survives `--new-run`. Use it as the first source of history, before re-reading old
 ledgers. Follow [references/knowledge-graph.md](references/knowledge-graph.md):
 
 - Before selecting or editing a task, query its files and area. Do not retry an approach
@@ -509,12 +509,17 @@ ledgers. Follow [references/knowledge-graph.md](references/knowledge-graph.md):
 - Add the ids of insights you relied on to the task's `graph_refs`. Outcomes then credit or
   discredit them.
 - Record non-obvious, file-specific knowledge with `note --kind pitfall|technique|convention|decision|fact
-  --text '...' --about file:PATH area:AREA`. Use `rate ID wrong` on knowledge that proved false.
+  --text '...' --about file:PATH area:AREA`. Use `rate ID wrong` on knowledge that proved false
+  and `unlink SRC REL DST` on an inferred link that is wrong.
+- Nothing is lost: `history --query WORDS` finds forgotten knowledge and `restore ID` brings
+  it back. When the queue is empty, consolidate a dreaming proposal (`proposals`, `consolidate`).
 - Knowledge the user added or pinned on the board is steering: treat a `decision` or
   `convention` like an intake constraint.
 
-The daemon syncs the graph after each cycle and refines it when the run ends. In a
-foreground run, run `sync` at checkpoints and `sync --refine` after the final report.
+The daemon syncs the graph after each cycle, refines it every 30 minutes, dreams every three
+hours (infers links, archives and forgets unused knowledge, proposes consolidations), and
+dreams again when the run ends. In a foreground run, run `sync` at checkpoints and
+`sync --dream` after the final report.
 
 ## Cost, and where it goes
 

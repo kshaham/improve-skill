@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import secrets
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -328,6 +329,12 @@ def graph_get(repo, path, query):
                                         include_archived=first("archived") == "1")
     if path == "/api/graph/node":
         return improve_graph.node_detail(graph, first("id", ""))
+    if path == "/api/graph/history":
+        types = [kind for kind in first("types", "").split(",") if kind in improve_graph.TYPES]
+        result = improve_graph.history(repo, max(1, min(int(first("limit", "20")), 100)),
+                                       max(0, int(first("offset", "0"))), types or None, first("q"),
+                                       first("restored") == "1")
+        return result
     if path == "/api/graph/context":
         files = query_values(query, "file", 300)[:MAX_CONTEXT_FILES]
         area = first("area")
@@ -371,6 +378,22 @@ def graph_post(repo, data):
                 "useful": "Marked useful; it will rank higher.", "wrong": "Marked wrong; the skill will stop using it.",
                 "pin": "Pinned; the skill sees it every cycle.", "unpin": "Unpinned.",
                 "archive": "Archived; hidden from the skill.", "restore": "Restored."}[data.get("verdict")]}
+        elif action == "dream":
+            from improve_dream import dream
+            report = dream(graph, repo)
+            inferred = report["inferred"]
+            result = {"dream": report, "message": f"Dreamed: {inferred['new']} new links, {inferred['dropped']} dropped, "
+                                                  f"{report['archived']} archived, {report['forgotten']} forgotten."}
+        elif action == "restore":
+            node = improve_graph.restore_node(graph, str(data.get("id", ""))[:400], "restored from the board", "user")
+            result = {"node": improve_graph.node_view(node), "message": "Restored with its links. The skill sees it again."}
+        elif action == "reject_link":
+            from improve_dream import reject_link
+            fields = [data.get(name) for name in ("src", "rel", "dst")]
+            if not all(isinstance(value, str) and 0 < len(value) <= 400 for value in fields):
+                raise StateError("src, rel, and dst are required")
+            result = {**reject_link(graph, *fields, by="user", reason=data.get("reason") if isinstance(data.get("reason"), str) else None),
+                      "message": "Link removed. Dreaming will not infer it again."}
         elif action == "refine":
             report = improve_graph.refine(graph, repo)
             result = {"refine": report, "message": f"Refined: {report['merged']} merged, {report['faded']} faded, {report['stale_files']} stale files."}
@@ -470,11 +493,11 @@ class BoardHandler(BaseHTTPRequestHandler):
                 return self.reply(200, {"text": report, "run_id": selected})
             except (StateError, OSError, ValueError) as exc:
                 return self.reply(400, {"error": str(exc)})
-        if target.path in ("/api/graph", "/api/graph/node", "/api/graph/context"):
+        if target.path in ("/api/graph", "/api/graph/node", "/api/graph/context", "/api/graph/history"):
             try:
                 query = parse_qs(target.query, max_num_fields=40)
                 return self.reply(200, graph_get(self.server.repo, target.path, query))
-            except (StateError, OSError, ValueError) as exc:
+            except (StateError, OSError, ValueError, sqlite3.Error) as exc:
                 return self.reply(400, {"error": str(exc)})
         if target.path == "/api/health":
             return self.reply(200, {"service": "improve-board", "instance": self.server.instance,
@@ -571,7 +594,7 @@ class BoardHandler(BaseHTTPRequestHandler):
                     "resume": "Resume requested. The original deadline is unchanged.",
                     "stop": "Stop requested. The skill will settle current work and end the run."
                 }[action]})
-        except (StateError, OSError, ValueError, TypeError, RecursionError) as exc:
+        except (StateError, OSError, ValueError, TypeError, RecursionError, sqlite3.Error) as exc:
             return self.reply(400, {"error": str(exc)})
 
 

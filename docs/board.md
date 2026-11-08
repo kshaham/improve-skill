@@ -47,10 +47,14 @@ The board includes:
   **Archive**/**Restore**, and **+ Add knowledge** (a pitfall, technique, convention,
   decision, or fact, optionally about files or areas). The skill reads your changes at its
   next cycle. **Refine now** merges duplicates and rescores; the refinement log lists each
-  pass. Task details include **What the knowledge graph knows here**: earlier attempts on
-  the same files, knowledge to apply, blockers, and files usually changed together. The
-  graph is kept across runs in `.improve/graph.json`. Knowledge export downloads the
-  nodes and links currently shown.
+  pass. **Dream now** infers links, archives and forgets unused knowledge, and proposes
+  consolidations; the dream log lists each dream. Inferred links are dashed and show their
+  confidence; hover for the evidence, and **Not related** removes one so it is never inferred
+  again. **Recently forgotten** lists removed nodes with the reason; **Restore** brings one
+  back with its links. Task details include **What the knowledge graph knows here**: earlier
+  attempts on the same files, knowledge to apply, blockers, and files usually changed
+  together. The graph is kept across runs in `.improve/graph.db`. Knowledge export
+  downloads the nodes and links currently shown.
 - **Run overview:** compare task totals by area, see high-priority queued work, pending
   requests, and how many completed tasks have recorded verification. Browse twenty saved
   activity events at a time, filter task/request events, and open the associated details.

@@ -120,6 +120,8 @@ class GraphEngineTests(GraphFixture):
                 graph.add_insight(value, "A valid sentence with a bad kind", "rumor")
             with self.assertRaises(graph.GraphError):
                 graph.add_insight(value, "Points at nothing that can exist", about=["nonsense"])
+            self.assertFalse(any(node.get("summary") == "Points at nothing that can exist"
+                                 for node in value["nodes"].values()), "a bad target records nothing")
         value = self.graph()
         context = graph.context(value, ["src/api/db.py"], repo=self.repo)
         self.assertEqual(context["insights"][0]["id"], first["id"])
@@ -209,7 +211,8 @@ class GraphEngineTests(GraphFixture):
         self.assertEqual(graph.load(graph.graph_path(self.repo), repair=False)["nodes"], {})
         self.assertTrue(graph.graph_path(self.repo).exists(), "readers leave the damaged file alone")
         graph.sync(self.repo)
-        self.assertTrue(graph.graph_path(self.repo).with_suffix(".damaged.json").exists())
+        self.assertEqual(graph.damaged_path(graph.graph_path(self.repo)).read_text(), "{broken",
+                         "the damaged file is kept for inspection")
         self.assertTrue(self.graph()["nodes"])
 
     def test_board_view_projects_edges_through_hidden_tasks(self):

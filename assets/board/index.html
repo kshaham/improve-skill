@@ -502,12 +502,15 @@
             <h2>Knowledge graph</h2>
             <p>
               What the skill has learned across runs: files, outcomes, gates,
-              blockers, and the knowledge it follows. It is refined after every
-              run and read before every task.
+              blockers, and the knowledge it follows. It is read before every
+              task, refined after every run, and it dreams: infers links nobody
+              wrote down, and forgets what stopped being useful. Nothing is lost:
+              forgotten nodes can be restored.
             </p>
           </div>
           <div class="graph-heading-actions">
-            <button id="graph-refine" type="button">Refine now</button
+            <button id="graph-dream" type="button">Dream now</button
+            ><button id="graph-refine" type="button">Refine now</button
             ><button id="graph-add" type="button" class="primary">
               + Add knowledge
             </button>
@@ -558,6 +561,15 @@
           <div><h4>Strongest knowledge</h4><ol id="graph-top"></ol></div>
           <div><h4>Files that resist change</h4><ul id="graph-hotspots"></ul></div>
           <div><h4>Refinement log</h4><ul id="graph-refines"></ul></div>
+        </div>
+        <div class="learning-columns graph-lists">
+          <div><h4>Dream log</h4><ul id="graph-dreams"></ul></div>
+          <div><h4>Consolidation proposals</h4><ul id="graph-proposals"></ul></div>
+          <div>
+            <h4>Recently forgotten <span id="graph-forgotten-count" class="view-count">0</span></h4>
+            <ul id="graph-forgotten"></ul>
+            <button id="graph-forgotten-more" class="link-button" type="button" hidden>Show more</button>
+          </div>
         </div>
       </section>
       <section id="discovery-section" class="discovery-section" hidden>

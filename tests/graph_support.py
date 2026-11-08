@@ -63,6 +63,33 @@ def load(repo):
     return graph.load(graph.graph_path(repo), repair=False)
 
 
+def store_bytes(repo):
+    """The live graph on disk (database plus write-ahead log), history included."""
+    path = graph.graph_path(repo)
+    return sum(name.stat().st_size for name in (path, Path(str(path) + "-wal")) if name.exists())
+
+
+def check_disk(test, repo, limit_mb=10):
+    """The live store stays bounded, and its checkpoint is a copy, not a second growth path."""
+    size = store_bytes(repo)
+    test.assertLess(size, limit_mb * 1024 * 1024, "database and log, history included")
+    backup = graph.backup_path(graph.graph_path(repo))
+    if backup.exists():
+        test.assertLessEqual(backup.stat().st_size, graph.graph_path(repo).stat().st_size * 1.1 + 65536)
+
+
+def copy_store(source_repo, target_repo):
+    """A consistent copy of a live graph database, the way SQLite itself copies one."""
+    import sqlite3
+    source = sqlite3.connect(str(graph.graph_path(source_repo)))
+    target = sqlite3.connect(str(graph.graph_path(target_repo)))
+    try:
+        source.backup(target)
+    finally:
+        source.close()
+        target.close()
+
+
 def finished_counts(rows_by_file):
     return {path: {status: rows.count(status) for status in graph.FINISHED} for path, rows in rows_by_file.items()}
 
@@ -255,3 +282,114 @@ def restore_environment(previous):
         os.environ.pop("IMPROVE_LEARNING_HOME", None)
     else:
         os.environ["IMPROVE_LEARNING_HOME"] = previous
+
+
+class World:
+    """A repository with a known ground truth, for measuring how accurate dreaming is.
+
+    Files belong to modules; modules belong to areas. Each module has knowledge that truly
+    applies to it, worded with the module's own vocabulary, and an environment blocker that
+    stops some of its tasks. Agents mostly cite the right knowledge (and then succeed more
+    often) but sometimes cite knowledge from another module (noise that fails more often).
+    Every inferred link can then be graded against the truth.
+    """
+
+    VOCABULARY = ("cache", "queue", "schema", "token", "socket", "render", "parser", "ledger", "upload",
+                  "search", "billing", "session", "export", "thumbnail", "webhook", "locale")
+    TOPICS = ("needs a warm fixture before its tests", "breaks when run in parallel with others",
+              "must be migrated before deploys", "times out unless the retry budget is raised")
+
+    def __init__(self, root, modules=12, files_per_module=8, insights_per_module=3, seed=7,
+                 true_cite=0.6, noise_cite=0.08):
+        self.random = random.Random(seed)
+        self.modules = modules
+        self.true_cite, self.noise_cite = true_cite, noise_cite
+        self.files = {module: [f"mod{module:02d}/part{index}.py" for index in range(files_per_module)]
+                      for module in range(modules)}
+        self.module_of_file = {path: module for module, paths in self.files.items() for path in paths}
+        self.area_of_module = {module: LongSession.AREAS[module % len(LongSession.AREAS)] for module in range(modules)}
+        self.repo = make_repo(root, [path for paths in self.files.values() for path in paths])
+        self.state = self.repo / ".improve"
+        write_run(self.state, "world", {"py.fast": 7})
+        self.rows, self.insights, self.module_of_insight = [], {}, {}
+        self.blocker_of_module = {module: f"Device farm {self.VOCABULARY[module % 16]} lane offline"
+                                  for module in range(modules)}
+        with graph.locked(self.repo) as value:
+            for module in range(modules):
+                word = self.VOCABULARY[module % len(self.VOCABULARY)]
+                for index in range(insights_per_module):
+                    text = (f"The {word} module {self.TOPICS[index % len(self.TOPICS)]}; "
+                            f"{word} {word}-store and {word}-worker share state m{module}")
+                    node = graph.add_insight(value, text, ("pitfall", "technique", "fact")[index % 3])
+                    self.insights.setdefault(module, []).append(node["id"])
+                    self.module_of_insight[node["id"]] = module
+
+    def task(self, number):
+        rand = self.random
+        module = rand.randrange(self.modules)
+        files = self.files[module]
+        anchor = rand.randrange(len(files))
+        # Neighboring parts of a module change together, which co-change edges should learn.
+        touched = sorted({files[anchor], *(files[(anchor + 1) % len(files)] for _ in range(rand.random() < 0.6))})
+        cited = [node_id for node_id in self.insights[module] if rand.random() < self.true_cite]
+        noise = rand.random() < self.noise_cite * 3
+        if noise:
+            cited.append(rand.choice(self.insights[rand.choice([m for m in range(self.modules) if m != module])]))
+        blocked = rand.random() < 0.1
+        success = 0.45 + (0.35 if cited and not noise else 0) - (0.3 if noise else 0)
+        status = "blocked" if blocked else ("done" if rand.random() < success else "rejected")
+        row = dict(id=f"w{number}", title=f"World task {number}", area=self.area_of_module[module], status=status,
+                   paths=touched, graph_refs=cited, verification="py.fast ok")
+        if blocked:
+            row["blocked_reason"] = self.blocker_of_module[module] if rand.random() < 0.9 else "Random flake"
+        return row
+
+    def advance(self, tasks=5):
+        for _ in range(tasks):
+            self.rows.append(self.task(len(self.rows)))
+        write_ledger(self.state, self.rows)
+
+    # -------------------------------------------------------- grading
+
+    def truth(self, value, edge):
+        """True, False, or None (no ground truth for this kind of link)."""
+        nodes = value["nodes"]
+        src, dst = nodes.get(edge["src"], {}), nodes.get(edge["dst"], {})
+        module = self.module_of_insight.get(edge["src"])
+        if edge["rel"] == "applies_to":
+            if dst.get("type") == "file":
+                return self.module_of_file.get(dst["label"]) == module
+            if dst.get("type") == "area":
+                return self.area_of_module.get(module) == dst["label"]
+        if edge["rel"] in ("co_cited", "similar_to"):
+            other = self.module_of_insight.get(edge["dst"])
+            return None if module is None or other is None else module == other
+        if edge["rel"] == "affects":
+            blocker_module = next((m for m, text in self.blocker_of_module.items() if text == src.get("label")), None)
+            return None if blocker_module is None else blocker_module == self.module_of_file.get(dst.get("label"))
+        return None
+
+    def grade(self, value):
+        """Precision of inferred links per rule, and coverage of true insight-to-file links."""
+        scores = {}
+        for edge in value["edges"].values():
+            if not edge.get("inferred"):
+                continue
+            verdict = self.truth(value, edge)
+            if verdict is None:
+                continue
+            bucket = scores.setdefault(edge["rule"], [0, 0])
+            bucket[0] += verdict
+            bucket[1] += 1
+        precision = {rule: right / total for rule, (right, total) in scores.items()}
+        counts = {rule: total for rule, (_, total) in scores.items()}
+        inferred_pairs = {(edge["src"], edge["dst"]) for edge in value["edges"].values()
+                          if edge.get("inferred") and edge["rel"] == "applies_to"}
+        worked = {}
+        for row in self.rows:
+            for path in row["paths"]:
+                worked[path] = worked.get(path, 0) + (row["status"] == "done")
+        eligible = [(insight, "file:" + path) for module, insights in self.insights.items() for insight in insights
+                    for path in self.files[module] if worked.get(path, 0) >= 4 and insight in value["nodes"]]
+        recall = sum(pair in inferred_pairs for pair in eligible) / len(eligible) if eligible else 0.0
+        return precision, counts, recall
