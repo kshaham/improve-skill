@@ -35,6 +35,7 @@ let graphData = null,
   graphDetailLoad = 0,
   graphNoteRetry = null,
   graphPendingTask = null,
+  graphKeepStatus = false,
   taskKnowledgeKey = "",
   graphTypes = new Set(GRAPH_DEFAULT_TYPES);
 const graphLayout = new GraphLayout(),
@@ -133,8 +134,10 @@ async function loadGraph() {
     if (changedScope) graphFitPending = true;
     drawGraph();
     renderGraphLists();
-    // A refresh after a save keeps that confirmation; only a new scope is described.
-    if (changedScope)
+    // A refresh after a save keeps that confirmation; only a new scope is described,
+    // unless the scope changed only to explain a missing node.
+    if (changedScope && graphKeepStatus) graphKeepStatus = false;
+    else if (changedScope)
       graphStatus(
       data.focus
         ? `Showing the neighborhood of “${shortLabel(data.nodes.find((node) => node.id === data.focus)?.label, 60)}”.`
@@ -149,6 +152,7 @@ async function loadGraph() {
     if (error.message === "that node is no longer in the graph") {
       graphFocus = null;
       graphSelected = null;
+      graphKeepStatus = true;
       graphStatus("That node was merged or removed during refinement. Showing the strongest nodes.");
     } else graphStatus("The knowledge graph could not load. " + error.message, true);
   } finally {

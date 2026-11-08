@@ -79,9 +79,11 @@ Each file and area carries `stats`: done/rejected/blocked attempts and a smoothe
 
 ## Maintenance (automatic)
 
-The daemon runs `sync` after every cycle (live tasks, gates, blockers, lessons) and
-`sync --refine` when a run ends. Archived runs are backfilled on first use. Refinement is
-deterministic and does the following:
+The daemon runs `sync` after every cycle (live tasks, gates, blockers, lessons), refines
+every `IMPROVE_GRAPH_REFINE_MINUTES` (30) during a run, and refines again when the run ends.
+Sync treats the ledger as the source of truth: a task's links follow its current status,
+files, area, and `graph_refs`, and a task that leaves a readable ledger leaves the graph.
+Archived runs are backfilled on first use. Refinement is deterministic and does the following:
 
 - merges near-duplicate insights and keeps aliases, so old ids still resolve
 - recomputes file/area success rates and rebuilds `co_changed` links from done tasks
@@ -89,9 +91,11 @@ deterministic and does the following:
 - archives insights that are contradicted more often than confirmed, or unused for many runs
   (pinned ones are kept)
 - prunes the oldest tasks beyond the size bound, folding their outcomes into file and area
-  baselines
+  baselines exactly once (pruned task ids are remembered, so a re-sync never re-adds them)
+- removes blockers nothing points to and bounds blockers, files, knowledge, and aliases
 - logs a summary that the board shows
 
-A damaged `graph.json` is set aside as `graph.damaged.json` and rebuilt from the ledgers. It
-never stops a run. The user can see, pin, archive, correct, and add knowledge from the
+Each refinement also saves `graph.backup.json`. A damaged `graph.json` is set aside as
+`graph.damaged.json` and restored from that backup (or rebuilt from the ledgers), and newer
+ledger work is re-ingested. It never stops a run. The user can see, pin, archive, correct, and add knowledge from the
 board's **Knowledge** tab. That knowledge reaches you in the next cycle's brief.

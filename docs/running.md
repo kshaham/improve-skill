@@ -266,7 +266,9 @@ python3 scripts/improve_learning.py --repo "$improve_repo" lesson --area coverag
 ## Knowledge graph
 
 `.improve/graph.json` links runs, tasks, files, areas, gates, blockers, and recorded
-knowledge. The daemon syncs it after every cycle and refines it when a run ends: it merges
+knowledge. The daemon syncs it after every cycle, refines it every 30 minutes during a run
+and again when the run ends. Sync follows ledger edits: links a task no longer has, and tasks
+that left the ledger, are removed. Refinement merges
 duplicates, rescores, archives knowledge that was contradicted or unused, flags deleted
 files, and keeps a bounded size. Each cycle prompt includes a ranked brief, and agents
 query it before every task. It is kept when `--new-run` archives the previous run, and
@@ -300,6 +302,7 @@ Other commands: `search`, `node`, `path`, `hotspots`, `link`, `rate`, `stats`. S
 | `IMPROVE_MAX_WORKER_HALTS`  | `2`                      | Worker halts converted to blocked tasks before one is honored                        |
 | `IMPROVE_QUARANTINE`        | `1`                      | Save a cycle's uncommitted edits to `refs/improve/quarantine/*` and continue; `0` halts instead |
 | `IMPROVE_LEARNING_HOME`     | `~/.config/improve`      | Location of cross-project lessons (`learning.json`)                                  |
+| `IMPROVE_GRAPH_REFINE_MINUTES` | `30`                  | Refine the knowledge graph during a run at most this often; `0` refines only at run end |
 | `IMPROVE_LIMIT_WAIT`        | `900`                    | First account-limit wait                                                             |
 | `IMPROVE_LIMIT_WAIT_CAP`    | `3600`                   | Maximum individual account-limit wait                                                |
 | `IMPROVE_LIMIT_WAIT_BUDGET` | `14400`                  | Total wall-clock account-limit wait budget, including downtime inside a pending wait |

@@ -356,6 +356,7 @@ class Supervisor:
         self.max_worker_halts = env_integer("IMPROVE_MAX_WORKER_HALTS", 2, 0)
         self.cooldown = env_integer("IMPROVE_RECOVERY_COOLDOWN", 60, 0)
         self.cooldown_cap = env_integer("IMPROVE_RECOVERY_COOLDOWN_CAP", 900, 0)
+        self.graph_refine_interval = 60 * env_integer("IMPROVE_GRAPH_REFINE_MINUTES", 30, 0)
 
     def log(self, message):
         line = f"{stamp()} {message}"
@@ -770,8 +771,9 @@ Mark graph knowledge that proved false with `rate ID wrong`. Follow {Path(__file
         """Fold the run into the knowledge graph; a graph problem never stops a run."""
         try:
             from improve_graph import sync
-            result = sync(self.repo, refine_after=refine)
-            if refine and result.get("refine"):
+            # Long runs refine periodically too, so success rates and scores stay current.
+            result = sync(self.repo, refine_after=refine, refine_interval=self.graph_refine_interval)
+            if result.get("refine"):
                 report = result["refine"]
                 self.log(f"knowledge graph refined: {report['nodes']} nodes, {report['merged']} merged, "
                          f"{report['faded']} faded, {report['stale_files']} stale files")
@@ -969,7 +971,7 @@ def daemon(args):
                     raise StateError("--new-run requires --intake FILE from a new ten-question intake")
                 intake = read_json(Path(args.intake).expanduser())
                 # learning.json and graph.json are the cross-run memory; they stay with the repository.
-                keep = {"history", "daemon.lock", "learning.json", "graph.json", "graph.lock", *SERVICE_FILES}
+                keep = {"history", "daemon.lock", "learning.json", "graph.json", "graph.lock", "graph.backup.json", *SERVICE_FILES}
                 old = [p for p in state.iterdir() if p.name not in keep]
                 if old:
                     history = state / "history"
