@@ -8,7 +8,8 @@
       "baseline_commit": "8765b28",
       "started_at": "2026-09-05T14:03:00Z",
       "deadline":   "2026-09-05T18:03:00Z",
-      "focus": { "source": "intake.json", "priorities": [], "excluded": [] },
+      "focus": { "source": "intake.json", "priorities": [], "excluded": [],
+                 "board_areas": { "prefer": ["ui"], "skip": ["docs"], "request_id": "UUID", "at": "2026-09-05T15:10:00Z" } },
       "authorization": { "grants": [], "exclusions": [] },
       "phase": "discover",
       "preflight_complete": true,
@@ -81,7 +82,9 @@ gate-speed|docs|accessibility|contracts|features|ui|assets`; only lanes in `lane
 `confidence` 0-1, `blast` 1-5. `status` is `ready|in_progress|done|rejected|blocked|proposed`.
 Legacy `benched` tasks display in the board's Blocked column. A benched lane remains
 separately recorded in `run.json.benched_areas`.
-`focus_priority` links to the ordered focus plan; `acceptance` records the observable
+`graph_refs` lists the knowledge-graph insight ids the task relied on (see
+[knowledge-graph.md](knowledge-graph.md)). A done task credits them; a rejected or blocked
+task counts against them. `focus_priority` links to the ordered focus plan; `acceptance` records the observable
 requested result for feature/visual work; `reopens` links to a prior candidate only when
 new evidence permits reconsideration.
 `note` carries the rejection reason verbatim - the gate's actual output, not a paraphrase.

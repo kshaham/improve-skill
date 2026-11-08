@@ -14,6 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import improve_board as board  # noqa: E402
 from browser_controls import check_controls  # noqa: E402
+from browser_focus import check_focus  # noqa: E402
+from browser_graph import check_graph  # noqa: E402
+from browser_mobile import check_mobile  # noqa: E402
 from browser_workflow import check_workflow  # noqa: E402
 from browser_triage import check_triage  # noqa: E402
 
@@ -282,6 +285,9 @@ def main():
                 check_controls(page, repo, tasks, write_tasks, artifacts)
                 check_workflow(page, repo, tasks, write_tasks, artifacts)
                 check_triage(page, repo, tasks, write_tasks, artifacts)
+                check_focus(page, repo, tasks, write_tasks, artifacts)
+                check_mobile(page, repo, info["url"], tasks, write_tasks, artifacts)
+                check_graph(page, repo, tasks, write_tasks, artifacts)
                 assert not errors, errors
                 browser.close()
         finally:

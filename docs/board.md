@@ -37,6 +37,24 @@ The board includes:
 - **Task notes and request history:** add context to current tasks, including completed
   work, and read linked requests and responses in their details. Notes preserve existing
   verification; follow-up implementation gets a separate task.
+- **What the skill has learned:** the Overview tab shows verified-success rates by area,
+  the lessons the skill follows, and recurring blockers, built from every finished run.
+- **Knowledge graph:** the Knowledge tab draws what the skill has learned across runs:
+  files, areas, tasks, gates, blockers, and knowledge, and how they connect. Search it,
+  filter by node type, drag nodes, zoom, and select a node to see its links, success rate,
+  and evidence. Focus a node to show its neighborhood, or open a task node in the task
+  dialog. Curate knowledge with **Pin** (shown every cycle), **Useful**, **Wrong**,
+  **Archive**/**Restore**, and **+ Add knowledge** (a pitfall, technique, convention,
+  decision, or fact, optionally about files or areas). The skill reads your changes at its
+  next cycle. **Refine now** merges duplicates and rescores; the refinement log lists each
+  pass. **Dream now** infers links, archives and forgets unused knowledge, and proposes
+  consolidations; the dream log lists each dream. Inferred links are dashed and show their
+  confidence; hover for the evidence, and **Not related** removes one so it is never inferred
+  again. **Recently forgotten** lists removed nodes with the reason; **Restore** brings one
+  back with its links. Task details include **What the knowledge graph knows here**: earlier
+  attempts on the same files, knowledge to apply, blockers, and files usually changed
+  together. The graph is kept across runs in `.improve/graph.db`. Knowledge export
+  downloads the nodes and links currently shown.
 - **Run overview:** compare task totals by area, see high-priority queued work, pending
   requests, and how many completed tasks have recorded verification. Browse twenty saved
   activity events at a time, filter task/request events, and open the associated details.
@@ -50,6 +68,27 @@ The board includes:
   and pending final report. A connected board is separate from a running daemon.
 - **Run controls:** pause after a clean checkpoint, resume, or stop a running daemon.
   Pause keeps the original wall-clock deadline; it works with either saved engine.
+- **Improvement categories:** tap one or more of twenty tiles such as UI/UX polish,
+  Animation & transitions, Security hardening, Scaling & production, Logging & monitoring,
+  Mobile & responsive, Privacy, Internationalization, or SEO. Each tile prefers its task
+  areas and tells the skill exactly what to hunt for (see `references/categories.md`).
+  Voice works too: “focus on animations and scaling”.
+- **Focus areas:** under **Fine-tune by area**, choose Prefer, Normal, or Skip for each task
+  area (features, UI, security, performance, tests, docs, and more). Each tile shows open and finished work in that area and
+  links to a filtered board. The skill applies a saved focus at its next checkpoint; cards in
+  preferred areas are marked *Focus* and skipped areas are dimmed.
+- **Mobile layout:** phones and small touch screens switch to it automatically: a bottom
+  navigation bar, one board column at a time (tap a status chip or swipe left/right),
+  larger touch targets, a sticky run status strip, and full-width sheets for forms. Use
+  **Switch to mobile/desktop view** in the footer, or `?layout=mobile|desktop|auto`, to
+  override detection in that browser.
+- **Voice steering:** tap the microphone (bottom bar on phones, **Steer by voice** or
+  Shift+V on desktop) and speak a command: “focus on security and skip docs”, “new task:
+  add offline mode, high priority”, “the checkout should keep the cart after reload”,
+  “pause the run”, or “resume”. The board shows what it heard and how it will send it;
+  you can edit either. In hands-free mode it reads the command back and listens for
+  “send”, “cancel”, or “again”. Stopping a run requires saying “confirm stop”. Every
+  text field in request forms also has a dictation microphone.
 - **New tasks and guidance:** send desired outcomes, acceptance checks, or updated focus
   directly from the board. Change a current task's priority or approve/decline a proposal
   from its details.
@@ -101,6 +140,30 @@ Submitting a task or guidance while browsing an archive saves it to the current 
 returns the Requests view there. Search includes receipt text as well as request details.
 The worker reads its pending requests and run identity together under the archival lock.
 See [request handling and controls](../references/board-control.md) for the checkpoint contract.
+
+## Using the board from a phone
+
+The board listens only on `127.0.0.1`, and browsers allow microphone access only on
+HTTPS or localhost pages. To use it from a phone, put it behind an HTTPS tunnel that only
+your devices can reach, then tell the board to accept that hostname. For example, with
+Tailscale on the computer running the board:
+
+```sh
+tailscale serve --bg --https=443 http://127.0.0.1:8765
+"$improve_board" --repo "$improve_repo" --stop
+"$improve_board" --repo "$improve_repo" --start --port 8765 --allow-host mymac.example-tailnet.ts.net
+# Prints the local URL and "Phone: https://mymac.example-tailnet.ts.net"
+```
+
+Daemon runs take the same option as `--board-allow-host`. Requests through that hostname
+must come from an `https://` page on it; plain-HTTP origins and other hostnames are
+refused. Anyone who can open the tunnel URL can steer the run, so never expose it
+publicly (for example with Tailscale Funnel or an open port forward).
+
+Speech recognition is provided by the browser. Chrome and Edge send audio to their
+vendor's speech service; Safari may process it on the device or with Apple. Firefox has
+no speech recognition, so the microphone explains that and keyboard dictation still works.
+Nothing is sent to the skill until you confirm it.
 
 ## Drafts and links
 

@@ -176,6 +176,32 @@ if mode == 'controlled' and 'FINALIZATION ONLY' not in prompt:
 path = state / 'run.json'
 run = json.loads(path.read_text()) if path.exists() else dict(
     started_at=control['started_at'], deadline=control['deadline'], outcome=None, cycle=0)
+if mode.startswith('once_') and 'FINALIZATION ONLY' not in prompt:
+    kind, number = mode[5:], run.get('cycle', 0) + 1
+    if not (state / 'once-done').exists():
+        (state / 'once-done').touch()
+        with (state / 'backlog.jsonl').open('a') as stream:
+            stream.write(json.dumps({'id': 't-1', 'title': 'Fragile task', 'area': 'ui', 'status': 'in_progress'}) + '\n')
+        run['active_item'] = {'id': 't-1', 'title': 'Fragile task'}
+        run['cycle'] = number
+        if kind == 'halt':
+            run['outcome'] = 'halted: test database unavailable'
+        elif kind == 'dirty':
+            pathlib.Path('half-done.txt').write_text('unverified work')
+        elif kind == 'corrupt':
+            with (state / 'backlog.jsonl').open('a') as stream:
+                stream.write('{broken line\n')
+            path.write_text('{not json')
+            sys.exit(0)
+        path.write_text(json.dumps(run))
+        sys.exit(0)
+    run['cycle'] = number
+    with (state / 'discovery.jsonl').open('a') as stream:
+        stream.write(json.dumps({'scope': 'lane-' + str(number), 'lane': 'ui', 'accepted': 0}) + '\n')
+    if number >= 3:
+        run['outcome'] = 'stopped by user'
+    path.write_text(json.dumps(run))
+    sys.exit(0)
 if 'FINALIZATION ONLY' in prompt:
     if mode == 'final_fail':
         sys.exit(1)
@@ -248,7 +274,10 @@ class DaemonTests(unittest.TestCase):
         markers = {key for keys in runtime.HOST_MARKERS.values() for key in keys}
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("IMPROVE_") and k not in markers}
         self.env.update(PATH=str(self.bin) + os.pathsep + self.env["PATH"],
-                        IMPROVE_ENGINE="claude", IMPROVE_CYCLE_GAP="0", PYTHONDONTWRITEBYTECODE="1")
+                        IMPROVE_ENGINE="claude", IMPROVE_CYCLE_GAP="0", PYTHONDONTWRITEBYTECODE="1",
+                        IMPROVE_LEARNING_HOME=str(self.root / "learning-home"), IMPROVE_RECOVERY_COOLDOWN="0")
+        # Legacy tests pin the strict halting contract; ResilienceTests opt into recovery.
+        self.env.update(IMPROVE_MAX_RECOVERIES="0", IMPROVE_MAX_WORKER_HALTS="0", IMPROVE_QUARANTINE="0")
 
     def tearDown(self):
         if (self.state / "board.json").exists():
@@ -1028,3 +1057,139 @@ class DaemonTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResilienceTests(DaemonTests):
+    """Default resilient behavior: block, work around, and keep the run going."""
+
+    def setUp(self):
+        super().setUp()
+        for key in ("IMPROVE_MAX_RECOVERIES", "IMPROVE_MAX_WORKER_HALTS", "IMPROVE_QUARANTINE"):
+            self.env.pop(key)
+
+    def tasks(self):
+        merged = {}
+        for line in (self.state / "backlog.jsonl").read_text().splitlines():
+            row = json.loads(line)
+            merged[row["id"]] = {**merged.get(row["id"], {}), **row}
+        return merged
+
+    def test_worker_halt_blocks_the_task_and_the_run_continues(self):
+        result = self.invoke("once_halt")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertGreaterEqual(len(self.launches()), 3)
+        task = self.tasks()["t-1"]
+        self.assertEqual(task["status"], "blocked")
+        self.assertIn("test database unavailable", task["blocked_reason"])
+        self.assertEqual(self.load("supervisor.json")["outcome"], "stopped by user")
+        self.assertIn("Work around it", self.launches()[1]["prompt"])
+        self.assertIn("Blocked tasks", self.launches()[1]["prompt"])
+
+    def test_repeated_worker_halts_are_eventually_honored(self):
+        result = self.invoke("halt")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(len(self.launches()), 3)  # Two softened halts, then the third is honored.
+        self.assertIn("required gate unavailable", self.load("supervisor.json")["outcome"])
+
+    def test_uncommitted_cycle_work_is_quarantined_not_lost(self):
+        result = self.invoke("once_dirty")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.repo / "half-done.txt").exists())
+        refs = self.git("for-each-ref", "--format=%(refname)", "refs/improve/quarantine").stdout.decode().split()
+        self.assertEqual(len(refs), 1)
+        saved = self.git("show", refs[0] + ":half-done.txt").stdout.decode()
+        self.assertEqual(saved, "unverified work")
+        self.assertEqual(self.tasks()["t-1"]["status"], "blocked")
+        self.assertIn(refs[0], self.launches()[1]["prompt"])
+        self.assertEqual(self.load("supervisor.json")["quarantines"], 1)
+
+    def test_corrupted_state_is_repaired_and_work_continues(self):
+        result = self.invoke("once_corrupt")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("{broken line", (self.state / "backlog.jsonl.damaged").read_text())
+        self.assertTrue((self.state / "run.damaged.json").exists())
+        self.assertIn("damaged saved state", self.launches()[1]["prompt"])
+
+    def test_failure_breaker_recovers_before_halting(self):
+        result = subprocess.run(self.command("--for", "60s", "--intake", str(self.intake)),
+                                env={**self.env, "FAKE_MODE": "no_checkpoint", "IMPROVE_MAX_RECOVERIES": "1"},
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(len(self.launches()), 6)
+        self.assertIn("Supervisor recovery 1", self.launches()[3]["prompt"])
+        self.assertIn("after 1 recoveries", self.load("supervisor.json")["outcome"])
+
+    def test_learning_survives_new_runs_and_reaches_the_next_prompt(self):
+        self.assertEqual(self.invoke("once_halt").returncode, 0)
+        learning = self.load("learning.json")
+        self.assertEqual(len(learning["runs"]), 1)
+        self.assertEqual(learning["areas"]["ui"]["blocked"], 1)
+        helper = [sys.executable, str(ROOT / "scripts/improve_learning.py"), "--repo", str(self.repo), "lesson",
+                  "--area", "coverage", "--text", "Run the integration suite with --serial; parallel runs flake."]
+        for _ in range(2):  # Repeating a lesson reinforces it instead of duplicating it.
+            subprocess.run(helper, env=self.env, check=True, capture_output=True)
+        subprocess.run([*helper[:4], "lesson", "--scope", "global", "--text", "Prefer atomic ledger writes."],
+                       env=self.env, check=True, capture_output=True)
+        self.assertEqual(self.load("learning.json")["lessons"][0]["reinforced"], 2)
+        (self.state / "once-done").unlink()
+        result = self.invoke("once_halt", "--new-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prompt = self.launches()[0]["prompt"]
+        self.assertIn("parallel runs flake", prompt)
+        self.assertIn("Prefer atomic ledger writes", prompt)
+        self.assertEqual(len(self.load("learning.json")["runs"]), 2)
+        self.assertIn("test database unavailable", self.load("learning.json")["blockers"][0]["example"])
+
+    def graph(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import improve_graph
+        return improve_graph.load(improve_graph.graph_path(self.repo), repair=False)
+
+    def test_knowledge_graph_survives_new_runs_and_reaches_the_next_prompt(self):
+        self.assertEqual(self.invoke("once_halt").returncode, 0)
+        saved = self.graph()
+        self.assertEqual(len(saved["runs"]), 1)
+        self.assertTrue(saved["refine"]["history"], "a finished run is refined")
+        self.assertEqual(saved["tick"], 2, "a never-dreamed graph dreams after the first cycle, and again at run end")
+        self.assertEqual(len(saved["dream"]["history"]), 2)
+        self.assertTrue((self.state / "graph.backup.db").exists(), "a dream leaves a checkpoint")
+        self.assertTrue(any(node["type"] == "task" for node in saved["nodes"].values()))
+        helper = [sys.executable, str(ROOT / "scripts/improve_graph.py"), "--repo", str(self.repo), "note",
+                  "--kind", "pitfall", "--text", "The fixture gate needs a warm cache first.", "--about", "area:ui"]
+        note = json.loads(subprocess.run(helper, env=self.env, check=True, capture_output=True, text=True).stdout)
+        (self.state / "once-done").unlink()
+        result = self.invoke("once_halt", "--new-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prompt = self.launches()[0]["prompt"]
+        self.assertIn("improve_graph.py", prompt)
+        self.assertIn("graph_refs", prompt)
+        self.assertIn("restore ID", prompt, "agents are told how to bring back forgotten knowledge")
+        self.assertIn(note["id"], prompt)
+        self.assertIn("warm cache", prompt)
+        saved = self.graph()
+        self.assertEqual(len(saved["runs"]), 2)
+        self.assertEqual(saved["tick"], 3, "the last dream is recent, so only the run-end dream ran")
+        archives = list((self.state / "history").iterdir())
+        for name in ("graph.db", "graph.backup.db", "graph.lock"):
+            self.assertFalse(any((path / name).exists() for path in archives), f"{name} must stay with the repository")
+
+    def test_daemon_dreams_on_schedule_during_a_long_run(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import improve_graph
+        self.env.update(IMPROVE_GRAPH_DREAM_MINUTES="0")
+        self.assertEqual(self.invoke("once_halt").returncode, 0)
+        self.assertEqual(self.graph()["tick"], 1, "0 disables scheduled dreams; only the end-of-run dream ran")
+        with improve_graph.locked(self.repo) as value:
+            value["dream"]["last_at"] = "2000-01-01T00:00:00Z"  # Long overdue.
+        (self.state / "once-done").unlink()
+        self.env.update(IMPROVE_GRAPH_DREAM_MINUTES="180")
+        result = self.invoke("once_halt", "--new-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.graph()["tick"], 3, "an overdue dream ran after a cycle, then the run-end dream")
+        self.assertIn("knowledge graph dreamed (tick 2)", (self.state / "daemon.log").read_text())
+
+
+# Inherit DaemonTests' fixture, not its strict-mode assertions.
+for _name in [name for name in vars(DaemonTests) if name.startswith("test_")]:
+    if _name not in vars(ResilienceTests):
+        setattr(ResilienceTests, _name, None)

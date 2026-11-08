@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import sqlite3
 import signal
 import subprocess
 import sys
@@ -36,6 +37,12 @@ LIMIT_PATTERN = re.compile(r"hit your (usage )?limit|usage limit reached|rate_li
 
 class StateError(ValueError):
     pass
+
+
+# The knowledge graph and its checkpoints, history, and legacy forms outlive any one run.
+GRAPH_FILES = ("graph.db", "graph.db-wal", "graph.db-shm", "graph.backup.db", "graph.damaged.db",
+               "graph.damaged.db-wal", "graph.damaged.db-shm", "graph.json", "graph.json.migrated", "graph.lock",
+               "graph.backup.json", "graph.damaged.json")
 
 
 def resolve_engine(requested="auto", control=None, environ=None):
@@ -350,6 +357,14 @@ class Supervisor:
         self.limit_budget = env_integer("IMPROVE_LIMIT_WAIT_BUDGET", 14400)
         self.final_timeout = env_integer("IMPROVE_FINAL_TIMEOUT", 300)
         self.finish_grace = env_integer("IMPROVE_FINISH_GRACE", 120, 0)
+        # Resilience: work around failures instead of ending the run.
+        self.quarantine = env_integer("IMPROVE_QUARANTINE", 1, 0) > 0
+        self.max_recoveries = env_integer("IMPROVE_MAX_RECOVERIES", 6, 0)
+        self.max_worker_halts = env_integer("IMPROVE_MAX_WORKER_HALTS", 2, 0)
+        self.cooldown = env_integer("IMPROVE_RECOVERY_COOLDOWN", 60, 0)
+        self.cooldown_cap = env_integer("IMPROVE_RECOVERY_COOLDOWN_CAP", 900, 0)
+        self.graph_refine_interval = 60 * env_integer("IMPROVE_GRAPH_REFINE_MINUTES", 30, 0)
+        self.graph_dream_interval = 60 * env_integer("IMPROVE_GRAPH_DREAM_MINUTES", 180, 0)
 
     def log(self, message):
         line = f"{stamp()} {message}"
@@ -466,6 +481,71 @@ class Supervisor:
             atomic_json(intake_path, supplied)
         atomic_json(self.control_path, self.control)
 
+    def run_focus(self):
+        with contextlib.suppress(StateError, OSError, ValueError):
+            if self.run_path.exists():
+                return read_json(self.run_path).get("focus")
+        return None
+
+    def bump(self, key):
+        value = self.control.get(key, 0)
+        self.control[key] = (value if type(value) is int and value >= 0 else 0) + 1
+        return self.control[key]
+
+    def recover(self, reason):
+        """Block the stuck item, steer to other work, cool down, and keep the run going."""
+        from improve_resilience import block_active_item, suggest_lane
+        task = block_active_item(self.state, reason)
+        attempt = self.bump("recoveries")
+        self.bump("recoveries_total")
+        lane = suggest_lane(self.state, self.run_focus())
+        correction = (f"Supervisor recovery {attempt}: {reason}. "
+                      + (f"Task {task} is now blocked with that reason. " if task else "")
+                      + "Choose different eligible work"
+                      + (f" or run discovery in the '{lane}' lane" if lane else "")
+                      + "; do not retry the blocked item unless its blocker changed.")
+        self.save_control(consecutive_failures=0, last_error=correction)
+        self.journal(correction)
+        self.log(f"recovery {attempt}/{self.max_recoveries}: {reason}" + (f"; blocked {task}" if task else ""))
+        delay = min(self.cooldown * 2 ** (attempt - 1), self.cooldown_cap) if self.cooldown else 0
+        if delay:
+            self.save_control(phase="recovering")
+            self.wait(delay)
+            self.save_control(phase="between-cycles")
+
+    def soften_worker_halt(self, outcome):
+        """A worker halt becomes a blocked task; only repeated halts end the run."""
+        from improve_resilience import block_active_item, clear_worker_halt
+        if self.bump("worker_halts") > self.max_worker_halts:
+            return False
+        reason = outcome.split(":", 1)[1].strip() or "worker reported a blocker"
+        task = block_active_item(self.state, f"Worker halted: {reason}", source="worker")
+        clear_worker_halt(self.state, outcome)
+        correction = (f"The last cycle halted ({reason}). "
+                      + (f"Task {task} is blocked with that reason. " if task else "")
+                      + "Work around it: continue with other eligible tasks or discovery that does not need the blocked resource.")
+        self.save_control(last_error=correction)
+        self.journal(correction)
+        self.log(f"worker halt converted to a blocked task ({self.control['worker_halts']}/{self.max_worker_halts}): {reason}")
+        return True
+
+    def quarantine_cycle(self, outcome):
+        """Save leftover edits to a private ref and restore a clean tree."""
+        from improve_resilience import block_active_item, clear_worker_halt, quarantine_changes
+        cycle = 0
+        with contextlib.suppress(StateError, OSError, ValueError):
+            cycle = read_json(self.run_path).get("cycle", 0) if self.run_path.exists() else 0
+        ref = quarantine_changes(self.repo, f"cycle-{cycle}")
+        self.bump("quarantines")
+        task = block_active_item(self.state, f"Cycle left uncommitted, unverified changes; saved to {ref} for review")
+        if outcome in ("completed", "target reached"):
+            # Success claimed over unverified edits is not trusted.
+            clear_worker_halt(self.state, outcome)
+        self.journal(f"Quarantined uncommitted cycle changes to {ref}"
+                     + (f"; task {task} blocked" if task else "") + ". Restore with: git checkout " + ref + " -- .")
+        self.log(f"quarantined uncommitted changes to {ref}")
+        return ref
+
     def save_control(self, **changes):
         self.control.update(changes, heartbeat_at=stamp())
         atomic_json(self.control_path, self.control)
@@ -488,6 +568,31 @@ class Supervisor:
         if changed:
             atomic_json(self.run_path, run)
         return result
+
+    def repair_state(self, saved_run):
+        """Restore run.json and quarantine broken ledger lines a cycle left behind."""
+        from improve_resilience import repair_ledgers
+        problems = repair_ledgers(self.state)
+        try:
+            if self.run_path.exists():
+                value = read_json(self.run_path)
+                if not isinstance(value, dict):
+                    raise StateError("run.json must contain an object")
+                if "cycle" in value and (type(value["cycle"]) is not int or value["cycle"] < 0):
+                    raise StateError("cycle must be a nonnegative integer")
+        except (StateError, ValueError):
+            if saved_run is None:
+                self.run_path.replace(self.run_path.with_name("run.damaged.json"))
+            else:
+                self.run_path.with_name("run.damaged.json").write_bytes(self.run_path.read_bytes())
+                tmp = self.run_path.with_suffix(".restore")
+                tmp.write_bytes(saved_run)
+                tmp.replace(self.run_path)
+            problems.append("run.json was invalid and was restored from the pre-cycle copy")
+        if problems:
+            self.journal("Repaired state after a cycle: " + "; ".join(problems))
+            self.log("repaired state: " + "; ".join(problems))
+        return "; ".join(problems)
 
     def wait(self, seconds):
         until = min(time.time() + seconds, epoch(self.control["deadline"]))
@@ -524,6 +629,7 @@ class Supervisor:
         remaining = max(0, epoch(self.control["deadline"]) - int(time.time()))
         skill_path = Path(__file__).resolve().parent.parent / ("max/SKILL.md" if self.args.skill == "improve-max" else "SKILL.md")
         prefix = "$" if self.engine == "codex" else "/"
+        graph_script = Path(__file__).with_name("improve_graph.py")
         return f"""{prefix}{self.args.skill} {remaining}s {shlex.quote(str(self.repo))} {self.args.args}
 
 You are ONE CYCLE of an externally supervised improvement run. Read {skill_path}.
@@ -556,8 +662,40 @@ Check .improve/stop.request and the clock between items and tool calls. On stop 
 settle the current item only. The supervisor allows {self.finish_grace}s of cleanup grace.
 Only record a halt for a concrete blocker; a dry scan or rejected candidate is not one.
 Previous cycle correction, if any: {self.control.get('last_error', 'none')}.
+Resilience: if a task fails, a tool or gate is unavailable, or you are stuck, do not halt.
+Mark that task blocked in backlog.jsonl with a concrete blocked_reason, then continue with
+other eligible work or discovery. Reserve a halt outcome for a blocker that stops ALL work.
+Learning: when you discover something non-obvious that would help a future run (a gate
+quirk, a flaky test and its fix, a file to avoid, an approach that failed), record it with:
+python3 {shlex.quote(str(Path(__file__).with_name('improve_learning.py')))} --repo {shlex.quote(str(self.repo))} lesson --area AREA --text 'LESSON'
+Use --scope global only for lessons true of any project. Keep each lesson one sentence.
+Knowledge graph: before selecting or editing a task, query what earlier runs learned about its files:
+python3 {shlex.quote(str(graph_script))} --repo {shlex.quote(str(self.repo))} context --files PATH... --area AREA
+Add the ids of graph knowledge you relied on to that task's graph_refs list in backlog.jsonl.
+Record file-specific knowledge (a pitfall, technique, convention, or decision) with:
+python3 {shlex.quote(str(graph_script))} --repo {shlex.quote(str(self.repo))} note --kind pitfall --text 'ONE SENTENCE' --about file:PATH area:AREA
+Mark graph knowledge that proved false with `rate ID wrong`, and a wrong inferred link with `unlink SRC REL DST`.
+If knowledge you need was forgotten, find it with `history --query WORDS` and bring it back with `restore ID`. Follow {Path(__file__).resolve().parent.parent / 'references/knowledge-graph.md'}.
+{self.memory_brief(final)}
 {"FINALIZATION ONLY: start no new work. This run ended or its deadline passed. Ignore pause for this report-only pass and report pending board requests as unimplemented. Preserve an existing halt/stop outcome and original end time. Write .improve/final-report.md from actual git and ledger evidence, append it to journal.md, set summary_pending false, and set completed only for deadline expiry. Never claim unverified changes passed." if final else "Complete a useful cycle, leave a clean tree, and return; the supervisor will relaunch you."}
 """
+
+    def memory_brief(self, final=False):
+        """Learned guidance and recovery state; never allowed to block a launch."""
+        if final:
+            return ""
+        try:
+            from improve_graph import brief, graph_path, load as load_graph
+            from improve_learning import guidance
+            from improve_resilience import recovery_brief
+            graph = load_graph(graph_path(self.repo), repair=False)
+            knowledge = brief(graph, shlex.quote(str(Path(__file__).with_name("improve_graph.py"))),
+                              shlex.quote(str(self.repo)))
+            parts = [guidance(self.repo), knowledge, recovery_brief(self.state, self.run_focus())]
+        except (StateError, OSError, ValueError) as exc:
+            self.log(f"learning/recovery brief unavailable: {exc}")
+            return ""
+        return "\n\n".join(part for part in parts if part)
 
     def launch(self, final=False):
         command = agent_command(self.engine, self.prompt(final), self.model, self.codex_sandbox)
@@ -625,8 +763,38 @@ Previous cycle correction, if any: {self.control.get('last_error', 'none')}.
             atomic_json(self.run_path, run)
         self.journal(f"Run ended: {outcome}. Remaining: {human(epoch(self.control['deadline']) - int(time.time()))}."
                      + (" Final narrative report is pending; no agent success is implied." if summary_pending else ""))
+        self.learn()
         self.log(f"daemon finished: {outcome}")
         return 1 if outcome.startswith("halted:") else 0
+
+    def learn(self):
+        try:
+            from improve_learning import record_run
+            from improve_resilience import read_rows
+            record_run(self.repo, self.control, read_rows(self.state / "backlog.jsonl"))
+        except (StateError, OSError, ValueError) as exc:
+            self.log(f"could not record run learning: {exc}")
+        self.sync_graph(dream=True)
+
+    def sync_graph(self, dream=False):
+        """Fold the run into the knowledge graph; a graph problem never stops a run."""
+        try:
+            from improve_graph import sync
+            # Long runs refine and dream periodically too, so statistics, inferred links, and
+            # cleanup keep up with the work instead of waiting for the run to end.
+            result = sync(self.repo, refine_interval=self.graph_refine_interval, dream_after=dream,
+                          dream_interval=self.graph_dream_interval)
+            if result.get("dream"):
+                report = result["dream"]
+                self.log(f"knowledge graph dreamed (tick {report['tick']}): {report['inferred']['new']} new links, "
+                         f"{report['inferred']['dropped']} dropped, {report['archived']} archived, "
+                         f"{report['forgotten']} forgotten, {report['proposals']} proposals")
+            elif result.get("refine"):
+                report = result["refine"]
+                self.log(f"knowledge graph refined: {report['nodes']} nodes, {report['merged']} merged, "
+                         f"{report['faded']} faded, {report['stale_files']} stale files")
+        except (StateError, OSError, ValueError, RecursionError, sqlite3.Error) as exc:
+            self.log(f"could not update the knowledge graph: {exc}")
 
     def finalize(self):
         """A bounded report-only launch; retryable without granting more work time."""
@@ -658,22 +826,47 @@ Previous cycle correction, if any: {self.control.get('last_error', 'none')}.
             if self.wait_while_paused():
                 continue
             if failures >= self.max_failures:
-                return self.finish(f"halted: {failures} consecutive failed or uncheckpointed cycles")
+                if self.control.get("recoveries", 0) >= self.max_recoveries:
+                    detail = f" after {self.control.get('recoveries', 0)} recoveries" if self.max_recoveries else ""
+                    return self.finish(f"halted: {failures} consecutive failed or uncheckpointed cycles{detail}")
+                self.recover(f"{failures} consecutive cycles failed or recorded no new evidence")
+                failures = 0
+                continue
             if self.control.get("retry_at"):
                 self.resume_limit_wait()
                 continue
             before = snapshot(self.repo)
+            saved_run = self.run_path.read_bytes() if self.run_path.exists() else None
             self.log(f"cycle starting ({human(epoch(self.control['deadline']) - int(time.time()))} left)")
-            rc, elapsed, output = self.launch()
+            try:
+                rc, elapsed, output = self.launch()
+            except OSError as exc:
+                # A missing or crashing CLI is a failed cycle, not a dead supervisor.
+                self.save_control(child_pid=None, phase="between-cycles")
+                rc, elapsed, output = 127, 0.0, f"could not launch {self.engine}: {exc}"
+                self.log(output)
+            repaired = self.repair_state(saved_run)
             outcome = self.reconcile()
             if self.stop_requested():
                 return self.finish("stopped by user")
+            quarantined = None
             if dirty(self.repo):
-                return self.finish("halted: cycle left uncommitted changes; manual recovery required")
+                if not self.quarantine:
+                    return self.finish("halted: cycle left uncommitted changes; manual recovery required")
+                try:
+                    quarantined = self.quarantine_cycle(outcome)
+                except StateError as exc:
+                    return self.finish(f"halted: cycle left uncommitted changes that could not be saved ({exc}); manual recovery required")
+                outcome = self.reconcile()
             if outcome in ("completed", "target reached") and rc:
                 return self.finish(f"halted: cycle claimed {outcome} but exited {rc}", summary_pending=True)
             if outcome == "completed":
                 return self.finalize()
+            if outcome and outcome.startswith("halted:") and self.soften_worker_halt(outcome):
+                failures += 1
+                self.save_control(consecutive_failures=failures)
+                self.wait(self.gap)
+                continue
             if outcome:
                 return self.finish(outcome)
             # A requested checkpoint may return without new evidence; pausing itself
@@ -694,13 +887,22 @@ Previous cycle correction, if any: {self.control.get('last_error', 'none')}.
                 continue
             next_wait = min(self.limit_wait, self.limit_cap)
             after = snapshot(self.repo)
-            failed = rc != 0 or not advanced(before, after)
+            failed = rc != 0 or quarantined is not None or repaired or not advanced(before, after)
             failures = failures + 1 if failed else 0
             correction = ("Last cycle failed or supplied no new evidence. Inspect a different in-scope "
                           "path/hypothesis and record what you checked; do not repeat the last scan.") if failed else None
-            self.save_control(consecutive_failures=failures, next_limit_wait=next_wait, last_error=correction)
+            if quarantined:
+                correction = (f"Last cycle left uncommitted changes; they were saved to {quarantined} and the tree was "
+                              "reset. Commit verified work before returning, or revert it and record why.")
+            elif repaired:
+                correction = f"Last cycle damaged saved state ({repaired}); it was repaired. Write ledgers atomically."
+            changes = dict(consecutive_failures=failures, next_limit_wait=next_wait, last_error=correction)
+            if not failed:
+                changes.update(recoveries=0, worker_halts=0)
+            self.save_control(**changes)
             self.log(f"cycle returned {rc} in {human(elapsed)}; checkpoint {before['cycle']}->{after['cycle']}; failures={failures}"
                      + ("; fast but checkpointed" if not failed and elapsed < self.too_fast else ""))
+            self.sync_graph()
             self.wait(self.gap)
 
 
@@ -784,7 +986,9 @@ def daemon(args):
                 if not args.intake:
                     raise StateError("--new-run requires --intake FILE from a new ten-question intake")
                 intake = read_json(Path(args.intake).expanduser())
-                old = [p for p in state.iterdir() if p.name not in {"history", "daemon.lock", *SERVICE_FILES}]
+                # learning.json and graph.json are the cross-run memory; they stay with the repository.
+                keep = {"history", "daemon.lock", "learning.json", *GRAPH_FILES, *SERVICE_FILES}
+                old = [p for p in state.iterdir() if p.name not in keep]
                 if old:
                     history = state / "history"
                     history.mkdir(exist_ok=True)
@@ -801,7 +1005,7 @@ def daemon(args):
         supervisor.log(f"using {supervisor.engine}; engine and deadline are fixed for this run")
         if not args.no_board:
             try:
-                board = start_board(repo, args.board_port)
+                board = start_board(repo, args.board_port, args.board_allow_host)
                 supervisor.log(f"Kanban board: {board['url']} (stays available after the run)")
             except (OSError, ValueError) as exc:
                 supervisor.log(f"Kanban board unavailable: {exc}; improvement work will continue")
@@ -840,6 +1044,8 @@ def main(argv=None):
     runner.add_argument("--no-board", action="store_true", help="do not auto-start the local Kanban board")
     from improve_board import port_number
     runner.add_argument("--board-port", type=port_number, help="board port; 0 chooses a free port")
+    runner.add_argument("--board-allow-host", action="append", default=[], metavar="HOSTNAME",
+                        help="HTTPS tunnel hostname the board also accepts (phone access); repeatable")
     recovery = runner.add_mutually_exclusive_group()
     recovery.add_argument("--new-run", action="store_true", help="archive old state after a new intake")
     recovery.add_argument("--resume", action="store_true", help="resume a recovered halt/stop with its original deadline")
