@@ -13,9 +13,30 @@ import uuid
 from improve_runtime import StateError, atomic_json, stamp
 
 MAX_BYTES = 8 * 1024 * 1024
+MAX_JSON_DEPTH = 64
 AREAS = ("general", "features", "ui", "assets", "performance", "quality", "security",
          "coverage", "concurrency", "resilience", "gate-speed", "docs", "accessibility", "contracts")
-REQUEST_TYPES = {"task", "guidance", "priority", "decision", "note"}
+REQUEST_TYPES = {"task", "guidance", "priority", "decision", "note", "focus"}
+FOCUS_LEVELS = ("prefer", "normal", "skip")
+# Improvement categories chosen from board tiles; references/categories.md defines each one.
+THEMES = ("ux", "animation", "security", "scale", "performance", "accessibility", "reliability",
+          "observability", "tests", "features", "mobile", "dx", "docs", "api", "code-health",
+          "assets", "privacy", "i18n", "seo", "concurrency")
+
+
+def focus_areas(value):
+    """Validate a per-area focus map; keep only non-default levels in area order."""
+    if not isinstance(value, dict) or len(value) > len(AREAS):
+        raise StateError("focus areas must map task areas to prefer, normal, or skip")
+    for area, level in value.items():
+        if area not in AREAS:
+            raise StateError(f"unknown task area: {str(area)[:40]}")
+        if level not in FOCUS_LEVELS:
+            raise StateError("each focus area must be prefer, normal, or skip")
+    result = {area: value[area] for area in AREAS if value.get(area, "normal") != "normal"}
+    if sum(level == "skip" for level in result.values()) == len(AREAS):
+        raise StateError("Leave at least one area available for work.")
+    return result
 
 
 def state_path(repo):
@@ -45,6 +66,20 @@ def read_local(path, default=None, limit=MAX_BYTES):
         raise StateError(f"{path.name} is not UTF-8") from exc
 
 
+def json_depth(value):
+    """Return container nesting depth iteratively; parser recursion limits vary by Python version."""
+    deepest, stack = 0, [(value, 1)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, (dict, list)):
+            deepest = max(deepest, depth)
+            if depth > MAX_JSON_DEPTH:
+                return depth
+            children = item.values() if isinstance(item, dict) else item
+            stack.extend((child, depth + 1) for child in children)
+    return deepest
+
+
 def local_json(path, default=None):
     raw = read_local(path)
     if raw is None:
@@ -55,6 +90,8 @@ def local_json(path, default=None):
         raise StateError(f"invalid {path.name}; saved requests were preserved") from exc
     if not isinstance(value, dict):
         raise StateError(f"{path.name} must contain an object")
+    if json_depth(value) > MAX_JSON_DEPTH:
+        raise StateError(f"{path.name} is nested too deeply; saved requests were preserved")
     return value
 
 
@@ -122,7 +159,7 @@ def request_view_at(directory):
     receipts = local_json(directory / "board-receipts.json")
     result = []
     fields = ("id", "type", "created_at", "title", "text", "area", "priority",
-              "task_key", "task_title", "decision", "run_id", "expected_status")
+              "task_key", "task_title", "decision", "run_id", "expected_status", "areas", "themes")
     for row in value["requests"]:
         receipt = receipts.get(row["id"], {})
         if not isinstance(receipt, dict):
@@ -159,6 +196,13 @@ def prepare_request(data, tasks, value):
         request["area"] = data.get("area", "general")
         if request["area"] not in AREAS:
             raise StateError("unknown task area")
+    if kind == "focus":
+        request["areas"] = focus_areas(data.get("areas"))
+        themes = data.get("themes", [])
+        if not isinstance(themes, list) or len(themes) > len(THEMES) or any(theme not in THEMES for theme in themes):
+            raise StateError("unknown improvement category")
+        if themes:
+            request["themes"] = [theme for theme in THEMES if theme in themes]
     if kind in ("task", "priority"):
         request["priority"] = data.get("priority", "normal")
         if request["priority"] not in ("high", "normal", "low"):

@@ -230,6 +230,69 @@ git log --oneline "$improve_baseline..$improve_branch"
 git diff "$improve_baseline..$improve_branch"
 ```
 
+## Staying productive through failures
+
+The daemon works around problems instead of stopping:
+
+- **A task fails or a tool is unavailable:** the task is marked Blocked with the reason, and
+  the next cycle is told to choose different work. Only a third consecutive worker halt ends
+  the run (`IMPROVE_MAX_WORKER_HALTS`).
+- **A cycle leaves uncommitted edits:** they are saved to a private ref such as
+  `refs/improve/quarantine/2026-11-06T22-43-05Z-cycle-4`, the tree is reset, and the task is
+  blocked for review. Recover them with `git checkout <ref> -- .`; list them with
+  `git for-each-ref refs/improve/quarantine`. Changes you make yourself before a run still halt it.
+- **Repeated empty or failed cycles:** after `IMPROVE_MAX_FAILURES` the supervisor blocks the
+  stuck item, cools down briefly, and steers to the least recently explored eligible lane.
+  It halts only after `IMPROVE_MAX_RECOVERIES` recoveries with no successful cycle between.
+- **Damaged ledgers:** invalid lines move to `<ledger>.damaged`; an invalid `run.json` is
+  restored from its pre-cycle copy.
+- **Empty queue:** each prompt names a fresh discovery lane, preferring board focus areas.
+
+These limits keep a truly broken environment from spending tokens indefinitely.
+
+## Learning across runs
+
+`.improve/learning.json` records each finished run: verified-success rate per area,
+recurring blockers, and lessons the skill recorded. It is kept when `--new-run` archives the
+previous run, and its guidance is added to every cycle prompt. Lessons that apply to any
+project go to `~/.config/improve/learning.json`. Inspect or add lessons yourself:
+
+```sh
+python3 scripts/improve_learning.py --repo "$improve_repo" guidance
+python3 scripts/improve_learning.py --repo "$improve_repo" lesson --area coverage \
+  --text 'Run the integration suite with --serial; parallel runs flake.'
+```
+
+## Knowledge graph
+
+`.improve/graph.db` (SQLite, standard library) links runs, tasks, files, areas, gates,
+blockers, and recorded knowledge. The daemon syncs it after every cycle, refines it every 30
+minutes, dreams every three hours, and dreams again when the run ends. Sync follows ledger
+edits. Refinement merges duplicates, rescores, flags deleted files, and bounds the size.
+Dreaming infers links the evidence supports (each with a confidence, rule, and evidence),
+archives knowledge that was never validated, forgets what stayed archived, and proposes
+consolidations; it measures time in dreams, so cleanup works within one long run. Every
+removed node is kept in a compressed history and can be restored exactly. Each cycle prompt
+includes a ranked brief, and agents query it before every task, loading only what the query
+needs. The graph, its checkpoint `graph.backup.db`, and its history are kept when `--new-run`
+archives the previous run; archived runs are backfilled on first use, and an older
+`graph.json` is migrated once. Query or add to it yourself:
+
+```sh
+python3 scripts/improve_graph.py --repo "$improve_repo" brief
+python3 scripts/improve_graph.py --repo "$improve_repo" context --files src/api/db.py --area performance
+python3 scripts/improve_graph.py --repo "$improve_repo" note --kind decision \
+  --text 'Payments code is frozen until the audit ends.' --about area:security
+python3 scripts/improve_graph.py --repo "$improve_repo" sync --dream
+python3 scripts/improve_graph.py --repo "$improve_repo" history --query "release lane"
+python3 scripts/improve_graph.py --repo "$improve_repo" restore insight:1c4aec93a439 --reason 'needed again'
+```
+
+Other commands: `search`, `node`, `path`, `hotspots`, `link`, `unlink`, `rate`, `refine`,
+`dream`, `proposals`, `consolidate`, `stats`. See
+[the knowledge-graph reference](../references/knowledge-graph.md). The board's
+**Knowledge** tab shows and curates the same graph.
+
 ## Runner configuration
 
 | Environment variable        | Default                  | Purpose                                                                              |
@@ -240,7 +303,14 @@ git diff "$improve_baseline..$improve_branch"
 | `IMPROVE_FINISH_GRACE`      | `120`                    | Maximum cleanup seconds after deadline or stop                                       |
 | `IMPROVE_CYCLE_GAP`         | `2`                      | Seconds between daemon cycles; capped at deadline                                    |
 | `IMPROVE_TOO_FAST`          | `25`                     | Diagnostic threshold; speed alone never fails a checkpointed cycle                   |
-| `IMPROVE_MAX_FAILURES`      | `3`                      | Consecutive failed or uncheckpointed cycles before halt                              |
+| `IMPROVE_MAX_FAILURES`      | `3`                      | Consecutive failed or uncheckpointed cycles before a recovery                        |
+| `IMPROVE_MAX_RECOVERIES`    | `6`                      | Recoveries in a row (no successful cycle between) before halt; `0` restores strict halting |
+| `IMPROVE_RECOVERY_COOLDOWN` | `60`                     | First pause after a recovery; doubles each time, capped by `IMPROVE_RECOVERY_COOLDOWN_CAP` (`900`) |
+| `IMPROVE_MAX_WORKER_HALTS`  | `2`                      | Worker halts converted to blocked tasks before one is honored                        |
+| `IMPROVE_QUARANTINE`        | `1`                      | Save a cycle's uncommitted edits to `refs/improve/quarantine/*` and continue; `0` halts instead |
+| `IMPROVE_LEARNING_HOME`     | `~/.config/improve`      | Location of cross-project lessons (`learning.json`)                                  |
+| `IMPROVE_GRAPH_REFINE_MINUTES` | `30`                  | Refine the knowledge graph during a run at most this often; `0` refines only at run end |
+| `IMPROVE_GRAPH_DREAM_MINUTES` | `180`                  | Dream on the knowledge graph during a run at most this often; `0` dreams only at run end |
 | `IMPROVE_LIMIT_WAIT`        | `900`                    | First account-limit wait                                                             |
 | `IMPROVE_LIMIT_WAIT_CAP`    | `3600`                   | Maximum individual account-limit wait                                                |
 | `IMPROVE_LIMIT_WAIT_BUDGET` | `14400`                  | Total wall-clock account-limit wait budget, including downtime inside a pending wait |

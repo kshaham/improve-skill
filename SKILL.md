@@ -290,7 +290,8 @@ work or deciding whether a priority is met, blocked, or still active.
 
 Filter by user scope and guardrails first. A confirmed critical vulnerability in scope
 preempts lower-risk work. Otherwise honor explicit task-level `user_priority` first
-(`high`, then `normal` or absent, then `low`), then the user’s ordered focus priorities, then by
+(`high`, then `normal` or absent, then `low`), then board area focus (`prefer`, then
+unmarked; never start new work or finders in a `skip` area), then the user’s ordered focus priorities, then by
 
     severity x confidence x blast-radius
 
@@ -470,6 +471,56 @@ continue active, bounded discovery using a new hypothesis or evidence source. Ke
 quality bar intact. No commit quota and no 20-minute naps; useful investigation counts as
 work even when it produces no change. Follow the continuation reference until expiry.
 
+## Resilience and learning
+
+Never let one stuck task end the run. When a task fails, a gate or tool is unavailable, or
+an approach stops working, mark that task `blocked` in `backlog.jsonl` with a concrete
+`blocked_reason`, then continue with other eligible work or a fresh discovery lane. Record
+a `halted:` outcome only for a blocker that stops all remaining work. Under the daemon the
+supervisor backs this up: it converts a worker halt into a blocked task (only repeated
+halts end the run), saves leftover uncommitted edits to `refs/improve/quarantine/*` and
+restores a clean tree, repairs damaged ledger lines, and after repeated empty cycles
+blocks the stuck item and steers to the least recently explored eligible lane. Prompts
+list blocked tasks; do not retry one unless its blocker has changed.
+
+The skill learns across runs. `.improve/learning.json` keeps per-area verified-success
+rates, recurring blockers, and lessons; it survives `--new-run`. Each cycle prompt
+includes that guidance; use success rates only to break ties inside the user's focus.
+When you learn something non-obvious that would help a future run, record one sentence:
+
+```sh
+python3 /path/to/improve/scripts/improve_learning.py --repo /absolute/repo lesson --area AREA --text 'LESSON'
+```
+
+Add `--scope global` only for lessons true of any project. Never record secrets or
+personal data. At the final report, record the one to three most useful lessons.
+
+### Knowledge graph
+
+`.improve/graph.db` links every run, task, file, area, gate, blocker, and recorded insight,
+plus links that dreaming inferred from evidence. It survives `--new-run`. Use it as the first source of history, before re-reading old
+ledgers. Follow [references/knowledge-graph.md](references/knowledge-graph.md):
+
+- Before selecting or editing a task, query its files and area. Do not retry an approach
+  the graph shows was rejected unless the evidence has changed.
+  ```sh
+  python3 <skill-directory>/scripts/improve_graph.py --repo /absolute/repo context --files PATH... --area AREA
+  ```
+- Add the ids of insights you relied on to the task's `graph_refs`. Outcomes then credit or
+  discredit them.
+- Record non-obvious, file-specific knowledge with `note --kind pitfall|technique|convention|decision|fact
+  --text '...' --about file:PATH area:AREA`. Use `rate ID wrong` on knowledge that proved false
+  and `unlink SRC REL DST` on an inferred link that is wrong.
+- Nothing is lost: `history --query WORDS` finds forgotten knowledge and `restore ID` brings
+  it back. When the queue is empty, consolidate a dreaming proposal (`proposals`, `consolidate`).
+- Knowledge the user added or pinned on the board is steering: treat a `decision` or
+  `convention` like an intake constraint.
+
+The daemon syncs the graph after each cycle, refines it every 30 minutes, dreams every three
+hours (infers links, archives and forgets unused knowledge, proposes consolidations), and
+dreams again when the run ends. In a foreground run, run `sync` at checkpoints and
+`sync --dream` after the final report.
+
 ## Cost, and where it goes
 
 Refill is the expensive phase, not fixing. Four parallel finders reading a large codebase cost
@@ -533,6 +584,8 @@ build a real coverage profile) can miss the deadline entirely. So:
 - `references/continuation.md` - execution modes, discovery checkpoints, recovery
 - `references/board.md` - local Kanban board, task history, startup and shutdown
 - `references/board-control.md` - run controls, user requests, and saved responses
+- `references/knowledge-graph.md` - querying and growing the cross-run knowledge graph
+- `references/categories.md` - what to look for in each board improvement category
 - `references/performance.md` - journey harnesses and profiling when performance is active
 
 - `scripts/improve-clock.sh` - elapsed, remaining, hour label, report due, deadline passed

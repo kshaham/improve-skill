@@ -16,6 +16,7 @@ const requestLabels = {
   priority: "Priority change",
   decision: "Proposal decision",
   note: "Task note",
+  focus: "Focus areas",
 };
 const REQUEST_PAGE_SIZE = 20;
 
@@ -130,6 +131,7 @@ function renderControls() {
   if ($("request-dialog").open) draftStatus();
   $("discard-draft").disabled = sending;
   renderSelection();
+  renderFocus();
 }
 
 function filteredRequests() {
@@ -202,7 +204,13 @@ function renderRequests() {
             " · " +
             (row.source_run === "current" ? "Current run" : row.source_run),
         ),
-        element("strong", "", row.title || row.task_title || row.text),
+        element(
+          "strong",
+          "",
+          row.title ||
+            row.task_title ||
+            (row.type === "focus" ? focusSummary(row.areas, row.themes) : row.text),
+        ),
       );
       summary.append(
         title,
@@ -538,4 +546,7 @@ function initControls() {
   });
   initDrafts();
   initTriage();
+  initFocus();
+  initVoice();
+  initMobile();
 }

@@ -166,6 +166,61 @@ class ControlTests(LedgerFixture):
         self.assertEqual(control.request_view(self.repo)[0]["status"], "applied")
         self.rejected("/api/requests", {**payload, "title": "Different request"})
 
+    def test_focus_requests_validate_areas_and_store_only_changes(self):
+        payload = self.request_data("focus", areas={"ui": "prefer", "docs": "skip", "quality": "normal"})
+        self.http("/api/requests", payload)
+        saved = control.request_view(self.repo)[0]
+        self.assertEqual(saved["type"], "focus")
+        self.assertEqual(saved["areas"], {"ui": "prefer", "docs": "skip"})
+        self.http("/api/requests", payload)  # Idempotent retry.
+        self.http("/api/requests", self.request_data("focus", areas={}))  # Reset to balanced.
+        self.http("/api/requests", self.request_data("focus", areas={"ui": "prefer"}, themes=["seo", "animation"]))
+        self.assertEqual(control.request_view(self.repo)[-1]["themes"], ["animation", "seo"])
+        self.assertEqual(len(control.request_view(self.repo)), 3)
+        before = (self.state / "operator.json").read_bytes()
+        for themes in ("animation", ["warp-drive"], [None]):
+            self.rejected("/api/requests", self.request_data("focus", areas={}, themes=themes))
+        for areas in (None, [], {"unknown": "prefer"}, {"ui": "always"},
+                      {area: "skip" for area in control.AREAS}):
+            self.rejected("/api/requests", self.request_data("focus", areas=areas))
+        self.assertEqual((self.state / "operator.json").read_bytes(), before)
+
+    def test_snapshot_exposes_worker_recorded_focus_defensively(self):
+        run = {}
+        run["focus"] = {"excluded": ["payments"], "board_areas": {
+            "prefer": ["ui", "bogus", 3], "skip": ["docs"], "request_id": "r1", "at": "2026-11-06T00:00:00Z"}}
+        (self.state / "run.json").write_text(json.dumps(run))
+        focus = board.board_snapshot(self.repo)["current"]["focus"]
+        self.assertEqual(focus["areas"], {"ui": "prefer", "docs": "skip"})
+        self.assertEqual(focus["request_id"], "r1")
+        self.assertEqual(focus["excluded"], ["payments"])
+        run["focus"] = {"board_areas": "broken"}
+        (self.state / "run.json").write_text(json.dumps(run))
+        self.assertEqual(board.board_snapshot(self.repo)["current"]["focus"]["areas"], {})
+
+    def test_allowed_tunnel_host_requires_https_origin_and_explicit_opt_in(self):
+        tunnel = "phone-mac.example-tailnet.ts.net"
+        self.assertEqual(self.rejected("/api/board", headers={"Host": tunnel}, code=403), "local host required")
+        board.stop_board(self.repo)
+        info = board.start_board(self.repo, 0, [tunnel.upper()])
+        self.url = info["url"]
+        self.assertEqual(info["phone_urls"], ["https://" + tunnel])
+        self.assertEqual(board.board_status(self.repo)["allowed_hosts"], [tunnel])
+        remote = {"Host": tunnel, "X-Improve-Client": "board"}
+        token = self.http("/api/session", headers={**remote, "Origin": "https://" + tunnel})["token"]
+        self.rejected("/api/session", headers={**remote, "Origin": "http://" + tunnel}, code=403)
+        payload = self.request_data()
+        post = {"Host": tunnel, "X-Improve-Board-Token": token}
+        self.rejected("/api/requests", payload, headers={**post, "Origin": "http://" + tunnel}, code=403)
+        self.http("/api/requests", payload, headers={**post, "Origin": "https://" + tunnel})
+        self.assertEqual(control.request_view(self.repo)[0]["id"], payload["id"])
+        self.rejected("/api/board", headers={"Host": "other.example.com"}, code=403)
+        with self.assertRaises(board.StateError):
+            board.start_board(self.repo, 0, ["other.example.com"])
+        for bad in ("https://x.example.com", "x.example.com:443", "localhost", "single", "a/b.example.com"):
+            with self.assertRaises(board.StateError):
+                board.start_board(self.repo, 0, [bad])
+
     def test_concurrent_requests_are_not_lost(self):
         payloads = [self.request_data("task", title=f"Request {i}") for i in range(20)]
         with ThreadPoolExecutor(max_workers=8) as executor:

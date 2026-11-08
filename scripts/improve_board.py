@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import secrets
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -21,7 +22,7 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
 from improve_runtime import StateError, atomic_json, git, lock_active, read_json, recorded_timing, repo_lock, stamp
-from improve_control import operator_lock, pause_requested, queue_request, queue_submission, read_local, request_view, request_view_at, require_run, set_pause
+from improve_control import AREAS, THEMES, operator_lock, pause_requested, queue_request, queue_submission, read_local, request_view, request_view_at, require_run, set_pause
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets/board"
 SERVICE_FILES = {"board.json", "board.lock", "board.log", "operator.lock"}
@@ -33,6 +34,7 @@ TASK_FIELDS = ("id", "title", "claim", "area", "kind", "file", "line", "paths", 
                "completed_at", "reopens", "last_verification", "bet_status", "journey",
                "target", "claimed_gain", "spike", "landed", "pieces", "kill", "branch", "user_priority", "board_request_id", "user_notes")
 MAX_FILE_BYTES = 32 * 1024 * 1024
+MAX_CONTEXT_FILES = 20
 
 
 def state_directory(repo):
@@ -152,6 +154,26 @@ def run_directories(repo):
     return directories
 
 
+def focus_summary(focus):
+    """Expose the worker-recorded area focus without trusting its shape."""
+    if not isinstance(focus, dict):
+        return {}
+    board = focus.get("board_areas")
+    areas = {}
+    if isinstance(board, dict):
+        for level in ("prefer", "skip"):
+            names = board.get(level)
+            if isinstance(names, list):
+                areas.update({name: level for name in names if isinstance(name, str) and name in AREAS})
+    excluded = focus.get("excluded")
+    themes = board.get("themes") if isinstance(board, dict) else None
+    return {"areas": areas,
+            "themes": [theme for theme in THEMES if isinstance(themes, list) and theme in themes],
+            "request_id": board.get("request_id") if isinstance(board, dict) else None,
+            "applied_at": board.get("at") if isinstance(board, dict) else None,
+            "excluded": [text_value(item)[:200] for item in excluded[:20]] if isinstance(excluded, list) else []}
+
+
 def board_snapshot(repo, selected="current"):
     state = state_directory(repo)
     warnings = []
@@ -183,6 +205,7 @@ def board_snapshot(repo, selected="current"):
                    "report_available": (directory / "final-report.md").is_file() and not (directory / "final-report.md").is_symlink(),
                    "summary_pending": control.get("summary_pending", run.get("summary_pending")),
                    "started_at": (control if control else run).get("started_at"),
+                   "control_id": (control or run).get("run_id") or (control or run).get("started_at"),
                    "deadline": (control if control else run).get("deadline")}
         runs.append(summary)
         if run_id == "current":
@@ -195,7 +218,8 @@ def board_snapshot(repo, selected="current"):
                        "heartbeat_at": control.get("heartbeat_at"), "last_activity_at": run.get("last_activity_at"),
                        "consecutive_failures": control.get("consecutive_failures", 0),
                        "board_control_version": control.get("board_control_version", 0),
-                       "last_error": control.get("last_error"), "clock": clock}
+                       "last_error": control.get("last_error"), "clock": clock,
+                       "focus": focus_summary(run.get("focus"))}
             if not (state / "daemon.lock").is_symlink():
                 with contextlib.suppress(OSError):
                     current["daemon_running"] = lock_active(state / "daemon.lock")
@@ -267,7 +291,117 @@ def board_snapshot(repo, selected="current"):
             "selected_run": selected, "runs": runs, "current": current,
             "columns": [{"id": key, "label": label} for key, label in COLUMNS],
             "tasks": tasks, "requests": requests, "counts": counts, "discovery": discovery[:24],
-            "controls": controls, "warnings": warnings, "updated_at": stamp()}
+            "controls": controls, "warnings": warnings, "learning": learning_view(repo),
+            "graph": graph_summary(repo), "updated_at": stamp()}
+
+
+def learning_view(repo):
+    """Cross-run learning for the overview; a damaged store only hides the panel."""
+    from improve_learning import board_summary
+    try:
+        return board_summary(repo)
+    except (StateError, OSError, ValueError):
+        return None
+
+
+def graph_summary(repo):
+    """Cheap graph counters; the Knowledge view fetches the graph itself only when they change."""
+    import improve_graph
+    try:
+        return improve_graph.summary(improve_graph.load_cached(improve_graph.graph_path(repo)))
+    except (StateError, OSError, ValueError):
+        return None
+
+
+def query_values(query, name, limit=200):
+    return [value[:limit] for value in query.get(name, [])]
+
+
+def graph_get(repo, path, query):
+    """Read-only graph endpoints for the Knowledge view and the task dialog."""
+    import improve_graph
+    graph = improve_graph.load_cached(improve_graph.graph_path(repo))
+    first = lambda name, fallback=None: (query_values(query, name) or [fallback])[0]
+    if path == "/api/graph":
+        types = [kind for kind in first("types", "").split(",") if kind in improve_graph.TYPES]
+        return improve_graph.board_view(graph, limit=int(first("limit", "250")), focus=first("focus"),
+                                        depth=int(first("depth", "1")), query=first("q"), types=types or None,
+                                        include_archived=first("archived") == "1")
+    if path == "/api/graph/node":
+        return improve_graph.node_detail(graph, first("id", ""))
+    if path == "/api/graph/history":
+        types = [kind for kind in first("types", "").split(",") if kind in improve_graph.TYPES]
+        result = improve_graph.history(repo, max(1, min(int(first("limit", "20")), 100)),
+                                       max(0, int(first("offset", "0"))), types or None, first("q"),
+                                       first("restored") == "1")
+        return result
+    if path == "/api/graph/context":
+        files = query_values(query, "file", 300)[:MAX_CONTEXT_FILES]
+        area = first("area")
+        if area is not None and area not in AREAS and not re.fullmatch(r"[a-z][a-z0-9_-]{0,39}", area):
+            area = None
+        exclude = first("exclude")
+        try:
+            result = improve_graph.context(graph, files, area, first("text"), 6, repo)
+        except improve_graph.GraphError:
+            result = {"seeds": [], "files": [], "insights": [], "past_tasks": [], "blockers": [], "gates": [], "co_changed": []}
+        result["past_tasks"] = [task for task in result["past_tasks"] if task["id"] != exclude]
+        return {**result, "total_nodes": len(graph["nodes"])}
+    raise StateError("not found")
+
+
+def graph_post(repo, data):
+    """Curate the graph from the board. Retried requests with the same request_id apply once."""
+    import improve_graph
+    action, request_id = data.get("action"), data.get("request_id")
+    if not isinstance(request_id, str) or not re.fullmatch(r"[\w-]{8,80}", request_id):
+        raise StateError("a request_id is required")
+    with improve_graph.locked(repo) as graph:
+        done = graph.setdefault("board_ops", [])
+        previous = next((row for row in done if row.get("request_id") == request_id), None)
+        if previous:
+            return previous["result"]
+        if action == "note":
+            about = data.get("about") or []
+            if not isinstance(about, list) or len(about) > 6 or not all(isinstance(item, str) and len(item) <= 300 for item in about):
+                raise StateError("about must list at most six file:PATH or area:NAME targets")
+            text, kind = data.get("text"), data.get("kind", "fact")
+            if not isinstance(text, str) or len(text) > improve_graph.MAX_SUMMARY:
+                raise StateError(f"knowledge must be text of at most {improve_graph.MAX_SUMMARY} characters")
+            node = improve_graph.add_insight(graph, text, kind, "user", [item for item in about if item.strip()], repo=repo)
+            node["score"] = round(improve_graph.score(node, improve_graph.run_seq(graph)), 4)
+            result = {"node": improve_graph.node_view(node), "message": "Saved. The skill will see this in its next cycle."}
+        elif action == "rate":
+            node = improve_graph.rate(graph, str(data.get("id", ""))[:400], data.get("verdict"), "user")
+            node["score"] = round(improve_graph.score(node, improve_graph.run_seq(graph)), 4)
+            result = {"node": improve_graph.node_view(node), "message": {
+                "useful": "Marked useful; it will rank higher.", "wrong": "Marked wrong; the skill will stop using it.",
+                "pin": "Pinned; the skill sees it every cycle.", "unpin": "Unpinned.",
+                "archive": "Archived; hidden from the skill.", "restore": "Restored."}[data.get("verdict")]}
+        elif action == "dream":
+            from improve_dream import dream
+            report = dream(graph, repo)
+            inferred = report["inferred"]
+            result = {"dream": report, "message": f"Dreamed: {inferred['new']} new links, {inferred['dropped']} dropped, "
+                                                  f"{report['archived']} archived, {report['forgotten']} forgotten."}
+        elif action == "restore":
+            node = improve_graph.restore_node(graph, str(data.get("id", ""))[:400], "restored from the board", "user")
+            result = {"node": improve_graph.node_view(node), "message": "Restored with its links. The skill sees it again."}
+        elif action == "reject_link":
+            from improve_dream import reject_link
+            fields = [data.get(name) for name in ("src", "rel", "dst")]
+            if not all(isinstance(value, str) and 0 < len(value) <= 400 for value in fields):
+                raise StateError("src, rel, and dst are required")
+            result = {**reject_link(graph, *fields, by="user", reason=data.get("reason") if isinstance(data.get("reason"), str) else None),
+                      "message": "Link removed. Dreaming will not infer it again."}
+        elif action == "refine":
+            report = improve_graph.refine(graph, repo)
+            result = {"refine": report, "message": f"Refined: {report['merged']} merged, {report['faded']} faded, {report['stale_files']} stale files."}
+        else:
+            raise StateError("unknown graph action")
+        done.append({"request_id": request_id, "result": result})
+        del done[:-50]
+        return result
 
 
 def local_request(url, **kwargs):
@@ -291,7 +425,10 @@ def board_status(repo):
         health = local_request(url + "/api/health")
         running = (isinstance(health, dict) and health.get("service") == "improve-board" and health.get("instance") == saved.get("instance")
                    and health.get("repo") == str(repo))
-        return {"running": running, "url": url, "pid": saved.get("pid"), "started_at": saved.get("started_at")}
+        hosts = saved.get("allowed_hosts")
+        hosts = sorted(host for host in hosts if isinstance(host, str)) if isinstance(hosts, list) else []
+        return {"running": running, "url": url, "pid": saved.get("pid"), "started_at": saved.get("started_at"),
+                "allowed_hosts": hosts, "phone_urls": [f"https://{host}" for host in hosts]}
     except (OSError, ValueError, URLError):
         return {"running": False}
 
@@ -306,8 +443,14 @@ class BoardHandler(BaseHTTPRequestHandler):
 
     def allowed_host(self):
         port = self.server.server_port
-        allowed = (f"127.0.0.1:{port}", f"localhost:{port}")
-        return self.headers.get("Host") in allowed
+        host = self.headers.get("Host", "")
+        return host in (f"127.0.0.1:{port}", f"localhost:{port}") or host in self.server.allowed_hosts
+
+    def board_origin(self):
+        """The only Origin a same-origin browser request may carry for this Host."""
+        host = self.headers.get("Host", "")
+        # Extra hosts are HTTPS tunnels (for example Tailscale Serve) that a phone opens.
+        return ("https://" if host in self.server.allowed_hosts else "http://") + host
 
     def reply(self, code, body, content_type="application/json; charset=utf-8"):
         if not isinstance(body, bytes):
@@ -318,6 +461,7 @@ class BoardHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy", "microphone=(self), camera=(), geolocation=()")
         self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
         self.end_headers()
         with contextlib.suppress(BrokenPipeError, ConnectionResetError):
@@ -333,7 +477,7 @@ class BoardHandler(BaseHTTPRequestHandler):
             origin = self.headers.get("Origin")
             if (self.headers.get("X-Improve-Client") != "board" or
                     self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none") or
-                    origin not in (None, "http://" + self.headers.get("Host", ""))):
+                    origin not in (None, self.board_origin())):
                 return self.reply(403, {"error": "same-origin board session required"})
             return self.reply(200, {"token": self.server.ui_token})
         if target.path == "/api/report":
@@ -348,6 +492,12 @@ class BoardHandler(BaseHTTPRequestHandler):
                     return self.reply(404, {"error": "No saved final report yet."})
                 return self.reply(200, {"text": report, "run_id": selected})
             except (StateError, OSError, ValueError) as exc:
+                return self.reply(400, {"error": str(exc)})
+        if target.path in ("/api/graph", "/api/graph/node", "/api/graph/context", "/api/graph/history"):
+            try:
+                query = parse_qs(target.query, max_num_fields=40)
+                return self.reply(200, graph_get(self.server.repo, target.path, query))
+            except (StateError, OSError, ValueError, sqlite3.Error) as exc:
                 return self.reply(400, {"error": str(exc)})
         if target.path == "/api/health":
             return self.reply(200, {"service": "improve-board", "instance": self.server.instance,
@@ -366,7 +516,14 @@ class BoardHandler(BaseHTTPRequestHandler):
                   "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),
                   "/drafts.js": ("drafts.js", "text/javascript; charset=utf-8"),
                   "/triage.js": ("triage.js", "text/javascript; charset=utf-8"),
+                  "/focus.js": ("focus.js", "text/javascript; charset=utf-8"),
+                  "/categories.js": ("categories.js", "text/javascript; charset=utf-8"),
+                  "/voice-intent.js": ("voice-intent.js", "text/javascript; charset=utf-8"),
+                  "/voice.js": ("voice.js", "text/javascript; charset=utf-8"),
+                  "/mobile.js": ("mobile.js", "text/javascript; charset=utf-8"),
                   "/overview.js": ("overview.js", "text/javascript; charset=utf-8"),
+                  "/graph.js": ("graph.js", "text/javascript; charset=utf-8"),
+                  "/graph-layout.js": ("graph-layout.js", "text/javascript; charset=utf-8"),
                   "/board.css": ("board.css", "text/css; charset=utf-8")}
         if target.path in assets:
             name, mime = assets[target.path]
@@ -376,7 +533,7 @@ class BoardHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         origin = self.headers.get("Origin")
         token = self.headers.get("X-Improve-Board-Token", "").encode()
-        same_origin = origin == "http://" + self.headers.get("Host", "")
+        same_origin = origin == self.board_origin()
         if not self.allowed_host():
             return self.reply(403, {"error": "not authorized"})
         if self.path == "/api/stop":
@@ -388,7 +545,7 @@ class BoardHandler(BaseHTTPRequestHandler):
         if (not same_origin or not secrets.compare_digest(token, self.server.ui_token.encode()) or
                 self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none")):
             return self.reply(403, {"error": "Refresh the board to reconnect its controls."})
-        if self.path not in ("/api/control", "/api/requests", "/api/requests/batch"):
+        if self.path not in ("/api/control", "/api/requests", "/api/requests/batch", "/api/graph"):
             return self.reply(404, {"error": "not found"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -402,6 +559,9 @@ class BoardHandler(BaseHTTPRequestHandler):
             data = json.loads(raw)
             if not isinstance(data, dict):
                 raise StateError("a JSON object is required")
+            if self.path == "/api/graph":
+                # Curating knowledge does not need a live run: it shapes the next one.
+                return self.reply(200, graph_post(self.server.repo, data))
             with operator_lock(self.server.repo) as state:
                 require_run(self.server.repo, data.get("run_id"))
                 snapshot = board_snapshot(self.server.repo, "current")
@@ -434,11 +594,24 @@ class BoardHandler(BaseHTTPRequestHandler):
                     "resume": "Resume requested. The original deadline is unchanged.",
                     "stop": "Stop requested. The skill will settle current work and end the run."
                 }[action]})
-        except (StateError, OSError, ValueError, TypeError, RecursionError) as exc:
+        except (StateError, OSError, ValueError, TypeError, RecursionError, sqlite3.Error) as exc:
             return self.reply(400, {"error": str(exc)})
 
 
-def serve(repo, port=None):
+HOST_PATTERN = re.compile(r"(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+")
+
+
+def trusted_host(value):
+    """Validate an HTTPS tunnel hostname that forwards to this loopback board."""
+    value = value.strip().lower().rstrip(".")
+    if value.startswith(("http://", "https://")) or "/" in value or ":" in value:
+        raise argparse.ArgumentTypeError("--allow-host takes a bare hostname such as mymac.tailnet.ts.net")
+    if not HOST_PATTERN.fullmatch(value) or value in ("localhost", "127.0.0.1"):
+        raise argparse.ArgumentTypeError("--allow-host must be a fully qualified hostname")
+    return value
+
+
+def serve(repo, port=None, allowed_hosts=()):
     state = state_directory(repo)
     state.mkdir(exist_ok=True)
     if any((state / name).is_symlink() for name in SERVICE_FILES):
@@ -452,8 +625,11 @@ def serve(repo, port=None):
             server = BoardServer(("127.0.0.1", 0), BoardHandler)
         server.repo, server.instance, server.token = repo, secrets.token_hex(16), secrets.token_hex(32)
         server.ui_token = secrets.token_hex(32)
+        server.allowed_hosts = frozenset(allowed_hosts)
         info = dict(repo=str(repo), url=f"http://127.0.0.1:{server.server_port}", port=server.server_port,
-                    pid=os.getpid(), instance=server.instance, token=server.token, started_at=stamp())
+                    pid=os.getpid(), instance=server.instance, token=server.token, started_at=stamp(),
+                    allowed_hosts=sorted(server.allowed_hosts),
+                    phone_urls=[f"https://{host}" for host in sorted(server.allowed_hosts)])
         atomic_json(state / "board.json", info)
         def stop(*_):
             threading.Thread(target=server.shutdown, daemon=True).start()
@@ -466,19 +642,27 @@ def serve(repo, port=None):
             server.server_close()
 
 
-def start_board(repo, port=None):
+def start_board(repo, port=None, allowed_hosts=()):
     state = state_directory(repo)
     state.mkdir(exist_ok=True)
+    try:
+        allowed_hosts = sorted({trusted_host(host) for host in allowed_hosts})
+    except argparse.ArgumentTypeError as exc:
+        raise StateError(str(exc)) from exc
     existing = board_status(repo)
     if existing["running"]:
         if port not in (None, 0, urlsplit(existing["url"]).port):
             raise StateError(f"board already runs at {existing['url']}; stop it before changing the port")
+        if allowed_hosts and allowed_hosts != existing.get("allowed_hosts", []):
+            raise StateError("board already runs with different --allow-host values; stop it first")
         return existing
     if any((state / name).is_symlink() for name in SERVICE_FILES):
         raise StateError("board service files must not be symlinks")
     command = [sys.executable, str(Path(__file__).resolve()), "--repo", str(repo)]
     if port is not None:
         command += ["--port", str(port)]
+    for host in allowed_hosts:
+        command += ["--allow-host", host]
     with (state / "board.log").open("ab") as log:
         child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                  start_new_session=True, close_fds=True)
@@ -541,6 +725,8 @@ def main():
     action.add_argument("--status", action="store_true")
     action.add_argument("--stop", action="store_true", help="stop the board only, not the improvement run")
     parser.add_argument("--json", action="store_true", help="machine-readable start/status/stop output")
+    parser.add_argument("--allow-host", action="append", type=trusted_host, default=[], metavar="HOSTNAME",
+                        help="also accept this HTTPS tunnel hostname (for phone access); repeatable")
     args = parser.parse_args()
     try:
         repo = Path(args.repo).expanduser().resolve()
@@ -551,13 +737,18 @@ def main():
         elif args.stop:
             info = stop_board(repo)
         elif args.start:
-            info = start_board(repo, args.port)
+            info = start_board(repo, args.port, args.allow_host)
         else:
             if args.json:
                 raise StateError("--json requires --start, --status, or --stop")
-            serve(repo, args.port)
+            serve(repo, args.port, args.allow_host)
             return 0
-        print(json.dumps(info) if args.json else (info["url"] if info["running"] else "board is not running"))
+        if args.json:
+            print(json.dumps(info))
+        elif info["running"]:
+            print("\n".join([info["url"], *(f"Phone: {url}" for url in info.get("phone_urls", []))]))
+        else:
+            print("board is not running")
         return 0
     except (OSError, ValueError) as exc:
         print(f"improve-board: {exc}", file=sys.stderr)

@@ -20,6 +20,10 @@ running out of ideas does not meet a goal. A blocked goal names its missing capa
 decision and the condition that would make it workable again. Preserve the user's ordering.
 Every candidate links to `focus_priority` and at least one acceptance check or failure.
 
+Board area focus (`run.json.focus.board_areas`) ranks `prefer` areas ahead of unmarked
+areas within the same `user_priority`, and removes `skip` areas from new finder lanes and
+task selection. It never widens the intake scope or authorization.
+
 At a checkpoint, apply board priority requests and acknowledge the saved changes before
 choosing the next eligible item: `high`, then `normal` or absent, then `low`; use the ordered focus
 plan and evidence-based importance. Scope, critical-security preemption, dependencies,

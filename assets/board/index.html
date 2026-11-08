@@ -2,7 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#20212c" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Improve" />
     <title>Improve · Task board</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/board.css" />
@@ -10,7 +14,14 @@
     <script src="/workflow.js" defer></script>
     <script src="/drafts.js" defer></script>
     <script src="/triage.js" defer></script>
+    <script src="/focus.js" defer></script>
+    <script src="/categories.js" defer></script>
+    <script src="/voice-intent.js" defer></script>
+    <script src="/voice.js" defer></script>
+    <script src="/mobile.js" defer></script>
     <script src="/overview.js" defer></script>
+    <script src="/graph-layout.js" defer></script>
+    <script src="/graph.js" defer></script>
     <script src="/board.js" defer></script>
   </head>
   <body>
@@ -107,7 +118,9 @@
             </button>
           </div>
           <div>
-            <button id="send-guidance" type="button" disabled>
+            <button id="steer-voice" class="voice-button" type="button" title="Steer by voice (Shift+V)">
+              <span class="mic-icon" aria-hidden="true"></span> Steer by voice</button
+            ><button id="send-guidance" type="button" disabled>
               Send guidance</button
             ><button id="new-task" class="primary" type="button" disabled>
               + New task
@@ -117,6 +130,39 @@
         <p id="control-note">Checking the current run…</p>
         <p id="control-feedback" role="status" hidden></p>
         <button id="resume-draft" type="button" hidden>Resume draft</button>
+      </section>
+      <section id="focus-panel" class="focus-panel" aria-labelledby="focus-title">
+        <div class="focus-heading">
+          <div>
+            <h2 id="focus-title">Focus areas</h2>
+            <p>Choose which kinds of work the skill should prefer or skip. It applies your choice before picking its next task.</p>
+          </div>
+          <div class="focus-heading-side">
+            <span id="focus-state" class="focus-state">Default</span>
+            <button id="focus-toggle" type="button" aria-expanded="true" aria-controls="focus-body">Hide</button>
+          </div>
+        </div>
+        <div id="focus-body">
+          <div class="focus-subheading">
+            <h3>Improvement categories</h3>
+            <span id="focus-category-count">Pick one or more</span>
+            <button id="focus-balanced" class="link-button" type="button">Reset to balanced</button>
+          </div>
+          <div id="focus-categories" class="category-grid" aria-label="Improvement categories"></div>
+          <details id="focus-fine-tune" class="focus-fine-tune">
+            <summary>Fine-tune by area <span>Prefer, normal, or skip each task area</span></summary>
+            <div id="focus-grid" class="focus-grid"></div>
+          </details>
+          <div class="focus-footer">
+            <p id="focus-summary" class="focus-summary"></p>
+            <input id="focus-note" type="text" maxlength="2000" placeholder="Optional note, e.g. “prioritize the checkout flow”" aria-label="Focus note" />
+            <div class="focus-buttons">
+              <button id="focus-reset" type="button" disabled>Discard changes</button
+              ><button id="focus-save" class="primary" type="button" disabled>Save focus</button>
+            </div>
+          </div>
+          <p id="focus-feedback" role="status" hidden></p>
+        </div>
       </section>
       <div id="warning" class="warning" role="status" hidden></div>
       <div id="view-notice" class="warning" role="status" hidden></div>
@@ -193,6 +239,16 @@
         >
           Requests <span id="requests-count" class="view-count">0</span>
         </button>
+        <button
+          id="graph-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="graph-view"
+          tabindex="-1"
+        >
+          Knowledge <span id="graph-count" class="view-count">0</span>
+        </button>
         <span class="view-hint"
           >Your work, its history, and your direction.</span
         >
@@ -233,6 +289,7 @@
             </p>
           </div>
         </div>
+        <div id="mobile-columns" class="mobile-columns" aria-label="Choose a column"></div>
         <section id="board" class="board" aria-label="Kanban board"></section>
         <section id="worklist" aria-label="Active worklist" hidden>
           <div class="bulk-toolbar" aria-label="Selected tasks">
@@ -429,6 +486,91 @@
           </div>
         </nav>
         <div id="activity-list" class="activity-list"></div>
+        <section id="learning-panel" class="learning-panel" aria-labelledby="learning-title">
+          <h3 id="learning-title">What the skill has learned</h3>
+          <p id="learning-note">Learning builds up after each finished run.</p>
+          <div class="learning-columns">
+            <div><h4>Verified success by area</h4><div id="learning-areas"></div></div>
+            <div><h4>Lessons it follows</h4><ul id="learning-lessons"></ul></div>
+            <div><h4>Recurring blockers</h4><ul id="learning-blockers"></ul></div>
+          </div>
+        </section>
+      </section>
+      <section id="graph-view" role="tabpanel" aria-labelledby="graph-tab" hidden>
+        <div class="history-heading">
+          <div>
+            <h2>Knowledge graph</h2>
+            <p>
+              What the skill has learned across runs: files, outcomes, gates,
+              blockers, and the knowledge it follows. It is read before every
+              task, refined after every run, and it dreams: infers links nobody
+              wrote down, and forgets what stopped being useful. Nothing is lost:
+              forgotten nodes can be restored.
+            </p>
+          </div>
+          <div class="graph-heading-actions">
+            <button id="graph-dream" type="button">Dream now</button
+            ><button id="graph-refine" type="button">Refine now</button
+            ><button id="graph-add" type="button" class="primary">
+              + Add knowledge
+            </button>
+          </div>
+        </div>
+        <div class="overview-metrics graph-metrics">
+          <div><span>Nodes · links</span><strong id="graph-total">0</strong></div>
+          <div><span>Active knowledge</span><strong id="graph-insights">0</strong></div>
+          <div><span>Runs recorded</span><strong id="graph-runs">0</strong></div>
+          <div><span>Last refined</span><strong id="graph-refined">Never</strong></div>
+        </div>
+        <div class="graph-toolbar">
+          <label class="graph-search"
+            >Search<input
+              id="graph-query"
+              type="search"
+              maxlength="200"
+              placeholder="Knowledge, files, tasks, blockers…"
+          /></label>
+          <div id="graph-types" class="graph-types" role="group" aria-label="Node types"></div>
+          <label class="graph-check"
+            ><input id="graph-archived" type="checkbox" /> Show archived</label
+          ><button id="graph-reset" type="button" class="link-button">
+            Show strongest
+          </button>
+        </div>
+        <p id="graph-status" class="dialog-context" role="status"></p>
+        <div class="graph-layout">
+          <div class="graph-canvas-wrap">
+            <svg id="graph-canvas" role="group" aria-label="Knowledge graph. Use Tab to move between nodes and Enter to select one."></svg>
+            <div class="graph-zoom">
+              <button id="graph-zoom-in" type="button" aria-label="Zoom in">+</button
+              ><button id="graph-zoom-out" type="button" aria-label="Zoom out">−</button
+              ><button id="graph-fit" type="button">Fit</button>
+            </div>
+            <div id="graph-legend" class="graph-legend" aria-hidden="true"></div>
+            <p id="graph-empty" class="graph-empty" hidden>
+              The graph fills in as the skill works: after each cycle it records
+              tasks, files, gates, and blockers, and agents add what they learn.
+              You can add knowledge now.
+            </p>
+          </div>
+          <aside id="graph-detail" class="graph-detail" aria-label="Selected node">
+            <p class="focus-hint">Select a node to see what it is connected to.</p>
+          </aside>
+        </div>
+        <div class="learning-columns graph-lists">
+          <div><h4>Strongest knowledge</h4><ol id="graph-top"></ol></div>
+          <div><h4>Files that resist change</h4><ul id="graph-hotspots"></ul></div>
+          <div><h4>Refinement log</h4><ul id="graph-refines"></ul></div>
+        </div>
+        <div class="learning-columns graph-lists">
+          <div><h4>Dream log</h4><ul id="graph-dreams"></ul></div>
+          <div><h4>Consolidation proposals</h4><ul id="graph-proposals"></ul></div>
+          <div>
+            <h4>Recently forgotten <span id="graph-forgotten-count" class="view-count">0</span></h4>
+            <ul id="graph-forgotten"></ul>
+            <button id="graph-forgotten-more" class="link-button" type="button" hidden>Show more</button>
+          </div>
+        </div>
       </section>
       <section id="discovery-section" class="discovery-section" hidden>
         <div class="section-heading">
@@ -439,9 +581,40 @@
       </section>
       <footer>
         <span>Local to this computer · Changes are saved in your project</span
+        ><button id="layout-toggle" class="link-button" type="button">Switch to mobile view</button
         ><span id="updated">Waiting for data</span>
       </footer>
     </main>
+    <nav id="mobile-nav" class="mobile-nav" aria-label="Board sections">
+      <button type="button" data-view="board"><span class="nav-glyph" aria-hidden="true">▥</span>Board</button>
+      <button type="button" data-view="history"><span class="nav-glyph" aria-hidden="true">✓</span>History</button>
+      <button id="nav-steer" class="nav-steer" type="button" aria-label="Steer by voice"><span class="mic-icon" aria-hidden="true"></span></button>
+      <button type="button" data-view="focus"><span class="nav-glyph" aria-hidden="true">◎</span>Focus</button>
+      <button type="button" data-view="requests"><span class="nav-glyph" aria-hidden="true">✉</span>Requests<span id="nav-requests-count" class="nav-badge" hidden></span></button>
+    </nav>
+    <dialog id="voice-dialog" class="voice-dialog" aria-labelledby="voice-title">
+      <div class="dialog-top">
+        <strong id="voice-title">Steer by voice</strong
+        ><button type="button" data-close="voice-dialog" aria-label="Close voice steering">✕</button>
+      </div>
+      <p class="dialog-context">Say what you want, for example “focus on security and skip docs”, “new task: add dark mode to settings”, or “pause the run”.</p>
+      <p id="voice-support" class="form-error" role="alert" hidden></p>
+      <button id="voice-mic" class="voice-mic" type="button" aria-label="Start or stop listening"><span class="mic-icon" aria-hidden="true"></span></button>
+      <p id="voice-live" class="voice-live" role="status" aria-live="polite"></p>
+      <label>What I heard<textarea id="voice-transcript" rows="3" maxlength="8000" placeholder="Your words appear here. You can edit them."></textarea></label>
+      <div class="voice-preview">
+        <label>Send as<select id="voice-type"></select></label>
+        <p id="voice-summary" class="voice-summary"></p>
+      </div>
+      <p id="voice-blocked" class="form-error" hidden></p>
+      <label class="voice-check"><input id="voice-handsfree" type="checkbox" /> Hands-free: read it back, then listen for “send” or “cancel”</label>
+      <p id="voice-error" class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button id="voice-clear" type="button">Clear</button
+        ><button type="button" data-close="voice-dialog">Close</button
+        ><button id="voice-send" class="primary" type="button" disabled>Send</button>
+      </div>
+    </dialog>
     <dialog id="task-dialog" aria-labelledby="detail-title">
       <div class="dialog-top">
         <span id="detail-meta" class="eyebrow"></span
@@ -489,6 +662,56 @@
         <div id="task-thread"></div>
         <button id="task-thread-more" type="button">Show more requests</button>
       </section>
+      <section id="task-knowledge" class="task-knowledge" aria-labelledby="task-knowledge-title" hidden>
+        <h3 id="task-knowledge-title">What the knowledge graph knows here</h3>
+        <div id="task-knowledge-body"></div>
+      </section>
+    </dialog>
+    <dialog id="graph-note-dialog" aria-labelledby="graph-note-title">
+      <form id="graph-note-form">
+        <div class="dialog-top">
+          <strong id="graph-note-title">Add knowledge</strong
+          ><button type="button" data-close="graph-note-dialog" aria-label="Close add knowledge">
+            ✕
+          </button>
+        </div>
+        <p class="dialog-context">
+          One thing the skill should know in future runs. It is shown in every
+          cycle until you archive it. Never include secrets.
+        </p>
+        <label
+          >Knowledge<textarea
+            id="graph-note-text"
+            rows="3"
+            maxlength="600"
+            required
+            placeholder="e.g. The payments tests need the Stripe mock running; start it with make mock."
+          ></textarea>
+        </label>
+        <div class="form-pair">
+          <label
+            >Kind<select id="graph-note-kind">
+              <option value="pitfall">Pitfall to avoid</option>
+              <option value="technique">Technique that works</option>
+              <option value="convention">Project convention</option>
+              <option value="decision">Decision already made</option>
+              <option value="fact" selected>Fact</option>
+            </select></label
+          ><label
+            >About (optional)<input
+              id="graph-note-about"
+              maxlength="600"
+              placeholder="src/app.ts, area:ui"
+          /></label>
+        </div>
+        <p id="graph-note-error" class="form-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" data-close="graph-note-dialog">Cancel</button
+          ><button id="graph-note-submit" type="submit" class="primary">
+            Save knowledge
+          </button>
+        </div>
+      </form>
     </dialog>
     <dialog id="request-dialog" aria-labelledby="request-title">
       <form id="request-form">
