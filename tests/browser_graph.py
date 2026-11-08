@@ -113,6 +113,7 @@ def check_graph(page, repo, tasks, write_tasks, artifacts):
     page.locator("#graph-refine").click()
     expect(page.locator("#graph-status")).to_contain_text("Refined:")
     expect(page.locator("#graph-refines li").first).to_contain_text("nodes")
+    check_dreaming(page, repo, tasks, write_tasks, artifacts)
 
     page.set_viewport_size({"width": 390, "height": 844})
     page.locator("#graph-fit").click()
@@ -120,6 +121,48 @@ def check_graph(page, repo, tasks, write_tasks, artifacts):
     assert overflow <= 1, f"knowledge view overflows a phone by {overflow}px"
     page.screenshot(path=str(artifacts / "graph-mobile.png"), full_page=True)
     page.set_viewport_size({"width": 1500, "height": 1000})
+
+
+def check_dreaming(page, repo, tasks, write_tasks, artifacts):
+    """Dream from the board, inspect and reject an inferred link, and restore forgotten knowledge."""
+    with graph.locked(repo) as value:
+        probe = graph.add_insight(value, "Seed the session cache before refreshing tokens", "technique")["id"]
+    tasks.extend(dict(id=f"d-{index}", title=f"Refresh tokens {index}", area="security", status="done",
+                      paths=["src/auth.py"], graph_refs=[probe]) for index in range(2))
+    write_tasks()
+    graph.sync(repo)
+    page.locator("#graph-dream").click()
+    expect(page.locator("#graph-status")).to_contain_text("Dreamed:")
+    expect(page.locator("#graph-dreams li").first).to_contain_text("new links")
+    page.locator("#graph-query").fill("seed session cache")
+    page.locator(f'.graph-node[data-id="{probe}"] circle').click(force=True)
+    expect(page.locator("#graph-detail h3")).to_contain_text("Seed the session cache")
+    inferred = page.locator("#graph-detail .graph-link", has_text="src/auth.py")
+    expect(inferred.locator(".inferred-tag")).to_have_text("inferred 67%")
+    assert "Evidence:" in inferred.get_attribute("title")
+    page.locator(".graph-layout").screenshot(path=str(artifacts / "graph-inferred.png"))
+    inferred.locator("xpath=..").locator(".reject-link").click()
+    expect(page.locator("#graph-status")).to_have_text("Link removed. Dreaming will not infer it again.")
+    key = graph.edge_key(probe, "applies_to", "file:src/auth.py")
+    saved = graph.load(graph.graph_path(repo))
+    assert key not in saved["edges"] and key in saved["dream"]["rejected"], key
+    expect(page.locator("#graph-detail .graph-link", has_text="src/auth.py").locator(".inferred-tag")).to_have_count(0)
+
+    with graph.locked(repo) as value:
+        graph.remove_node(value, probe, reason="forgotten for the browser check", op="forgotten")
+    page.locator("#graph-query").fill("")
+    page.locator("#graph-reset").click()
+    page.locator("#refresh").click()
+    row = page.locator("#graph-forgotten .forgotten-row", has_text="Seed the session cache")
+    expect(row).to_have_count(1)
+    expect(row.locator("small")).to_contain_text("forgotten")
+    expect(page.locator("#graph-forgotten-count")).not_to_have_text("0")
+    row.locator("button", has_text="Restore").click()
+    expect(page.locator("#graph-status")).to_have_text("Restored with its links. The skill sees it again.")
+    expect(page.locator("#graph-detail h3")).to_contain_text("Seed the session cache")
+    expect(page.locator("#graph-detail")).to_contain_text("restored from the board")
+    expect(page.locator("#graph-forgotten .forgotten-row", has_text="Seed the session cache")).to_have_count(0)
+    assert probe in graph.load(graph.graph_path(repo))["nodes"]
 
 
 def main():

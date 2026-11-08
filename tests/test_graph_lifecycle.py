@@ -17,8 +17,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from graph_support import (ROOT, LongSession, archive, check_invariants, check_matches_ledger, environment,  # noqa: E402
-                           load, make_repo, restore_environment, write_ledger, write_run)
+from graph_support import (ROOT, LongSession, archive, check_invariants, check_matches_ledger, copy_store,  # noqa: E402
+                           check_disk, environment, load, make_repo, restore_environment, write_ledger, write_run)
 import improve_graph as graph  # noqa: E402
 from improve_runtime import stamp  # noqa: E402
 
@@ -107,14 +107,18 @@ class ReconciliationTests(GraphTestCase):
     def test_an_unchanged_ledger_is_a_no_op_write(self):
         rows = [dict(id="t", title="T", status="done", paths=["src/a.py", "src/b.py"])]
         self.sync(rows, refine_after=True)
-        before = graph.graph_path(self.repo).stat().st_mtime_ns, load(self.repo)["revision"]
+        before = load(self.repo)
+        wal = Path(str(graph.graph_path(self.repo)) + "-wal")
+        wal_size = wal.stat().st_size if wal.exists() else 0
         # Advance the clock on every call so a needless timestamp rewrite cannot hide in one second.
         ticks = iter(range(10 ** 6))
         with mock.patch.object(graph, "stamp", lambda value=None: stamp(time.time() + next(ticks))):
             for _ in range(3):
                 graph.sync(self.repo)
-        after = graph.graph_path(self.repo).stat().st_mtime_ns, load(self.repo)["revision"]
-        self.assertEqual(before, after, "the board only refetches when something actually changed")
+        after = load(self.repo)
+        self.assertEqual((before["revision"], before.get("updated_at")), (after["revision"], after.get("updated_at")),
+                         "the board only refetches when something actually changed")
+        self.assertEqual(wal.stat().st_size if wal.exists() else 0, wal_size, "nothing was written at all")
 
     def test_ingest_tolerates_hostile_task_fields(self):
         rows = [dict(id="a", title=None, area="Not An Area!", status=7, paths="src/a.py"),
@@ -231,8 +235,8 @@ class RecoveryTests(GraphTestCase):
         value = load(self.repo)
         self.assertIn(kept, value["nodes"], "knowledge survives a damaged graph")
         self.assertIn("task:live:u", value["nodes"], "newer ledger work is re-ingested")
-        self.assertIn("restored_from_backup_at", value["refine"])
-        self.assertTrue(graph.graph_path(self.repo).with_suffix(".damaged.json").exists())
+        self.assertEqual(value["refine"]["recovered"]["from"], "backup")
+        self.assertEqual(graph.damaged_path(graph.graph_path(self.repo)).read_text(), '{"nodes": [truncated')
         check_invariants(self, value)
 
     def test_damaged_backup_falls_back_to_a_rebuild(self):
@@ -246,12 +250,17 @@ class RecoveryTests(GraphTestCase):
         self.assertIn("task:r-old:h", nodes, "archived runs are backfilled into a rebuilt graph")
 
     def test_symlinked_store_is_refused(self):
-        target = Path(self.temp.name) / "outside.json"
+        target = Path(self.temp.name) / "outside.db"
         target.write_text("{}")
         graph.graph_path(self.repo).symlink_to(target)
         with self.assertRaises(graph.GraphError):
             graph.sync(self.repo)
         self.assertEqual(target.read_text(), "{}")
+        graph.graph_path(self.repo).unlink()
+        graph.backup_path(graph.graph_path(self.repo)).symlink_to(target)
+        with self.assertRaises(graph.GraphError):
+            graph.sync(self.repo)
+        self.assertEqual(target.read_text(), "{}", "a symlinked checkpoint is never written through")
 
 
 class ConcurrencyTests(GraphTestCase):
@@ -261,15 +270,17 @@ class ConcurrencyTests(GraphTestCase):
         stop, torn, reads = threading.Event(), [], [0]
 
         def reader():
+            # Every read is a whole, consistent revision: never a mix of two writers' changes.
             while not stop.is_set():
-                for path in (graph.graph_path(self.repo), graph.backup_path(graph.graph_path(self.repo))):
-                    try:
-                        json.loads(path.read_text())
-                        reads[0] += 1
-                    except FileNotFoundError:
-                        pass
-                    except ValueError as exc:
-                        torn.append(str(exc))
+                try:
+                    value = load(self.repo)
+                    dangling = [key for key, edge in value["edges"].items()
+                                if edge["src"] not in value["nodes"] or edge["dst"] not in value["nodes"]]
+                    if dangling or (value["nodes"] and not value["revision"]):
+                        torn.append(f"revision {value['revision']}: {dangling[:2]}")
+                    reads[0] += 1
+                except Exception as exc:  # Any failed read is the finding.
+                    torn.append(repr(exc))
 
         def daemon():
             cycle = 0
@@ -360,7 +371,7 @@ class LongSessionSoakTests(unittest.TestCase):
         for name in session.removed_files:
             if f"file:{name}" in value["nodes"]:
                 self.assertTrue(value["nodes"][f"file:{name}"]["stale"], name)
-        self.assertLess(graph.graph_path(repo).stat().st_size, 8 * 1024 * 1024)
+        check_disk(self, repo)
         # Generous ceilings: they catch quadratic regressions, not machine speed.
         self.assertLess(worst["sync"], 2.0, worst)
         self.assertLess(worst["refine"], 5.0, worst)
@@ -454,7 +465,7 @@ class ScaleTests(unittest.TestCase):
         done = sum(node["stats"]["done"] for node in self.value["nodes"].values() if node["type"] == "area")
         self.assertEqual(done, self.total_done, "pruned outcomes are folded into area baselines exactly once")
         self.assertLessEqual(graph.summary(self.value)["insights"], graph.MAX_INSIGHTS)
-        self.assertLess(graph.graph_path(self.repo).stat().st_size, 8 * 1024 * 1024)
+        check_disk(self, self.repo)
 
     def test_every_query_is_fast_at_scale(self):
         value, files = self.value, self.files
@@ -493,7 +504,7 @@ class ScaleTests(unittest.TestCase):
     def test_steady_state_refine_and_sync_are_quick(self):
         with tempfile.TemporaryDirectory() as directory:
             copy = make_repo(Path(directory), [])
-            graph.graph_path(copy).write_text(graph.graph_path(self.repo).read_text())
+            copy_store(self.repo, copy)
             write_run(copy / ".improve", "live")
             write_ledger(copy / ".improve", [dict(id="x", title="Live", status="ready")])
             for label, kwargs, ceiling in (("sync", {}, 2.0), ("refine", {"refine_after": True}, 5.0)):

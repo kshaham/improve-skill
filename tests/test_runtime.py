@@ -1140,11 +1140,19 @@ class ResilienceTests(DaemonTests):
         self.assertEqual(len(self.load("learning.json")["runs"]), 2)
         self.assertIn("test database unavailable", self.load("learning.json")["blockers"][0]["example"])
 
+    def graph(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import improve_graph
+        return improve_graph.load(improve_graph.graph_path(self.repo), repair=False)
+
     def test_knowledge_graph_survives_new_runs_and_reaches_the_next_prompt(self):
         self.assertEqual(self.invoke("once_halt").returncode, 0)
-        saved = self.load("graph.json")
+        saved = self.graph()
         self.assertEqual(len(saved["runs"]), 1)
         self.assertTrue(saved["refine"]["history"], "a finished run is refined")
+        self.assertEqual(saved["tick"], 2, "a never-dreamed graph dreams after the first cycle, and again at run end")
+        self.assertEqual(len(saved["dream"]["history"]), 2)
+        self.assertTrue((self.state / "graph.backup.db").exists(), "a dream leaves a checkpoint")
         self.assertTrue(any(node["type"] == "task" for node in saved["nodes"].values()))
         helper = [sys.executable, str(ROOT / "scripts/improve_graph.py"), "--repo", str(self.repo), "note",
                   "--kind", "pitfall", "--text", "The fixture gate needs a warm cache first.", "--about", "area:ui"]
@@ -1155,10 +1163,30 @@ class ResilienceTests(DaemonTests):
         prompt = self.launches()[0]["prompt"]
         self.assertIn("improve_graph.py", prompt)
         self.assertIn("graph_refs", prompt)
+        self.assertIn("restore ID", prompt, "agents are told how to bring back forgotten knowledge")
         self.assertIn(note["id"], prompt)
         self.assertIn("warm cache", prompt)
-        self.assertEqual(len(self.load("graph.json")["runs"]), 2)
-        self.assertFalse(any((path / "graph.json").exists() for path in (self.state / "history").iterdir()))
+        saved = self.graph()
+        self.assertEqual(len(saved["runs"]), 2)
+        self.assertEqual(saved["tick"], 3, "the last dream is recent, so only the run-end dream ran")
+        archives = list((self.state / "history").iterdir())
+        for name in ("graph.db", "graph.backup.db", "graph.lock"):
+            self.assertFalse(any((path / name).exists() for path in archives), f"{name} must stay with the repository")
+
+    def test_daemon_dreams_on_schedule_during_a_long_run(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import improve_graph
+        self.env.update(IMPROVE_GRAPH_DREAM_MINUTES="0")
+        self.assertEqual(self.invoke("once_halt").returncode, 0)
+        self.assertEqual(self.graph()["tick"], 1, "0 disables scheduled dreams; only the end-of-run dream ran")
+        with improve_graph.locked(self.repo) as value:
+            value["dream"]["last_at"] = "2000-01-01T00:00:00Z"  # Long overdue.
+        (self.state / "once-done").unlink()
+        self.env.update(IMPROVE_GRAPH_DREAM_MINUTES="180")
+        result = self.invoke("once_halt", "--new-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.graph()["tick"], 3, "an overdue dream ran after a cycle, then the run-end dream")
+        self.assertIn("knowledge graph dreamed (tick 2)", (self.state / "daemon.log").read_text())
 
 
 # Inherit DaemonTests' fixture, not its strict-mode assertions.

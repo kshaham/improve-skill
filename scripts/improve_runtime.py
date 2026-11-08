@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import sqlite3
 import signal
 import subprocess
 import sys
@@ -36,6 +37,12 @@ LIMIT_PATTERN = re.compile(r"hit your (usage )?limit|usage limit reached|rate_li
 
 class StateError(ValueError):
     pass
+
+
+# The knowledge graph and its checkpoints, history, and legacy forms outlive any one run.
+GRAPH_FILES = ("graph.db", "graph.db-wal", "graph.db-shm", "graph.backup.db", "graph.damaged.db",
+               "graph.damaged.db-wal", "graph.damaged.db-shm", "graph.json", "graph.json.migrated", "graph.lock",
+               "graph.backup.json", "graph.damaged.json")
 
 
 def resolve_engine(requested="auto", control=None, environ=None):
@@ -357,6 +364,7 @@ class Supervisor:
         self.cooldown = env_integer("IMPROVE_RECOVERY_COOLDOWN", 60, 0)
         self.cooldown_cap = env_integer("IMPROVE_RECOVERY_COOLDOWN_CAP", 900, 0)
         self.graph_refine_interval = 60 * env_integer("IMPROVE_GRAPH_REFINE_MINUTES", 30, 0)
+        self.graph_dream_interval = 60 * env_integer("IMPROVE_GRAPH_DREAM_MINUTES", 180, 0)
 
     def log(self, message):
         line = f"{stamp()} {message}"
@@ -666,7 +674,8 @@ python3 {shlex.quote(str(graph_script))} --repo {shlex.quote(str(self.repo))} co
 Add the ids of graph knowledge you relied on to that task's graph_refs list in backlog.jsonl.
 Record file-specific knowledge (a pitfall, technique, convention, or decision) with:
 python3 {shlex.quote(str(graph_script))} --repo {shlex.quote(str(self.repo))} note --kind pitfall --text 'ONE SENTENCE' --about file:PATH area:AREA
-Mark graph knowledge that proved false with `rate ID wrong`. Follow {Path(__file__).resolve().parent.parent / 'references/knowledge-graph.md'}.
+Mark graph knowledge that proved false with `rate ID wrong`, and a wrong inferred link with `unlink SRC REL DST`.
+If knowledge you need was forgotten, find it with `history --query WORDS` and bring it back with `restore ID`. Follow {Path(__file__).resolve().parent.parent / 'references/knowledge-graph.md'}.
 {self.memory_brief(final)}
 {"FINALIZATION ONLY: start no new work. This run ended or its deadline passed. Ignore pause for this report-only pass and report pending board requests as unimplemented. Preserve an existing halt/stop outcome and original end time. Write .improve/final-report.md from actual git and ledger evidence, append it to journal.md, set summary_pending false, and set completed only for deadline expiry. Never claim unverified changes passed." if final else "Complete a useful cycle, leave a clean tree, and return; the supervisor will relaunch you."}
 """
@@ -765,19 +774,26 @@ Mark graph knowledge that proved false with `rate ID wrong`. Follow {Path(__file
             record_run(self.repo, self.control, read_rows(self.state / "backlog.jsonl"))
         except (StateError, OSError, ValueError) as exc:
             self.log(f"could not record run learning: {exc}")
-        self.sync_graph(refine=True)
+        self.sync_graph(dream=True)
 
-    def sync_graph(self, refine=False):
+    def sync_graph(self, dream=False):
         """Fold the run into the knowledge graph; a graph problem never stops a run."""
         try:
             from improve_graph import sync
-            # Long runs refine periodically too, so success rates and scores stay current.
-            result = sync(self.repo, refine_after=refine, refine_interval=self.graph_refine_interval)
-            if result.get("refine"):
+            # Long runs refine and dream periodically too, so statistics, inferred links, and
+            # cleanup keep up with the work instead of waiting for the run to end.
+            result = sync(self.repo, refine_interval=self.graph_refine_interval, dream_after=dream,
+                          dream_interval=self.graph_dream_interval)
+            if result.get("dream"):
+                report = result["dream"]
+                self.log(f"knowledge graph dreamed (tick {report['tick']}): {report['inferred']['new']} new links, "
+                         f"{report['inferred']['dropped']} dropped, {report['archived']} archived, "
+                         f"{report['forgotten']} forgotten, {report['proposals']} proposals")
+            elif result.get("refine"):
                 report = result["refine"]
                 self.log(f"knowledge graph refined: {report['nodes']} nodes, {report['merged']} merged, "
                          f"{report['faded']} faded, {report['stale_files']} stale files")
-        except (StateError, OSError, ValueError, RecursionError) as exc:
+        except (StateError, OSError, ValueError, RecursionError, sqlite3.Error) as exc:
             self.log(f"could not update the knowledge graph: {exc}")
 
     def finalize(self):
@@ -971,7 +987,7 @@ def daemon(args):
                     raise StateError("--new-run requires --intake FILE from a new ten-question intake")
                 intake = read_json(Path(args.intake).expanduser())
                 # learning.json and graph.json are the cross-run memory; they stay with the repository.
-                keep = {"history", "daemon.lock", "learning.json", "graph.json", "graph.lock", "graph.backup.json", *SERVICE_FILES}
+                keep = {"history", "daemon.lock", "learning.json", *GRAPH_FILES, *SERVICE_FILES}
                 old = [p for p in state.iterdir() if p.name not in keep]
                 if old:
                     history = state / "history"

@@ -68,6 +68,17 @@ function graphStatus(message, error = false) {
   $("graph-status").classList.toggle("form-error", error);
 }
 
+// The result of something the user did outlives the reload it triggers (or one already in
+// flight); only a scope change the user asks for afterwards replaces it.
+function graphActionStatus(message, error = false) {
+  graphStatus(message, error);
+  graphKeepStatus = true;
+}
+
+function userScopeChange() {
+  graphKeepStatus = false;
+}
+
 function relativeTime(value) {
   const time = Date.parse(value);
   if (!Number.isFinite(time)) return "Never";
@@ -182,7 +193,7 @@ function drawGraph() {
   graphElements.nodes = new Map();
   graphElements.edges = graphData.edges.map((edge) => {
     const line = svg("line", {
-      class: "graph-edge rel-" + edge.rel,
+      class: "graph-edge rel-" + edge.rel + (edge.inferred ? " inferred" : ""),
       "stroke-width": String(Math.min(4, 0.8 + 0.5 * (edge.weight || 1))),
     });
     line.dataset.src = edge.src;
@@ -321,7 +332,8 @@ function markSelection() {
     );
 }
 
-function selectGraphNode(id, { focus = false } = {}) {
+function selectGraphNode(id, { focus = false, keepStatus = false } = {}) {
+  if (!keepStatus) userScopeChange();
   graphSelected = id;
   if (focus || (graphData && !graphData.nodes.some((node) => node.id === id))) {
     graphFocus = id;
@@ -376,6 +388,9 @@ function renderNodeDetail({ node, links }) {
   if (stats && (stats.open || 0)) detailFact(facts, "Open tasks", stats.open);
   detailFact(facts, "Status", node.status && (labels[node.status] || node.status));
   detailFact(facts, "Area", node.area);
+  if (node.verdict) detailFact(facts, "Verdict", node.verdict === "proven" ? "Proven by outcomes" : "Contested: outcomes are mixed");
+  if (node.restored)
+    detailFact(facts, "Restored", `${relativeTime(node.restored.at)} (${node.restored.reason})`);
   if (node.type === "insight") {
     detailFact(facts, "Seen", `${node.reinforced || 1}×`);
     detailFact(facts, "Helped tasks", node.cited_done);
@@ -435,9 +450,21 @@ function renderNodeDetail({ node, links }) {
       dot.style.background = graphColor(row.type);
       button.append(dot, element("span", "", shortLabel(row.label, 60)));
       if (row.status) button.append(element("small", "", labels[row.status] || row.status));
+      if (row.inferred) {
+        button.append(element("small", "inferred-tag", `inferred ${Math.round((row.confidence || 0) * 100)}%`));
+        button.title = `Inferred by dreaming (${row.rule}). Evidence: ${row.evidence || "none recorded"}`;
+      }
       button.addEventListener("click", () => selectGraphNode(row.id));
       const item = element("li");
       item.append(button);
+      if (row.inferred) {
+        const reject = element("button", "link-button reject-link", "Not related");
+        reject.type = "button";
+        reject.title = "Remove this inferred link; dreaming will not infer it again";
+        const [src, dst] = row.direction === "out" ? [node.id, row.id] : [row.id, node.id];
+        reject.addEventListener("click", () => rejectGraphLink(src, row.rel, dst, node.id));
+        item.append(reject);
+      }
       list.append(item);
     }
     section.append(list);
@@ -481,9 +508,91 @@ function renderGraphLists() {
         )
       : [element("li", "focus-hint", "Refinement runs when a run ends, or use Refine now.")]),
   );
+  $("graph-dreams").replaceChildren(
+    ...(graphData.dreams?.length
+      ? [...graphData.dreams].reverse().map((row) =>
+          element(
+            "li",
+            "",
+            `${relativeTime(row.at)} (dream ${row.tick}): ${row.inferred.new} new links, ${row.inferred.dropped} dropped, ` +
+              `${row.archived} archived, ${row.forgotten} forgotten, ${row.inferred_total} inferred in total`,
+          ),
+        )
+      : [element("li", "focus-hint", "Dreams run every few hours during a run and when it ends, or use Dream now.")]),
+  );
+  $("graph-proposals").replaceChildren(
+    ...(graphData.proposals?.length
+      ? graphData.proposals.map((row) => {
+          const item = element("li", "", `${row.members.length} overlapping notes (${row.kinds.join(", ")}) `);
+          const view = element("button", "link-button", "View");
+          view.type = "button";
+          view.addEventListener("click", () => selectGraphNode(row.members[0], { focus: true }));
+          item.append(view);
+          return item;
+        })
+      : [element("li", "focus-hint", "No overlapping knowledge to consolidate.")]),
+  );
+  loadForgotten();
+}
+
+let forgottenLimit = 8,
+  forgottenKey = "";
+async function loadForgotten(force = false) {
+  const key = `${graphRevision}|${forgottenLimit}`;
+  if (!force && key === forgottenKey) return;
+  forgottenKey = key;
+  try {
+    const result = await boardJSON(`/api/graph/history?limit=${forgottenLimit}`);
+    $("graph-forgotten-count").textContent = countText(result.total);
+    $("graph-forgotten-more").hidden = result.total <= result.rows.length;
+    $("graph-forgotten").replaceChildren(
+      ...(result.rows.length
+        ? result.rows.map((row) => {
+            const item = element("li", "forgotten-row");
+            const text = element("span", "", `${graphTypeLabel(row)}: ${shortLabel(row.summary || row.label, 80)}`);
+            text.title = `${row.op}: ${row.reason || "no reason recorded"}`;
+            const why = element("small", "", `${row.op} · ${shortLabel(row.reason || "", 70)}`);
+            const restore = element("button", "link-button", "Restore");
+            restore.type = "button";
+            restore.dataset.id = row.id;
+            restore.addEventListener("click", () => restoreGraphNode(row.id));
+            item.append(text, why, restore);
+            return item;
+          })
+        : [element("li", "focus-hint", "Nothing has been forgotten.")]),
+    );
+  } catch (error) {
+    forgottenKey = "";
+    $("graph-forgotten").replaceChildren(element("li", "form-error", "Could not read the history. " + error.message));
+  }
+}
+
+async function restoreGraphNode(id) {
+  try {
+    const result = await graphPost({ action: "restore", id });
+    graphActionStatus(result.message);
+    graphRevision = null;
+    forgottenKey = "";
+    selectGraphNode(result.node.id, { focus: true, keepStatus: true });
+  } catch (error) {
+    graphStatus(error.message, true);
+  }
+}
+
+async function rejectGraphLink(src, rel, dst, selected) {
+  try {
+    const result = await graphPost({ action: "reject_link", src, rel, dst });
+    graphActionStatus(result.message);
+    graphRevision = null;
+    loadNodeDetail(selected, true);
+    renderGraphView();
+  } catch (error) {
+    graphStatus(error.message, true);
+  }
 }
 
 function resetGraphScope() {
+  userScopeChange();
   graphFocus = null;
   graphFitPending = true;
   $("graph-query").value = "";
@@ -497,7 +606,7 @@ async function graphPost(data) {
 async function rateGraphNode(id, verdict) {
   try {
     const result = await graphPost({ action: "rate", id, verdict });
-    graphStatus(result.message);
+    graphActionStatus(result.message);
     graphRevision = null;
     loadNodeDetail(id, true);
     renderGraphView();
@@ -653,6 +762,7 @@ function renderGraphTypes() {
       chip.addEventListener("click", () => {
         if (graphTypes.has(type) && graphTypes.size > 1) graphTypes.delete(type);
         else graphTypes.add(type);
+        userScopeChange();
         graphFocus = null;
         renderGraphTypes();
         renderGraphView();
@@ -669,19 +779,40 @@ function initGraph() {
   $("graph-query").addEventListener("input", () => {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => {
+      userScopeChange();
       graphFocus = null;
       renderGraphView();
     }, 250);
   });
-  $("graph-archived").addEventListener("change", renderGraphView);
+  $("graph-archived").addEventListener("change", () => {
+    userScopeChange();
+    renderGraphView();
+  });
   $("graph-reset").addEventListener("click", resetGraphScope);
   $("graph-zoom-in").addEventListener("click", () => zoomGraph(1.25));
   $("graph-zoom-out").addEventListener("click", () => zoomGraph(0.8));
   $("graph-fit").addEventListener("click", fitGraph);
+  $("graph-forgotten-more").addEventListener("click", () => {
+    forgottenLimit = Math.min(100, forgottenLimit + 20);
+    loadForgotten(true);
+  });
+  $("graph-dream").addEventListener("click", async () => {
+    $("graph-dream").disabled = true;
+    try {
+      graphActionStatus((await graphPost({ action: "dream" })).message);
+      graphRevision = null;
+      forgottenKey = "";
+      renderGraphView();
+    } catch (error) {
+      graphStatus(error.message, true);
+    } finally {
+      $("graph-dream").disabled = false;
+    }
+  });
   $("graph-refine").addEventListener("click", async () => {
     $("graph-refine").disabled = true;
     try {
-      graphStatus((await graphPost({ action: "refine" })).message);
+      graphActionStatus((await graphPost({ action: "refine" })).message);
       graphRevision = null;
       renderGraphView();
     } catch (error) {
@@ -727,9 +858,9 @@ function initGraph() {
       graphNoteRetry = null;
       $("graph-note-text").value = $("graph-note-about").value = "";
       $("graph-note-dialog").close();
-      graphStatus(result.message);
+      graphActionStatus(result.message);
       graphRevision = null;
-      selectGraphNode(result.node.id);
+      selectGraphNode(result.node.id, { keepStatus: true });
     } catch (error) {
       $("graph-note-error").hidden = false;
       $("graph-note-error").textContent = error.message;
