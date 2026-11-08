@@ -32,6 +32,28 @@ churn, intake metadata preservation, authoritative board outcomes, and finalizat
 launching a real model or editing a real app.
 It does not establish that every model will find useful changes for a multi-hour run.
 
+### Knowledge graph suites
+
+| Suite | What it proves |
+| --- | --- |
+| `tests/test_graph_queries.py` | Every query (`context`, `search`, `node`, `path`, `hotspots`, `brief`, board views, CLI) against a fixture with known answers, including path spellings, unsafe input, limits, aliases, and ordering |
+| `tests/test_graph_lifecycle.py` | Ledger edits update and delete graph links, vanished tasks are removed (unreadable ledgers never cause mass deletion), pruned outcomes are counted exactly once, refinement runs on schedule and is idempotent, damaged stores recover from the refined backup, concurrent processes lose no writes and readers never see a torn file |
+| `tests/test_graph_lifecycle.py` soak | A compressed 48-hour run (288 ten-minute cycles over six archived runs): tasks move through every status, get unblocked, change files and areas, cite and drop knowledge, leave the ledger, and files are deleted. After **every** cycle it checks structural invariants and that the graph matches the ledger exactly, runs every query, and at the end checks every file and area count against the ledgers. Set `IMPROVE_GRAPH_SOAK_CYCLES` to run longer |
+| `tests/test_graph_lifecycle.py` scale | 6,000 archived tasks, 3,000 files, and 450 notes: size caps, conservation of outcomes across pruning, and latency ceilings for every query |
+| `tests/test_graph_server.py` | Board endpoints over a 3,000-task graph: bounds, payload sizes, parameter abuse, authentication, validation of every action, concurrent retries applied once, concurrent notes all kept, cache freshness, and reads during live daemon writes |
+
+Latency ceilings are deliberately generous; they catch quadratic regressions rather than
+measure machine speed. A large-graph browser check builds its own repository:
+
+```sh
+uv run --with playwright python tests/browser_graph_scale.py
+```
+
+It covers first paint and frame time with 4,500 tasks and 350 notes, type filters, search,
+deep links to busy, merged, and removed nodes, zoom/wheel/pan/node drag, keyboard selection,
+pinning and adding knowledge while a background daemon syncs and writes, export, and phone
+overflow.
+
 ## Browser checks
 
 Optional browser checks use Playwright with an installed Chrome executable (the macOS
