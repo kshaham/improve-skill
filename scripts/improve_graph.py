@@ -22,8 +22,9 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 
-from improve_runtime import StateError, atomic_json, read_json, stamp
+from improve_runtime import StateError, epoch, read_json, stamp
 
 VERSION = 1
 TYPES = ("run", "task", "area", "file", "gate", "blocker", "insight")
@@ -40,6 +41,10 @@ MAX_FILES = 1500
 MAX_INSIGHTS = 400
 MAX_CO_CHANGE = 600
 MAX_REFINE_LOG = 30
+MAX_BLOCKERS = 300
+MAX_ALIASES = 2000
+# Ledger-derived links of a task; ingest replaces them so the graph follows ledger edits.
+TASK_RELATIONS = ("in_run", "in_area", "touches", "verified_by", "blocked_by")
 MERGE_SIMILARITY = 0.75
 DECAY = 0.9
 FADE_SCORE = 0.2
@@ -63,18 +68,50 @@ def empty_graph():
             "aliases": {}, "refine": {"history": []}}
 
 
+def write_graph(path, value):
+    """Atomic, durable write. Compact JSON keeps the C encoder: an indented dump of a large
+    graph is ten times slower and would hold the graph lock for the whole write."""
+    text = json.dumps(value, separators=(",", ":"), allow_nan=False)
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write(text)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def backup_path(path):
+    return path.with_name("graph.backup.json")
+
+
+def parse(path):
+    value = read_json(path)
+    if not isinstance(value.get("nodes"), dict) or not isinstance(value.get("edges"), dict):
+        raise StateError(f"{path.name} lacks nodes/edges objects")
+    return value
+
+
 def load(path, repair=True):
-    """Read the graph. A damaged file never blocks work: writers set it aside, readers ignore it."""
+    """Read the graph. A damaged file never blocks work: writers set it aside and fall back
+    to the last refined backup (ledgers re-fill anything newer); readers ignore it."""
     if not path.exists():
         return empty_graph()
     try:
-        value = read_json(path)
-        if not isinstance(value.get("nodes"), dict) or not isinstance(value.get("edges"), dict):
-            raise StateError("graph.json lacks nodes/edges objects")
+        value = parse(path)
     except (StateError, OSError, ValueError, RecursionError):
-        if repair:
-            path.replace(path.with_suffix(".damaged.json"))
-        return empty_graph()
+        if not repair:
+            return empty_graph()
+        path.replace(path.with_suffix(".damaged.json"))
+        try:
+            value = parse(backup_path(path))
+            value.setdefault("refine", {})["restored_from_backup_at"] = stamp()
+        except (StateError, OSError, ValueError, RecursionError, AttributeError):
+            return empty_graph()
     graph = {**empty_graph(), **value}
     for key, kind in (("runs", list), ("aliases", dict), ("refine", dict)):
         if not isinstance(graph.get(key), kind):
@@ -119,11 +156,15 @@ def locked(repo):
         try:
             graph = load(graph_path(repo))
             before = json.dumps(graph, sort_keys=True)
+            refined_at = graph["refine"].get("last_at")
             yield graph
             if json.dumps(graph, sort_keys=True) != before:
                 graph["revision"] = int(graph.get("revision", 0)) + 1
                 graph["updated_at"] = stamp()
-                atomic_json(graph_path(repo), graph)
+                write_graph(graph_path(repo), graph)
+                if graph["refine"].get("last_at") != refined_at:
+                    # A refined graph is a consistent checkpoint to recover from.
+                    write_graph(backup_path(graph_path(repo)), graph)
         finally:
             fcntl.flock(stream, fcntl.LOCK_UN)
 
@@ -239,7 +280,7 @@ def link(graph, src, rel, dst, seq=None, **fields):
         return None
     if rel == "co_changed" and dst < src:
         src, dst = dst, src
-    key = f"{src}|{rel}|{dst}"
+    key = edge_key(src, rel, dst)
     edge = graph["edges"].setdefault(key, {"src": src, "rel": rel, "dst": dst, "weight": 1, "created_at": stamp()})
     for name, value in fields.items():
         if value is not None:
@@ -249,10 +290,25 @@ def link(graph, src, rel, dst, seq=None, **fields):
     return edge
 
 
+def remove_nodes(graph, node_ids, fold=None):
+    """Delete nodes and their links in one pass over the edges (pruning thousands stays linear)."""
+    doomed = set(node_ids)
+    if not doomed:
+        return
+    for key in [key for key, edge in graph["edges"].items() if edge["src"] in doomed or edge["dst"] in doomed]:
+        edge = graph["edges"].pop(key)
+        if fold:
+            fold(edge)
+    for node_id in doomed:
+        graph["nodes"].pop(node_id, None)
+
+
 def remove_node(graph, node_id):
-    graph["nodes"].pop(node_id, None)
-    for key in [key for key, edge in graph["edges"].items() if node_id in (edge["src"], edge["dst"])]:
-        del graph["edges"][key]
+    remove_nodes(graph, [node_id])
+
+
+def edge_key(src, rel, dst):
+    return f"{src}|{rel}|{dst}"
 
 
 def edges_of(graph, node_id):
@@ -301,10 +357,23 @@ def ingest_run(graph, state, run_id, control=None, repo=None):
         entry = {"run_id": run_id, "seq": run_seq(graph) + 1, "first_ingested_at": stamp()}
         graph["runs"].append(entry)
     seq = entry["seq"]
+    ledger = state / "backlog.jsonl"
     tasks = merged_tasks(state)
     counts = {status: sum(task.get("status") == status for task in tasks.values()) for status in FINISHED}
     outcome = control.get("outcome") if control else run.get("outcome")
-    entry.update(ingested_at=stamp(), outcome=outcome, tasks=len(tasks), **counts)
+    totals = dict(outcome=outcome, tasks=len(tasks), **counts)
+    if any(entry.get(key) != value for key, value in totals.items()):
+        entry.update(ingested_at=stamp(), **totals)
+    # Pruned tasks were folded into file/area baselines; re-adding them would count them twice.
+    pruned = set(entry.get("pruned", []))
+    prefix = f"task:{run_id}:"
+    previous = {}
+    for key, edge in graph["edges"].items():
+        if edge["src"].startswith(prefix) and edge["rel"] in TASK_RELATIONS:
+            previous.setdefault(edge["src"], set()).add(key)
+        elif edge["dst"].startswith(prefix) and edge["rel"] == "used_in":
+            previous.setdefault(edge["dst"], set()).add(key)
+    wanted = {}
     run_node = "run:" + run_id
     upsert(graph, run_node, "run", run_id, seq, outcome=outcome, engine=control.get("engine"),
            started_at=control.get("started_at") or run.get("started_at"),
@@ -322,7 +391,13 @@ def ingest_run(graph, state, run_id, control=None, repo=None):
                seconds=cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None)
         gate_ids[name] = "gate:" + name
 
+    def keep(node_id, edge):
+        if edge is not None:
+            wanted.setdefault(node_id, set()).add(edge_key(edge["src"], edge["rel"], edge["dst"]))
+
     for task_id, task in list(tasks.items())[-MAX_TASKS:]:
+        if str(task_id) in pruned:
+            continue
         status = task.get("status") if isinstance(task.get("status"), str) else "ready"
         area = task.get("area") if isinstance(task.get("area"), str) and re.fullmatch(r"[a-z][a-z0-9_-]{0,39}", task["area"]) else "general"
         node_id = f"task:{run_id}:{task_id}"
@@ -333,28 +408,41 @@ def ingest_run(graph, state, run_id, control=None, repo=None):
                summary=clean(task.get("claim") or "", MAX_SUMMARY) or None,
                outcome_note=clean(reason or detail or "", MAX_SUMMARY) or None,
                commit=task.get("commit") if isinstance(task.get("commit"), str) else None)
-        link(graph, node_id, "in_run", run_node, seq)
+        wanted.setdefault(node_id, set())
+        keep(node_id, link(graph, node_id, "in_run", run_node, seq))
         upsert(graph, "area:" + area, "area", area, seq)
-        link(graph, node_id, "in_area", "area:" + area, seq)
+        keep(node_id, link(graph, node_id, "in_area", "area:" + area, seq))
         for path in task_files(task, repo):
             upsert(graph, "file:" + path, "file", path, seq)
-            link(graph, node_id, "touches", "file:" + path, seq)
+            keep(node_id, link(graph, node_id, "touches", "file:" + path, seq))
         verification = json.dumps(task.get("verification") or task.get("last_verification") or "")
         for name, gate in gate_ids.items():
             if len(name) > 2 and name in verification:
-                link(graph, node_id, "verified_by", gate, seq)
+                keep(node_id, link(graph, node_id, "verified_by", gate, seq))
         if reason or status == "blocked":
             reason = clean(reason or task.get("note") or "unspecified", 300)
             key = blocker_key(reason) or "unspecified"
             blocker = "blocker:" + short_hash(key)
             upsert(graph, blocker, "blocker", reason, seq, key=key)
-            link(graph, node_id, "blocked_by", blocker, seq)
+            keep(node_id, link(graph, node_id, "blocked_by", blocker, seq))
         refs = task.get("graph_refs")
         for ref in refs[:20] if isinstance(refs, list) else []:
             ref = resolve(graph, str(ref))
             if ref in graph["nodes"] and graph["nodes"][ref]["type"] == "insight":
-                link(graph, ref, "used_in", node_id, seq)
+                keep(node_id, link(graph, ref, "used_in", node_id, seq))
                 graph["nodes"][ref]["last_seq"] = max(int(graph["nodes"][ref].get("last_seq", 0)), seq)
+    # The ledger is the source of truth: drop links a task no longer has (unblocked,
+    # paths changed, citation removed).
+    for node_id, keys in wanted.items():
+        for key in previous.get(node_id, set()) - keys:
+            graph["edges"].pop(key, None)
+    # Drop tasks that left a readable ledger (for example a damaged line set aside). An
+    # unreadable or empty ledger is treated as a read problem, never as mass deletion.
+    if ledger.is_file() and not ledger.is_symlink() and tasks:
+        vanished = [node_id for node_id, node in graph["nodes"].items()
+                    if node["type"] == "task" and node.get("run_id") == run_id and node_id not in wanted
+                    and node.get("task_id") not in tasks and node.get("task_id") not in pruned]
+        remove_nodes(graph, vanished)
     return entry
 
 
@@ -387,8 +475,19 @@ def run_identity(directory):
     return None, {}
 
 
-def sync(repo, include_history=None, refine_after=False):
-    """Ingest archived runs (first use only, unless asked) and the current run, then optionally refine."""
+def refine_due(graph, interval):
+    """True when the last refinement is older than `interval` seconds (or never happened)."""
+    if interval is None or interval <= 0 or not graph["nodes"]:
+        return False
+    try:
+        return epoch(graph["refine"].get("last_at")) + interval <= epoch(stamp())
+    except StateError:
+        return True
+
+
+def sync(repo, include_history=None, refine_after=False, refine_interval=None):
+    """Ingest archived runs (first use only, unless asked) and the current run, then refine when
+    asked or when `refine_interval` seconds have passed since the last refinement."""
     repo = Path(repo)
     state = repo / ".improve"
     with locked(repo) as graph:
@@ -408,7 +507,7 @@ def sync(repo, include_history=None, refine_after=False):
             ingest_run(graph, state, run_id, control, repo)
             ingested.append(run_id)
         import_lessons(graph, repo)
-        report = refine(graph, repo) if refine_after else None
+        report = refine(graph, repo) if refine_after or refine_due(graph, refine_interval) else None
         return {"ingested": ingested, "refine": report, "nodes": len(graph["nodes"]), "edges": len(graph["edges"])}
 
 
@@ -536,15 +635,22 @@ def refine(graph, repo=None):
     # 2. Prune the oldest finished tasks, folding their outcomes into file/area baselines.
     tasks = sorted((node for node in nodes.values() if node["type"] == "task"),
                    key=lambda node: (node.get("status") not in FINISHED, int(node.get("last_seq", 0)), node["id"]))
-    for node in tasks[:max(0, len(tasks) - MAX_TASKS)]:
-        status = node.get("status") if node.get("status") in FINISHED else "open"
-        for edge in edges_of(graph, node["id"]):
-            other = nodes.get(edge["dst"])
-            if other and other["type"] in ("file", "area"):
-                base = other.setdefault("base", {})
-                base[status] = base.get(status, 0) + 1
-        remove_node(graph, node["id"])
-        report["pruned_tasks"] += 1
+    doomed = {node["id"]: node.get("status") if node.get("status") in FINISHED else "open"
+              for node in tasks[:max(0, len(tasks) - MAX_TASKS)]}
+    runs_by_id = {row.get("run_id"): row for row in graph["runs"]}
+
+    def fold(edge):
+        other = nodes.get(edge["dst"])
+        if edge["src"] in doomed and other and other["type"] in ("file", "area") and edge["dst"] not in doomed:
+            base = other.setdefault("base", {})
+            base[doomed[edge["src"]]] = base.get(doomed[edge["src"]], 0) + 1
+
+    for node_id in doomed:
+        entry = runs_by_id.get(nodes[node_id].get("run_id"))
+        if entry is not None and nodes[node_id].get("task_id"):
+            entry.setdefault("pruned", []).append(nodes[node_id]["task_id"])
+    remove_nodes(graph, doomed, fold)
+    report["pruned_tasks"] = len(doomed)
 
     # 3. Recompute derived statistics and co-change edges from the remaining facts.
     touched, in_area, used = {}, {}, {}
@@ -572,6 +678,7 @@ def refine(graph, repo=None):
     report["co_changed"] = min(len(pairs), MAX_CO_CHANGE)
 
     files = tracked_files(repo)
+    directories = {str(parent) for path in files or () for parent in Path(path).parents if str(parent) != "."}
     for node in nodes.values():
         if node["type"] == "file":
             node["stats"] = outcome_stats(touched.get(node["id"], []), graph, node.get("base"))
@@ -582,8 +689,7 @@ def refine(graph, repo=None):
             if areas:
                 area = max(sorted(areas), key=areas.get)
                 node["area"] = area
-            stale = files is not None and node["label"] not in files and not any(
-                path.startswith(node["label"] + "/") for path in files)
+            stale = files is not None and node["label"] not in files and node["label"] not in directories
             node["stale"] = stale or None
             report["stale_files"] += bool(stale)
         elif node["type"] == "area":
@@ -609,16 +715,24 @@ def refine(graph, repo=None):
             report["faded"] += bool(node.get("archived"))
 
     # 5. Bound size: drop the weakest unconnected files and archived insights.
-    for kind, limit, counter in (("file", MAX_FILES, "pruned_files"), ("insight", MAX_INSIGHTS, None)):
+    linked = {end for edge in graph["edges"].values() for end in (edge["src"], edge["dst"])}
+    orphans = [key for key, node in nodes.items() if key not in linked and not node.get("pinned") and (
+        node["type"] == "blocker" or node["type"] == "file" and not node.get("base"))]
+    report["pruned_orphans"] = len(orphans)
+    remove_nodes(graph, orphans)
+    for kind, limit, counter in (("file", MAX_FILES, "pruned_files"), ("insight", MAX_INSIGHTS, None),
+                                 ("blocker", MAX_BLOCKERS, None)):
         group = sorted((node for node in nodes.values() if node["type"] == kind and not node.get("pinned")),
                        key=lambda node: (not node.get("archived"), node["score"], node["id"]))
-        for node in group[:max(0, len(group) - limit)]:
-            remove_node(graph, node["id"])
-            if counter:
-                report[counter] += 1
+        excess = [node["id"] for node in group[:max(0, len(group) - limit)]]
+        remove_nodes(graph, excess)
+        if counter:
+            report[counter] += len(excess)
     for alias, target in list(graph["aliases"].items()):
         if resolve(graph, target) not in nodes:
             del graph["aliases"][alias]
+    for alias in list(graph["aliases"])[:max(0, len(graph["aliases"]) - MAX_ALIASES)]:
+        del graph["aliases"][alias]
 
     report.update(nodes=len(nodes), edges=len(graph["edges"]))
     history = graph["refine"].setdefault("history", [])
@@ -687,14 +801,18 @@ def context(graph, files=(), area=None, text=None, limit=8, repo=None):
     nodes, adj = graph["nodes"], adjacency(graph)
     paths = [path for path in (safe_path(value, repo) for value in files) if path]
     seeds = []
+    known_files = [(key, node["label"]) for key, node in nodes.items() if node["type"] == "file"]
     for path in paths:
         if "file:" + path in nodes:
             seeds.append("file:" + path)
-        else:  # A directory or a new file: use known files beneath or beside it.
-            prefix = path.rstrip("/") + "/"
-            parent = path.rsplit("/", 1)[0] + "/" if "/" in path else None
-            seeds.extend(key for key, node in nodes.items() if node["type"] == "file"
-                         and (node["label"].startswith(prefix) or parent and node["label"].startswith(parent)))
+            continue
+        # A directory: its known files. A new file: known files beside it.
+        prefix = path.rstrip("/") + "/"
+        below = [key for key, label in known_files if label.startswith(prefix)]
+        if not below and "/" in path:
+            parent = path.rsplit("/", 1)[0] + "/"
+            below = [key for key, label in known_files if label.startswith(parent) and "/" not in label[len(parent):]]
+        seeds.extend(sorted(below))
     seeds = list(dict.fromkeys(seeds))[:40]
     if area and "area:" + area in nodes:
         seeds.append("area:" + area)
@@ -722,7 +840,7 @@ def context(graph, files=(), area=None, text=None, limit=8, repo=None):
     if text:
         for hit in search(graph, text, limit, types=("insight",)):
             weigh(insights, nodes[hit["id"]], hit["match"])
-    if not seeds and not text:
+    if not files and not area and not text:
         raise GraphError("context needs --files, --area, or --text")
 
     def top(bucket, count=limit):
@@ -773,11 +891,13 @@ def node_detail(graph, node_id, limit=200):
     if node is None:
         raise GraphError(f"no graph node {node_id!r}")
     links = []
-    for edge, other in neighbors(graph, node_id)[:limit]:
+    for edge, other in neighbors(graph, node_id):
         links.append({"rel": edge["rel"], "direction": "out" if edge["src"] == node_id else "in",
                       "weight": edge.get("weight", 1), **node_view(other, ("id", "type", "label", "status", "score", "archived", "kind"))})
-    links.sort(key=lambda row: (row["rel"], -float(row.get("score", 0)), row["id"]))
-    return {"node": node_view(node), "links": links}
+    # Rank before limiting so a busy file shows its strongest links, not arbitrary ones.
+    links.sort(key=lambda row: (-float(row.get("score", 0)), row["rel"], row["id"]))
+    shown = sorted(links[:limit], key=lambda row: (row["rel"], -float(row.get("score", 0)), row["id"]))
+    return {"node": node_view(node), "links": shown, "total_links": len(links)}
 
 
 def brief(graph, script, repo_arg, max_chars=1800):
@@ -791,11 +911,11 @@ def brief(graph, script, repo_arg, max_chars=1800):
             and node.get("source") != "learning"]
     live.sort(key=lambda node: (not node.get("pinned"), node.get("source") != "user", -float(node.get("score", 0)), node["id"]))
     if live:
-        lines = []
+        lines, adj = [], adjacency(graph)
         for node in live[:8]:
             flags = [flag for flag, on in (("pinned", node.get("pinned")), ("from the user", node.get("source") == "user"),
                                            (f"x{node.get('reinforced')}", int(node.get("reinforced", 1)) > 1)) if on]
-            about = [other["label"] for _, other in neighbors(graph, node["id"]) if other["type"] in ("file", "area", "gate")][:3]
+            about = [other["label"] for _, other in neighbors(graph, node["id"], adj) if other["type"] in ("file", "area", "gate")][:3]
             lines.append(f"- [{node['id']}] {node.get('kind', 'fact')}: {node.get('summary', node['label'])}"
                          + (f" (about {', '.join(about)})" if about else "") + (f" [{', '.join(flags)}]" if flags else ""))
         parts.append("Top knowledge (cite ids you rely on in the task's graph_refs):\n" + "\n".join(lines))
@@ -838,8 +958,7 @@ def board_view(graph, limit=250, focus=None, depth=1, query=None, types=None, in
             adj = adjacency(graph)
             near = {other for hit in hits for _, other in adj.get(hit, [])}
             pool = [node for node in pool if node["id"] in hits or node["id"] in near]
-        pool.sort(key=lambda node: (not node.get("pinned"), -float(node.get("score", 0)), node["id"]))
-        chosen = [node["id"] for node in pool[:limit]]
+        chosen = balanced(pool, limit)
     selected = set(chosen)
     edges = [{"src": edge["src"], "rel": edge["rel"], "dst": edge["dst"], "weight": edge.get("weight", 1)}
              for edge in graph["edges"].values() if edge["src"] in selected and edge["dst"] in selected]
@@ -850,6 +969,28 @@ def board_view(graph, limit=250, focus=None, depth=1, query=None, types=None, in
             "total_nodes": len(nodes), "total_edges": len(graph["edges"]), "counts": counts,
             "runs": graph["runs"][-12:], "refine": graph["refine"].get("history", [])[-8:],
             "hotspots": hotspots(graph, 8), "focus": focus, "truncated": len(chosen) < len(nodes)}
+
+
+def balanced(pool, limit):
+    """Pick `limit` nodes: every pinned node, then a fair share of each type, then the strongest.
+    Without shares, hundreds of high-scoring notes would push files, areas, and tasks out."""
+    rank = lambda node: (not node.get("pinned"), -float(node.get("score", 0)), node["id"])
+    ranked = sorted(pool, key=rank)
+    if len(ranked) <= limit:
+        return [node["id"] for node in ranked]
+    by_type = {}
+    for node in ranked:
+        by_type.setdefault(node["type"], []).append(node)
+    share = max(1, limit // (2 * len(by_type)))
+    first = [node for node in ranked if node.get("pinned")]
+    for nodes in by_type.values():
+        first.extend(nodes[:share])
+    picked, ordered = set(), []
+    for node in first + ranked:
+        if node["id"] not in picked and len(ordered) < limit:
+            picked.add(node["id"])
+            ordered.append(node)
+    return [node["id"] for node in sorted(ordered, key=rank)]
 
 
 def projected_edges(graph, selected, fanout=8):
