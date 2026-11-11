@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -11,6 +12,8 @@ import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tests"))
+from support import budget  # noqa: E402
 sys.path.insert(0, str(ROOT / "scripts"))
 spec = importlib.util.spec_from_file_location("runtime", ROOT / "scripts/improve_runtime.py")
 runtime = importlib.util.module_from_spec(spec)
@@ -149,7 +152,7 @@ class EvidenceTests(unittest.TestCase):
             self.assertNotEqual(runtime.evidence_rows(path), before)
 
 
-FAKE_AGENT = r'''import json, os, pathlib, subprocess, sys, time
+FAKE_AGENT = r'''import json, os, pathlib, signal, subprocess, sys, time
 state = pathlib.Path('.improve')
 prompt = sys.argv[-1]
 with (state / 'launches.jsonl').open('a') as stream:
@@ -159,6 +162,29 @@ with (state / 'launches.jsonl').open('a') as stream:
                             'config_home': os.environ.get('CODEX_HOME'),
                             'stdin': sys.stdin.read()}) + '\n')
 mode = os.environ.get('FAKE_MODE', 'empty')
+script = json.loads(os.environ.get('FAKE_SCRIPT', 'null'))
+if script:
+    # One mode per launch, in order; the last entry repeats.
+    launched = sum(1 for _ in (state / 'launches.jsonl').open())
+    mode = script[min(launched - 1, len(script) - 1)]
+scripts_dir = os.environ.get('IMPROVE_SCRIPTS', '')
+if mode == 'crash_parent':
+    os.kill(os.getppid(), signal.SIGKILL)
+    time.sleep(8)  # Stay alive as the stale child a relaunched daemon must stop.
+    sys.exit(0)
+if mode == 'exit2':
+    print('error: not logged in', file=sys.stderr)
+    sys.exit(2)
+if mode == 'limit0':
+    print("You've hit your usage limit. Try again later.")
+    sys.exit(0)
+if mode == 'pause_break':
+    (state / 'pause.json').write_text('{malformed')
+if mode == 'big_output':
+    print('x' * 200000)
+if mode == 'bad_utf8':
+    with (state / 'backlog.jsonl').open('ab') as stream:
+        stream.write(b'\xff\xfe{"id":"zz"}\n')
 if mode == 'orphan':
     subprocess.Popen([sys.executable, '-c', 'import signal,time,pathlib; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(3); pathlib.Path(".improve/orphan-wrote").touch()'])
 if mode in ('timeout', 'orphan') or (mode == 'overrun' and 'FINALIZATION ONLY' not in prompt):
@@ -207,6 +233,10 @@ if 'FINALIZATION ONLY' in prompt:
         sys.exit(1)
     if mode == 'final_no_report':
         sys.exit(0)
+    if mode == 'limit_final' and not (state / 'limit-final-done').exists():
+        (state / 'limit-final-done').touch()
+        print('usage limit reached')
+        sys.exit(1)
     if mode == 'final_commit':
         subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'unauthorized final edit'], check=True)
     run['outcome'] = control.get('outcome') or 'completed'
@@ -234,6 +264,40 @@ else:
                                      'accepted': 0, 'at': str(time.time()), 'generation': run['cycle']}) + '\n')
     if mode == 'early':
         run['outcome'] = 'completed' if run['cycle'] == 1 else 'stopped by user'
+    elif mode == 'stop':
+        run['outcome'] = 'stopped by user'
+    elif mode == 'bad_outcome':
+        run['outcome'] = 'done'
+    elif mode == 'bad_report_hour':
+        run['last_report_hour'] = 3.0
+    elif mode == 'bad_cycle':
+        run['cycle'] = str(run['cycle'])
+    elif mode == 'artifacts':
+        pathlib.Path('build').mkdir(exist_ok=True)
+        pathlib.Path('build/out.o').write_text('object code')
+        pathlib.Path('__pycache__').mkdir(exist_ok=True)
+        pathlib.Path('__pycache__/m.cpython-313.pyc').write_text('bytecode')
+    elif mode == 'newfile':
+        pathlib.Path('notes.txt').write_text('unverified work')
+    elif mode == 'tracked_dirty':
+        with open('README.txt', 'a') as stream:
+            stream.write('edited\n')
+    elif mode == 'commit':
+        with open('README.txt', 'a') as stream:
+            stream.write('verified change ' + str(run['cycle']) + '\n')
+        subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false',
+                        'commit', '-qam', 'fix: verified change'], check=True)
+    elif mode == 'uses_helpers':
+        results = {}
+        for name, args in (('pending', ['improve_control.py', '--repo', '.', 'pending']),
+                           ('note', ['improve_graph.py', '--repo', '.', 'note', '--kind', 'pitfall', '--text',
+                                     'The fixture gate needs a warm cache first.', '--about', 'area:ui']),
+                           ('context', ['improve_graph.py', '--repo', '.', 'context', '--area', 'ui']),
+                           ('lesson', ['improve_learning.py', '--repo', '.', 'lesson', '--area', 'ui', '--text',
+                                       'Warm the cache before the fixture gate.'])):
+            done = subprocess.run([sys.executable, os.path.join(scripts_dir, args[0]), *args[1:]], capture_output=True, text=True)
+            results[name] = {'rc': done.returncode, 'out': done.stdout[-2000:], 'err': done.stderr[-500:]}
+        (state / 'helpers.json').write_text(json.dumps(results))
     elif mode == 'reset_deadline':
         run['deadline'] = '2099-01-01T00:00:00Z'
         run['outcome'] = 'stopped by user'
@@ -262,7 +326,10 @@ class DaemonTests(unittest.TestCase):
         self.repo = self.root / "repo with spaces"
         self.repo.mkdir()
         self.git("init", "-q")
-        self.git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "baseline")
+        (self.repo / "README.txt").write_text("fixture\n")
+        self.git("add", "README.txt")
+        self.git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false",
+                 "commit", "-qm", "baseline")
         self.bin = self.root / "bin"
         self.bin.mkdir()
         for engine in ('claude', 'codex'):
@@ -275,7 +342,10 @@ class DaemonTests(unittest.TestCase):
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("IMPROVE_") and k not in markers}
         self.env.update(PATH=str(self.bin) + os.pathsep + self.env["PATH"],
                         IMPROVE_ENGINE="claude", IMPROVE_CYCLE_GAP="0", PYTHONDONTWRITEBYTECODE="1",
-                        IMPROVE_LEARNING_HOME=str(self.root / "learning-home"), IMPROVE_RECOVERY_COOLDOWN="0")
+                        IMPROVE_LEARNING_HOME=str(self.root / "learning-home"), IMPROVE_RECOVERY_COOLDOWN="0",
+                        IMPROVE_IDLE_AFTER="1000", IMPROVE_SCRIPTS=str(ROOT / "scripts"),
+                        GIT_CONFIG_GLOBAL=str(self.root / "gitconfig"), GIT_CONFIG_NOSYSTEM="1")
+        (self.root / "gitconfig").write_text("[user]\n\tname = Test\n\temail = test@example.invalid\n[commit]\n\tgpgsign = false\n")
         # Legacy tests pin the strict halting contract; ResilienceTests opt into recovery.
         self.env.update(IMPROVE_MAX_RECOVERIES="0", IMPROVE_MAX_WORKER_HALTS="0", IMPROVE_QUARANTINE="0")
 
@@ -334,12 +404,14 @@ class DaemonTests(unittest.TestCase):
         self.assertFalse((self.state / "board.json").exists())
         self.assertIn("disabled by --no-board", self.launches()[0]["prompt"])
 
-    def invoke(self, mode="early", *extra, intake=True, duration="60s"):
+    def invoke(self, mode="early", *extra, intake=True, duration="60s", env=None, script=None, timeout=25):
         args = ["--for", duration, *extra]
         if intake:
             args += ["--intake", str(self.intake)]
-        return subprocess.run(self.command(*args), env={**self.env, "FAKE_MODE": mode},
-                              capture_output=True, text=True, timeout=15)
+        environment = {**self.env, "FAKE_MODE": mode, **(env or {})}
+        if script is not None:
+            environment["FAKE_SCRIPT"] = json.dumps(script)
+        return subprocess.run(self.command(*args), env=environment, capture_output=True, text=True, timeout=timeout)
 
     def load(self, name="run.json"):
         return json.loads((self.state / name).read_text())
@@ -944,7 +1016,7 @@ class DaemonTests(unittest.TestCase):
         run = self.load()
         # Bound cleanup against the saved deadline, excluding Python/git startup.
         # Allow process termination and report I/O on a busy test machine.
-        self.assertLess(runtime.epoch(run["ended_at"]) - runtime.epoch(run["deadline"]), 7)
+        self.assertLess(runtime.epoch(run["ended_at"]) - runtime.epoch(run["deadline"]), budget(7))
         self.assertEqual(run["outcome"], "completed")
         self.assertEqual(len(self.launches()), 2)
 
@@ -1055,10 +1127,6 @@ class DaemonTests(unittest.TestCase):
                 process.communicate()
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ResilienceTests(DaemonTests):
     """Default resilient behavior: block, work around, and keep the run going."""
 
@@ -1112,7 +1180,7 @@ class ResilienceTests(DaemonTests):
 
     def test_failure_breaker_recovers_before_halting(self):
         result = subprocess.run(self.command("--for", "60s", "--intake", str(self.intake)),
-                                env={**self.env, "FAKE_MODE": "no_checkpoint", "IMPROVE_MAX_RECOVERIES": "1"},
+                                env={**self.env, "FAKE_MODE": "no_checkpoint", "IMPROVE_MAX_RECOVERIES": "1", "IMPROVE_PARK": "0"},
                                 capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 1)
         self.assertEqual(len(self.launches()), 6)
@@ -1150,13 +1218,14 @@ class ResilienceTests(DaemonTests):
         saved = self.graph()
         self.assertEqual(len(saved["runs"]), 1)
         self.assertTrue(saved["refine"]["history"], "a finished run is refined")
-        self.assertEqual(saved["tick"], 2, "a never-dreamed graph dreams after the first cycle, and again at run end")
-        self.assertEqual(len(saved["dream"]["history"]), 2)
+        self.assertEqual(saved["tick"], 1, "scheduled dreams wait for their interval; the run-end dream always runs")
+        self.assertEqual(len(saved["dream"]["history"]), 1)
         self.assertTrue((self.state / "graph.backup.db").exists(), "a dream leaves a checkpoint")
         self.assertTrue(any(node["type"] == "task" for node in saved["nodes"].values()))
         helper = [sys.executable, str(ROOT / "scripts/improve_graph.py"), "--repo", str(self.repo), "note",
                   "--kind", "pitfall", "--text", "The fixture gate needs a warm cache first.", "--about", "area:ui"]
-        note = json.loads(subprocess.run(helper, env=self.env, check=True, capture_output=True, text=True).stdout)
+        import improve_toon as toon
+        note = toon.loads(subprocess.run(helper, env=self.env, check=True, capture_output=True, text=True).stdout)
         (self.state / "once-done").unlink()
         result = self.invoke("once_halt", "--new-run")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1168,7 +1237,7 @@ class ResilienceTests(DaemonTests):
         self.assertIn("warm cache", prompt)
         saved = self.graph()
         self.assertEqual(len(saved["runs"]), 2)
-        self.assertEqual(saved["tick"], 3, "the last dream is recent, so only the run-end dream ran")
+        self.assertEqual(saved["tick"], 2, "the last dream is recent, so only the run-end dream ran")
         archives = list((self.state / "history").iterdir())
         for name in ("graph.db", "graph.backup.db", "graph.lock"):
             self.assertFalse(any((path / name).exists() for path in archives), f"{name} must stay with the repository")
@@ -1193,3 +1262,242 @@ class ResilienceTests(DaemonTests):
 for _name in [name for name in vars(DaemonTests) if name.startswith("test_")]:
     if _name not in vars(ResilienceTests):
         setattr(ResilienceTests, _name, None)
+
+
+class LongRunResilienceTests(ResilienceTests):
+    """What a 48-72 hour unattended run meets: bad agent writes, limits with exit 0, build
+    artifacts, CLI crashes, supervisor errors, daemon crashes, signals, and dry stretches."""
+
+    def control(self):
+        return self.load("supervisor.json")
+
+    def journal(self):
+        return (self.state / "journal.md").read_text() if (self.state / "journal.md").exists() else ""
+
+    def test_malformed_agent_fields_are_repaired_and_the_run_continues(self):
+        result = self.invoke(script=["bad_outcome", "bad_report_hour", "bad_cycle", "stop"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.launches()), 4)
+        self.assertEqual(self.control()["outcome"], "stopped by user")
+        journal = self.journal()
+        self.assertIn("outcome 'done' is not a recognized terminal outcome", journal)
+        self.assertIn("last_report_hour 3.0", journal)
+        run = self.load()
+        self.assertIs(type(run["cycle"]), int)
+        self.assertEqual(run["cycle"], 4)
+        clock = subprocess.run([str(ROOT / "scripts/improve-clock.sh"), "--json", str(self.repo)],
+                               capture_output=True, text=True, timeout=5)
+        self.assertEqual(clock.returncode, 0, clock.stderr)
+
+    def test_undecodable_ledger_bytes_are_repaired_not_fatal(self):
+        result = self.invoke(script=["bad_utf8", "stop"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.control()["outcome"], "stopped by user")
+        self.assertIn("not UTF-8", self.journal())
+        (self.state / "backlog.jsonl").read_text()  # Decodes cleanly after repair.
+
+    def test_usage_limit_with_exit_zero_waits_instead_of_failing(self):
+        result = self.invoke(script=["limit0", "stop"], env={"IMPROVE_LIMIT_WAIT": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        control = self.control()
+        self.assertEqual(control["outcome"], "stopped by user")
+        self.assertEqual(control.get("consecutive_failures", 0), 0)
+        self.assertGreaterEqual(control["limit_waited_seconds"], 1)
+        self.assertFalse((self.state / "backlog.jsonl").exists(), "nothing was blocked for a usage limit")
+        self.assertIn("Account usage limit", self.journal())
+        self.assertTrue(control["cycle_history"][0]["limited"])
+
+    def test_build_artifacts_are_cleaned_without_blocking_or_failing(self):
+        result = self.invoke(script=["artifacts", "artifacts", "artifacts", "artifacts", "stop"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        control = self.control()
+        self.assertEqual(control["outcome"], "stopped by user")
+        self.assertEqual(control["quarantines"], 4)
+        self.assertEqual(control.get("recoveries", 0), 0)
+        self.assertFalse((self.state / "backlog.jsonl").exists(), "artifacts never block a task")
+        self.assertIn("build artifacts", self.launches()[1]["prompt"])
+        self.assertFalse((self.repo / "build").exists())
+        self.assertEqual(self.git("status", "--porcelain", "--", ".", ":(exclude).improve").stdout, b"")
+
+    def test_new_untracked_source_files_still_count_as_unverified_work(self):
+        (self.state).mkdir(exist_ok=True)
+        result = self.invoke(script=["newfile", "stop"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.control()["quarantines"], 1)
+        self.assertIn("uncommitted changes", self.launches()[1]["prompt"])
+
+    def test_cli_crashes_do_not_block_the_task_in_flight(self):
+        self.state.mkdir(exist_ok=True)
+        (self.state / "backlog.jsonl").write_text(json.dumps({"id": "t-9", "title": "Real task", "area": "ui",
+                                                              "status": "in_progress", "note": "evidence"}) + "\n")
+        result = self.invoke(script=["exit2", "exit2", "exit2", "stop"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.launches()), 4)
+        task = self.tasks()["t-9"]
+        self.assertEqual(task["status"], "in_progress", "a CLI exit says nothing about the task")
+        self.assertEqual(task["note"], "evidence")
+        self.assertIn("Supervisor recovery 1", self.journal())
+        self.assertIn("exited 2 without a checkpoint", self.launches()[1]["prompt"])
+
+    def test_exhausted_breakers_park_the_run_instead_of_halting(self):
+        result = self.invoke("no_checkpoint", duration="6s",
+                             env={"IMPROVE_MAX_FAILURES": "2", "IMPROVE_MAX_RECOVERIES": "1", "IMPROVE_PARK_WAIT": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        control = self.control()
+        self.assertEqual(control["outcome"], "completed", "the run reached its deadline instead of halting")
+        self.assertGreaterEqual(control["parks"], 1)
+        self.assertIn("Parked (1)", self.journal())
+        self.assertGreater(len(self.launches()), 4)
+
+    def test_supervisor_errors_are_contained_and_the_run_reaches_its_deadline(self):
+        result = self.invoke(script=["pause_break", "empty"], duration="5s",
+                             env={"IMPROVE_MAX_CRASHES": "2", "IMPROVE_PARK_WAIT": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        control = self.control()
+        self.assertEqual(control["outcome"], "completed")
+        self.assertIn("Supervisor error during a cycle", self.journal())
+        self.assertIn("Parked", self.journal())
+        self.assertEqual((self.state / "pause.json").read_text(), "{malformed", "diagnostic state is preserved")
+
+    def test_supervise_relaunches_after_a_daemon_crash_and_stops_the_stale_child(self):
+        result = self.invoke("early", "--supervise", script=["crash_parent", "stop"], env={"IMPROVE_RELAUNCH_WAIT": "0"})
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        control = self.control()
+        self.assertEqual(control["outcome"], "stopped by user")
+        self.assertIn("relaunching", result.stdout)
+        self.assertIn("Stopped a stale agent process", self.journal())
+        self.assertEqual(len(self.launches()), 2)  # the crashed cycle, then the resumed one
+
+    def test_low_disk_space_parks_instead_of_launching(self):
+        result = self.invoke("stop", duration="4s", env={"IMPROVE_MIN_FREE_MB": "99999999", "IMPROVE_PARK_WAIT": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prompts = [row["prompt"] for row in self.launches()]
+        self.assertTrue(all("FINALIZATION ONLY" in prompt for prompt in prompts), "no work cycle was launched onto a full disk")
+        self.assertIn("MB free", self.journal())
+        self.assertEqual(self.control()["outcome"], "completed")
+
+    def test_status_reports_a_crashed_daemon(self):
+        self.seed_control(run_id="crashed-run", phase="working", child_pid=None)
+        status = subprocess.run(self.command("--status", "--json"), env=self.env, capture_output=True, text=True, timeout=5)
+        info = json.loads(status.stdout)
+        self.assertFalse(info["running"])
+        self.assertTrue(info["crashed"])
+        self.assertEqual(info["quarantine"], [])
+        text = subprocess.run(self.command("--status"), env=self.env, capture_output=True, text=True, timeout=5)
+        self.assertIn("crashed", text.stdout)
+
+    def test_stale_child_detection_and_termination(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import improve_resilience as resilience
+        self.state.mkdir(exist_ok=True)
+        child = subprocess.Popen([str(self.bin / "claude"), "-p", "stale"], cwd=self.repo, env={**self.env, "FAKE_MODE": "timeout"},
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            time.sleep(0.5)
+            self.assertEqual(resilience.stale_child({"child_pid": child.pid, "engine": "claude"}), child.pid)
+            self.assertIsNone(resilience.stale_child({"child_pid": child.pid, "engine": "codex"}), "a reused pid runs something else")
+            self.assertIsNone(resilience.stale_child({"child_pid": os.getpid(), "engine": "claude"}))
+            self.assertTrue(resilience.terminate_group(child.pid, grace=1))
+            self.assertIsNotNone(child.poll() if child.poll() is not None else child.wait(timeout=3))
+        finally:
+            if child.poll() is None:
+                child.kill()
+        self.assertIsNone(resilience.stale_child({"child_pid": child.pid, "engine": "claude"}))
+
+    def test_sigterm_ends_the_run_as_a_user_stop(self):
+        process = subprocess.Popen(self.command("--for", "60s", "--intake", str(self.intake)),
+                                   env={**self.env, "FAKE_MODE": "controlled"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            until = time.monotonic() + 10
+            while time.monotonic() < until and not (self.state / "launches.jsonl").exists():
+                time.sleep(0.05)
+            process.send_signal(signal.SIGTERM)
+            out, err = process.communicate(timeout=15)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+        self.assertEqual(process.returncode, 0, err)
+        self.assertEqual(self.control()["outcome"], "stopped by user")
+
+    def test_finalization_retries_after_a_usage_limit(self):
+        result = self.invoke(script=["completed_at_deadline", "limit_final", "empty"], duration="2s",
+                             env={"IMPROVE_LIMIT_WAIT": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        control = self.control()
+        self.assertEqual(control["outcome"], "completed")
+        self.assertFalse(control["summary_pending"])
+        self.assertEqual(len(self.launches()), 3)
+        self.assertIn("limit during the final report", self.journal())
+
+    def test_prompt_states_the_cycle_budget_and_history_is_recorded(self):
+        result = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prompt = self.launches()[0]["prompt"]
+        self.assertIn("Cycle budget", prompt)
+        self.assertIn("3600s", prompt)
+        self.assertIn("never a reason to block a task", prompt)
+        control = self.control()
+        self.assertEqual(control["cycle_timeout_seconds"], 3600)
+        history = control["cycle_history"]
+        self.assertEqual(len(history), 2, "a premature completion and the cycle that followed it")
+        self.assertEqual(set(history[0]), {"started_at", "seconds", "rc", "advanced", "outcome", "limited"})
+        self.assertTrue(history[0]["advanced"])
+        self.assertEqual(history[1]["outcome"], "stopped by user")
+
+    def test_discovery_only_cycles_back_off_and_a_commit_resets_the_backoff(self):
+        result = self.invoke(script=["empty", "empty", "commit", "empty", "stop"],
+                             env={"IMPROVE_IDLE_AFTER": "2", "IMPROVE_IDLE_GAP_CAP": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        control = self.control()
+        self.assertEqual(control["idle_cycles"], 1)
+        self.assertEqual(control["idle_gap"], 1)
+        self.assertIn("discovery-only cycles", (self.state / "daemon.log").read_text())
+
+    def test_daemon_log_rotates_when_large(self):
+        result = self.invoke(script=["big_output", "stop"], env={"IMPROVE_LOG_MAX_BYTES": "65536"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.state / "daemon.log.1").exists())
+        self.assertLess((self.state / "daemon.log").stat().st_size, 65536)
+
+    def test_worker_can_use_the_helpers_it_is_told_to_use(self):
+        result = self.invoke(script=["uses_helpers", "stop"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        results = json.loads((self.state / "helpers.json").read_text())
+        for name, info in results.items():
+            self.assertEqual(info["rc"], 0, f"{name}: {info['err']}")
+        self.assertIn("run_id", results["pending"]["out"])
+        self.assertIn("warm cache", self.launches()[1]["prompt"])
+
+    def test_false_success_claim_from_a_failed_exit_is_rejected_not_fatal(self):
+        result = self.invoke("early", "--skill", "improve-max", "--args=--stop-at-target", script=["failed_target", "stop"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.control()["outcome"], "stopped by user")
+        self.assertIn("Rejected a claim of 'target reached'", self.journal())
+
+
+# Inherit the resilient fixture only; the parent's tests already ran once.
+for _name in [name for name in vars(ResilienceTests) if name.startswith("test_")]:
+    if _name not in vars(LongRunResilienceTests):
+        setattr(LongRunResilienceTests, _name, None)
+
+
+class ClockSkewTests(unittest.TestCase):
+    def test_small_backward_clock_steps_are_tolerated(self):
+        now = int(time.time())
+        info = runtime.timing({"started_at": runtime.stamp(now + 60), "deadline": runtime.stamp(now + 3600)}, now=now)
+        self.assertEqual(info["elapsed_seconds"], 0)
+        self.assertEqual(info["status"], "RUNNING")
+        with self.assertRaises(runtime.StateError):
+            runtime.timing({"started_at": runtime.stamp(now + 400), "deadline": runtime.stamp(now + 3600)}, now=now)
+
+    def test_evidence_rows_skip_damage_instead_of_raising(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "backlog.jsonl"
+            path.write_bytes(b'{"id":"a","claim":"x"}\n\xff\xfe{"id":"b"}\nnot json\n[1]\n')
+            rows = runtime.evidence_rows(path)
+            self.assertEqual(len(rows), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

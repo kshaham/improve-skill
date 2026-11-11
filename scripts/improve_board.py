@@ -3,6 +3,7 @@
 
 import argparse
 import contextlib
+import gzip
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -13,26 +14,70 @@ import re
 import secrets
 import signal
 import sqlite3
+import stat
 import subprocess
 import sys
 import threading
 import time
+import traceback
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
-from improve_runtime import StateError, atomic_json, git, lock_active, read_json, recorded_timing, repo_lock, stamp
+from improve_runtime import StateError, atomic_json, epoch, git, lock_active, read_json, recorded_timing, repo_lock, stamp
+import improve_control
 from improve_control import AREAS, THEMES, operator_lock, pause_requested, queue_request, queue_submission, read_local, request_view, request_view_at, require_run, set_pause
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets/board"
 SERVICE_FILES = {"board.json", "board.lock", "board.log", "operator.lock"}
+SNAPSHOT_EXTRAS = ("learning", "graph")
+DEFAULT_PORT = 8765
+FILE_CACHE_LIMIT = 64
+JOURNAL_LIMIT = 1024 * 1024
+LOG_LIMIT = 256 * 1024
+LOG_LINES_DEFAULT = 200
+LOG_LINES_MAX = 2000
+CYCLE_HISTORY_LIMIT = 48
+QUARANTINE_LIMIT = 100
+GZIP_MIN_BYTES = 1024
+# Request types whose validation lives in improve_control; the board only offers them when
+# the runtime it is paired with knows them.
+OPTIONAL_REQUEST_TYPES = ("retry", "withdraw")
+# Fields of the server clock that change on every poll; they are left out of the ETag so
+# an unchanged ledger yields 304 and the browser advances the countdown itself.
+VOLATILE_CLOCK_KEYS = ("now", "elapsed_seconds", "remaining_seconds", "hour", "report_hour", "status")
+VOLATILE_CURRENT_KEYS = ("heartbeat_age_seconds", "cycle_age_seconds")
+ERROR_CODES = {"unknown run": "unknown_run", "not found": "not_found",
+               "that node is no longer in the graph": "node_missing"}
+_file_cache = {}
+_file_cache_lock = threading.Lock()
+
+
+class BoardError(StateError):
+    """A StateError with a machine-readable code for the browser."""
+
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
+
+
+def error_payload(exc):
+    message = str(exc)
+    code = getattr(exc, "code", None) or ERROR_CODES.get(message)
+    if code is None and message.startswith("no graph node "):
+        code = "node_missing"
+    payload = {"error": message}
+    if code:
+        payload["code"] = code
+    return payload
 COLUMNS = [("ready", "Queued"), ("in_progress", "In progress"), ("done", "Done"),
            ("blocked", "Blocked"), ("proposed", "Proposed"), ("rejected", "Rejected")]
 TASK_FIELDS = ("id", "title", "claim", "area", "kind", "file", "line", "paths", "owned_paths",
                "note", "evidence", "failure", "acceptance", "verification", "counter", "measurement",
                "commit", "focus_priority", "priority", "created_at", "updated_at", "started_at",
                "completed_at", "reopens", "last_verification", "bet_status", "journey",
-               "target", "claimed_gain", "spike", "landed", "pieces", "kill", "branch", "user_priority", "board_request_id", "user_notes")
+               "target", "claimed_gain", "spike", "landed", "pieces", "kill", "branch", "user_priority", "board_request_id", "user_notes",
+               "blocked_reason", "blocked_by", "blocked_at", "block_count", "supervisor_note")
 MAX_FILE_BYTES = 32 * 1024 * 1024
 MAX_CONTEXT_FILES = 20
 
@@ -51,11 +96,7 @@ def finite_number(value):
     return number
 
 
-def load_file(directory, name, warnings, jsonl=False):
-    path = directory / name
-    if path.is_symlink():
-        warnings.append(f"{name}: symlink not read")
-        return [] if jsonl else {}
+def parse_ledger_file(path, name, warnings, jsonl):
     try:
         with path.open("rb") as stream:
             raw = stream.read(MAX_FILE_BYTES + 1)
@@ -84,6 +125,72 @@ def load_file(directory, name, warnings, jsonl=False):
     except (OSError, ValueError, RecursionError) as exc:
         warnings.append(f"{name}: {exc}")
         return [] if jsonl else {}
+
+
+def load_file(directory, name, warnings, jsonl=False):
+    """Parse a ledger file, reusing the previous parse while its inode, mtime, and size match.
+
+    Callers treat the returned value as read-only; it is shared between polls.
+    """
+    path = directory / name
+    empty = [] if jsonl else {}
+    if path.is_symlink():
+        warnings.append(f"{name}: symlink not read")
+        return empty
+    try:
+        info = os.stat(path)
+    except FileNotFoundError:
+        return empty
+    except OSError as exc:
+        warnings.append(f"{name}: {exc}")
+        return empty
+    key = (str(path), info.st_ino, info.st_mtime_ns, info.st_size)
+    with _file_cache_lock:
+        cached = _file_cache.get(key[0])
+    if cached and cached[0] == key:
+        warnings.extend(cached[2])
+        return cached[1]
+    notices = []
+    value = parse_ledger_file(path, name, notices, jsonl)
+    with _file_cache_lock:
+        if key[0] not in _file_cache and len(_file_cache) >= FILE_CACHE_LIMIT:
+            _file_cache.pop(next(iter(_file_cache)))
+        _file_cache[key[0]] = (key, value, tuple(notices))
+    warnings.extend(notices)
+    return value
+
+
+def age_seconds(value, now=None):
+    """Seconds since an ISO UTC stamp, or None when the stamp is missing or malformed."""
+    try:
+        return max(0, int(time.time() if now is None else now) - epoch(value))
+    except StateError:
+        return None
+
+
+def finite_or_none(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return value
+
+
+def count_field(control, key):
+    value = control.get(key, 0)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
+def cycle_history(control):
+    """The supervisor's per-cycle records, shape-checked and capped for the browser."""
+    rows = control.get("cycle_history")
+    if not isinstance(rows, list):
+        return []
+    return [{"started_at": row.get("started_at") if isinstance(row.get("started_at"), str) else None,
+             "seconds": finite_or_none(row.get("seconds")),
+             "rc": finite_or_none(row.get("rc")),
+             "advanced": bool(row.get("advanced")),
+             "limited": bool(row.get("limited")),
+             "outcome": text_value(row.get("outcome"))[:200] or None}
+            for row in [row for row in rows if isinstance(row, dict)][-CYCLE_HISTORY_LIMIT:]]
 
 
 def text_value(value, fallback=""):
@@ -174,9 +281,11 @@ def focus_summary(focus):
             "excluded": [text_value(item)[:200] for item in excluded[:20]] if isinstance(excluded, list) else []}
 
 
-def board_snapshot(repo, selected="current"):
+def board_snapshot(repo, selected="current", include=SNAPSHOT_EXTRAS):
+    """Build the polled board state. `include` names the optional sections to compute."""
     state = state_directory(repo)
     warnings = []
+    now = int(time.time())
     directories = run_directories(repo)
     if selected != "all" and selected not in directories:
         raise StateError("unknown run")
@@ -219,7 +328,25 @@ def board_snapshot(repo, selected="current"):
                        "consecutive_failures": control.get("consecutive_failures", 0),
                        "board_control_version": control.get("board_control_version", 0),
                        "last_error": control.get("last_error"), "clock": clock,
-                       "focus": focus_summary(run.get("focus"))}
+                       "focus": focus_summary(run.get("focus")),
+                       # Supervisor bookkeeping for run health; absent fields read as null or zero.
+                       "cycle_started_at": text_value(control.get("cycle_started_at")) or None,
+                       "child_pid": finite_or_none(control.get("child_pid")),
+                       "cycle_timeout_seconds": finite_or_none(control.get("cycle_timeout_seconds")),
+                       "finish_grace_seconds": finite_or_none(control.get("finish_grace_seconds")),
+                       "quarantines": count_field(control, "quarantines"),
+                       "recoveries_total": count_field(control, "recoveries_total"),
+                       "crashes": count_field(control, "crashes"),
+                       "parks": count_field(control, "parks"),
+                       "idle_cycles": count_field(control, "idle_cycles"),
+                       "idle_gap": finite_or_none(control.get("idle_gap")),
+                       "limit_waited_seconds": count_field(control, "limit_waited_seconds"),
+                       "next_limit_wait": finite_or_none(control.get("next_limit_wait")),
+                       "park_until": text_value(control.get("park_until")) or None,
+                       "ended_at": text_value(control.get("ended_at")) or None,
+                       "cycle_history": cycle_history(control),
+                       "heartbeat_age_seconds": age_seconds(control.get("heartbeat_at"), now),
+                       "cycle_age_seconds": age_seconds(control.get("cycle_started_at"), now)}
             if not (state / "daemon.lock").is_symlink():
                 with contextlib.suppress(OSError):
                     current["daemon_running"] = lock_active(state / "daemon.lock")
@@ -244,6 +371,7 @@ def board_snapshot(repo, selected="current"):
     counts = {key: sum(task["status"] == key for task in tasks) for key, _ in COLUMNS}
     controls = {"available": False, "requests_available": True, "pause_requested": False,
                 "stop_requested": (state / "stop.request").exists(), "requests": [],
+                "request_types": sorted(improve_control.REQUEST_TYPES),
                 "report_available": (state / "final-report.md").is_file() and not (state / "final-report.md").is_symlink()}
     try:
         controls["pause_requested"] = pause_requested(repo, current.get("control_id"))
@@ -291,26 +419,129 @@ def board_snapshot(repo, selected="current"):
             "selected_run": selected, "runs": runs, "current": current,
             "columns": [{"id": key, "label": label} for key, label in COLUMNS],
             "tasks": tasks, "requests": requests, "counts": counts, "discovery": discovery[:24],
-            "controls": controls, "warnings": warnings, "learning": learning_view(repo),
-            "graph": graph_summary(repo), "updated_at": stamp()}
+            "controls": controls, "warnings": warnings,
+            "learning": learning_view(repo, warnings) if "learning" in include else None,
+            "graph": graph_summary(repo, warnings) if "graph" in include else None,
+            "updated_at": stamp(now)}
 
 
-def learning_view(repo):
+def snapshot_etag(snapshot):
+    """A content tag over everything the browser renders, minus the per-poll clock."""
+    stable = {key: value for key, value in snapshot.items() if key != "updated_at"}
+    current = dict(stable.get("current") or {})
+    for key in VOLATILE_CURRENT_KEYS:
+        current.pop(key, None)
+    if isinstance(current.get("clock"), dict):
+        current["clock"] = {key: value for key, value in current["clock"].items() if key not in VOLATILE_CLOCK_KEYS}
+    stable["current"] = current
+    digest = hashlib.sha256(json.dumps(stable, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
+    return f'"{digest[:32]}"'
+
+
+def etag_matches(header, etag):
+    if not header:
+        return False
+    for candidate in header.split(","):
+        candidate = candidate.strip()
+        if candidate.startswith("W/"):
+            candidate = candidate[2:]
+        if candidate in ("*", etag):
+            return True
+    return False
+
+
+def learning_view(repo, warnings=None):
     """Cross-run learning for the overview; a damaged store only hides the panel."""
     from improve_learning import board_summary
     try:
         return board_summary(repo)
-    except (StateError, OSError, ValueError):
+    except (StateError, OSError, ValueError, sqlite3.Error) as exc:
+        if warnings is not None:
+            warnings.append(f"Learning: {exc}")
+        return None
+    except Exception as exc:  # The overview panel is optional; the board must keep polling.
+        if warnings is not None:
+            warnings.append(f"Learning: unexpected {type(exc).__name__}: {exc}")
         return None
 
 
-def graph_summary(repo):
+def graph_summary(repo, warnings=None):
     """Cheap graph counters; the Knowledge view fetches the graph itself only when they change."""
     import improve_graph
     try:
         return improve_graph.summary(improve_graph.load_cached(improve_graph.graph_path(repo)))
-    except (StateError, OSError, ValueError):
+    except (StateError, OSError, ValueError, sqlite3.Error) as exc:
+        if warnings is not None:
+            warnings.append(f"Knowledge graph: {exc}")
         return None
+    except Exception as exc:  # A graph fault must not take the task board down with it.
+        if warnings is not None:
+            warnings.append(f"Knowledge graph: unexpected {type(exc).__name__}: {exc}")
+        return None
+
+
+def bounded_tail(path, limit):
+    """The last `limit` bytes of a regular file, never following a symlink; None when absent."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise StateError(f"cannot read {path.name}") from exc
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise StateError(f"{path.name} must be a regular file")
+        truncated = info.st_size > limit
+        if truncated:
+            stream.seek(info.st_size - limit)
+        raw = stream.read(limit)
+    text = raw.decode("utf-8", errors="replace")
+    if truncated and "\n" in text:
+        # Start on a whole line rather than mid-record.
+        text = text.split("\n", 1)[1]
+    return {"text": text, "truncated": truncated, "size": info.st_size}
+
+
+def journal_view(repo, selected):
+    directory = run_directories(repo).get(selected)
+    if directory is None:
+        raise StateError("unknown run")
+    tail = bounded_tail(directory / "journal.md", JOURNAL_LIMIT)
+    if tail is None:
+        raise BoardError("No journal yet.", code="journal_missing")
+    return {**tail, "run_id": selected}
+
+
+def log_view(repo, requested):
+    """The last lines of the current run's daemon log, bounded in lines and bytes."""
+    try:
+        lines = int(requested) if requested is not None else LOG_LINES_DEFAULT
+    except ValueError as exc:
+        raise StateError("lines must be a whole number") from exc
+    lines = max(1, min(lines, LOG_LINES_MAX))
+    tail = bounded_tail(state_directory(repo) / "daemon.log", LOG_LIMIT)
+    if tail is None:
+        raise BoardError("No daemon log yet.", code="log_missing")
+    rows = tail["text"].splitlines()
+    return {"text": "\n".join(rows[-lines:]), "line_count": min(lines, len(rows)),
+            "truncated": tail["truncated"] or len(rows) > lines, "size": tail["size"]}
+
+
+def quarantine_refs(repo):
+    """Quarantined worktrees saved by the supervisor as refs, newest first."""
+    output = git(repo, "for-each-ref", "--sort=-creatordate",
+                 "--format=%(refname)%09%(objectname)%09%(creatordate:iso-strict)%09%(subject)",
+                 "refs/improve/quarantine")
+    refs = []
+    for line in output.splitlines():
+        parts = line.split("\t", 3)
+        if len(parts) < 3 or not parts[0]:
+            continue
+        refs.append({"ref": parts[0], "commit": parts[1], "date": parts[2],
+                     "subject": (parts[3] if len(parts) > 3 else "")[:200],
+                     "recover": f"git checkout {parts[0]} -- ."})
+    return {"refs": refs[:QUARANTINE_LIMIT]}
 
 
 def query_values(query, name, limit=200):
@@ -452,20 +683,78 @@ class BoardHandler(BaseHTTPRequestHandler):
         # Extra hosts are HTTPS tunnels (for example Tailscale Serve) that a phone opens.
         return ("https://" if host in self.server.allowed_hosts else "http://") + host
 
-    def reply(self, code, body, content_type="application/json; charset=utf-8"):
-        if not isinstance(body, bytes):
-            body = json.dumps(body, ensure_ascii=True).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
+    def accepts_gzip(self):
+        header = self.headers.get("Accept-Encoding", "")
+        return any(part.split(";", 1)[0].strip().lower() == "gzip" for part in header.split(","))
+
+    def security_headers(self):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Permissions-Policy", "microphone=(self), camera=(), geolocation=()")
         self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+
+    def reply(self, code, body, content_type="application/json; charset=utf-8", etag=None):
+        if not isinstance(body, bytes):
+            body = json.dumps(body, ensure_ascii=True).encode()
+        encoded = len(body) > GZIP_MIN_BYTES and self.accepts_gzip()
+        if encoded:
+            body = gzip.compress(body, compresslevel=5)
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        if encoded:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
+        if etag:
+            self.send_header("ETag", etag)
+        self.security_headers()
         self.end_headers()
         with contextlib.suppress(BrokenPipeError, ConnectionResetError):
             self.wfile.write(body)
+
+    def reply_not_modified(self, etag):
+        self.send_response(304)
+        self.send_header("ETag", etag)
+        self.security_headers()
+        self.end_headers()
+
+    def reply_board(self, query):
+        """The polled snapshot: no operator lock (ledgers are replaced atomically), a content
+        ETag for 304 replies, and optional sections only when the browser asks for them."""
+        selected = query.get("run", ["current"])[0]
+        include = query.get("include")
+        wanted = SNAPSHOT_EXTRAS if include is None else tuple(
+            part for part in include[0].split(",") if part in SNAPSHOT_EXTRAS)
+        try:
+            snapshot = board_snapshot(self.server.repo, selected, wanted)
+        except (StateError, OSError, ValueError) as exc:
+            return self.reply(400, error_payload(exc))
+        except Exception as exc:  # Never drop the connection; report the fault as JSON.
+            traceback.print_exc()
+            return self.reply(500, {"error": f"board snapshot failed: {type(exc).__name__}: {exc}", "code": "internal"})
+        self.server.snapshot_built_at = time.monotonic()
+        etag = snapshot_etag(snapshot)
+        if etag_matches(self.headers.get("If-None-Match"), etag):
+            return self.reply_not_modified(etag)
+        return self.reply(200, snapshot, etag=etag)
+
+    def health(self):
+        """Identity plus cheap liveness: the board's own snapshot age and the daemon's heartbeat."""
+        payload = {"service": "improve-board", "instance": self.server.instance, "repo": str(self.server.repo),
+                   "snapshot_age_seconds": None, "daemon_running": False, "heartbeat_age_seconds": None}
+        built = getattr(self.server, "snapshot_built_at", None)
+        if built is not None:
+            payload["snapshot_age_seconds"] = round(time.monotonic() - built, 1)
+        try:
+            state = state_directory(self.server.repo)
+            control = load_file(state, "supervisor.json", [])
+            payload["heartbeat_age_seconds"] = age_seconds(control.get("heartbeat_at"))
+            if not (state / "daemon.lock").is_symlink():
+                payload["daemon_running"] = lock_active(state / "daemon.lock")
+        except (StateError, OSError, ValueError):
+            pass  # Liveness fields are best-effort; identity must always answer.
+        return payload
 
     def do_GET(self):
         if not self.allowed_host():
@@ -492,26 +781,34 @@ class BoardHandler(BaseHTTPRequestHandler):
                     return self.reply(404, {"error": "No saved final report yet."})
                 return self.reply(200, {"text": report, "run_id": selected})
             except (StateError, OSError, ValueError) as exc:
-                return self.reply(400, {"error": str(exc)})
+                return self.reply(400, error_payload(exc))
         if target.path in ("/api/graph", "/api/graph/node", "/api/graph/context", "/api/graph/history"):
             try:
                 query = parse_qs(target.query, max_num_fields=40)
                 return self.reply(200, graph_get(self.server.repo, target.path, query))
             except (StateError, OSError, ValueError, sqlite3.Error) as exc:
-                return self.reply(400, {"error": str(exc)})
+                return self.reply(400, error_payload(exc))
         if target.path == "/api/health":
-            return self.reply(200, {"service": "improve-board", "instance": self.server.instance,
-                                    "repo": str(self.server.repo)})
+            return self.reply(200, self.health())
         if target.path == "/api/board":
+            return self.reply_board(parse_qs(target.query, max_num_fields=8, keep_blank_values=True))
+        if target.path in ("/api/journal", "/api/log", "/api/quarantine"):
+            # Operational views are read-only and bounded; they never need the operator lock.
             try:
-                selected = parse_qs(target.query, max_num_fields=8).get("run", ["current"])[0]
-                with operator_lock(self.server.repo):
-                    snapshot = board_snapshot(self.server.repo, selected)
-                return self.reply(200, snapshot)
+                query = parse_qs(target.query, max_num_fields=8)
+                if target.path == "/api/journal":
+                    return self.reply(200, journal_view(self.server.repo, query.get("run", ["current"])[0]))
+                if target.path == "/api/log":
+                    return self.reply(200, log_view(self.server.repo, query.get("lines", [None])[0]))
+                return self.reply(200, quarantine_refs(self.server.repo))
+            except BoardError as exc:
+                return self.reply(404 if exc.code in ("journal_missing", "log_missing") else 400, error_payload(exc))
             except (StateError, OSError, ValueError) as exc:
-                return self.reply(400, {"error": str(exc)})
+                return self.reply(400, error_payload(exc))
         assets = {"/": ("index.html", "text/html; charset=utf-8"),
                   "/board.js": ("board.js", "text/javascript; charset=utf-8"),
+                  "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
+                  "/health.js": ("health.js", "text/javascript; charset=utf-8"),
                   "/controls.js": ("controls.js", "text/javascript; charset=utf-8"),
                   "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),
                   "/drafts.js": ("drafts.js", "text/javascript; charset=utf-8"),
@@ -527,8 +824,11 @@ class BoardHandler(BaseHTTPRequestHandler):
                   "/board.css": ("board.css", "text/css; charset=utf-8")}
         if target.path in assets:
             name, mime = assets[target.path]
-            return self.reply(200, (ASSETS / name).read_bytes(), mime)
-        self.reply(404, {"error": "not found"})
+            try:
+                return self.reply(200, (ASSETS / name).read_bytes(), mime)
+            except OSError:
+                return self.reply(404, {"error": f"board asset {name} is missing from this installation", "code": "asset_missing"})
+        self.reply(404, {"error": "not found", "code": "not_found"})
 
     def do_POST(self):
         origin = self.headers.get("Origin")
@@ -564,11 +864,15 @@ class BoardHandler(BaseHTTPRequestHandler):
                 return self.reply(200, graph_post(self.server.repo, data))
             with operator_lock(self.server.repo) as state:
                 require_run(self.server.repo, data.get("run_id"))
-                snapshot = board_snapshot(self.server.repo, "current")
+                snapshot = board_snapshot(self.server.repo, "current", include=())
                 controls = snapshot["controls"]
                 if self.path in ("/api/requests", "/api/requests/batch"):
                     if not controls["requests_available"]:
                         raise StateError(controls["reason"])
+                    kind = data.get("type")
+                    if kind in OPTIONAL_REQUEST_TYPES and kind not in improve_control.REQUEST_TYPES:
+                        raise BoardError(f"This skill runtime does not accept {kind} requests yet; "
+                                         "update the skill and restart the daemon.", code="unsupported_request_type")
                     if self.path.endswith("/batch"):
                         requests = queue_submission(self.server.repo, data, snapshot["tasks"], batch=True)
                         return self.reply(200, {"requests": requests, "message": f"Saved {len(requests)} priority requests. Each will be reviewed at a checkpoint."})
@@ -595,7 +899,7 @@ class BoardHandler(BaseHTTPRequestHandler):
                     "stop": "Stop requested. The skill will settle current work and end the run."
                 }[action]})
         except (StateError, OSError, ValueError, TypeError, RecursionError, sqlite3.Error) as exc:
-            return self.reply(400, {"error": str(exc)})
+            return self.reply(400, error_payload(exc))
 
 
 HOST_PATTERN = re.compile(r"(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+")
@@ -611,6 +915,24 @@ def trusted_host(value):
     return value
 
 
+def configure_server(server, repo, allowed_hosts=()):
+    """Attach the per-service identity and secrets a BoardServer needs before it handles requests."""
+    server.repo, server.instance, server.token = repo, secrets.token_hex(16), secrets.token_hex(32)
+    server.ui_token = secrets.token_hex(32)
+    server.allowed_hosts = frozenset(allowed_hosts)
+    server.snapshot_built_at = None
+    return server
+
+
+def preferred_port():
+    """The port tried first when none is given; IMPROVE_BOARD_PORT overrides the 8765 default."""
+    try:
+        value = int(os.environ.get("IMPROVE_BOARD_PORT", DEFAULT_PORT))
+    except ValueError:
+        return DEFAULT_PORT
+    return value if 1 <= value <= 65535 else DEFAULT_PORT
+
+
 def serve(repo, port=None, allowed_hosts=()):
     state = state_directory(repo)
     state.mkdir(exist_ok=True)
@@ -618,14 +940,12 @@ def serve(repo, port=None, allowed_hosts=()):
         raise StateError("board service files must not be symlinks")
     with repo_lock(state / "board.lock"):
         try:
-            server = BoardServer(("127.0.0.1", 8765 if port is None else port), BoardHandler)
+            server = BoardServer(("127.0.0.1", preferred_port() if port is None else port), BoardHandler)
         except OSError:
             if port is not None:
                 raise
             server = BoardServer(("127.0.0.1", 0), BoardHandler)
-        server.repo, server.instance, server.token = repo, secrets.token_hex(16), secrets.token_hex(32)
-        server.ui_token = secrets.token_hex(32)
-        server.allowed_hosts = frozenset(allowed_hosts)
+        configure_server(server, repo, allowed_hosts)
         info = dict(repo=str(repo), url=f"http://127.0.0.1:{server.server_port}", port=server.server_port,
                     pid=os.getpid(), instance=server.instance, token=server.token, started_at=stamp(),
                     allowed_hosts=sorted(server.allowed_hosts),

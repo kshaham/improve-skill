@@ -17,10 +17,19 @@ From the skill checkout:
 
 ```sh
 python3 -B -m unittest discover -s tests -v
+IMPROVE_TEST_SLOW=1 python3 -B -m unittest discover -s tests -v   # also soak, scale, performance
 for improve_script in scripts/*.sh; do
   bash -n "$improve_script"
 done
 ```
+
+The default run is the fast suite: unit, daemon, graph, board, and control tests. The
+48-hour and 72-hour soaks, the 6,000-task scale fixtures, and the CLI performance suite
+run only with `IMPROVE_TEST_SLOW=1`; set `IMPROVE_TEST_SPEED_FACTOR=2` (or more) on a slow
+or shared machine to scale every wall-clock ceiling. Tests isolate git from the host's
+global and system configuration (`tests/support.py`), skip FTS5-only checks when the
+interpreter's SQLite lacks FTS5, and never bind a fixed port. `.github/workflows/tests.yml`
+runs the fast suite on every push and the slow suites plus browser checks nightly.
 
 The regression suite uses temporary git repositories and fake Codex and Claude CLIs. It tests intake,
 deadlines, early completion, discovery continuity, restart, rate limits, lock ownership,
@@ -31,6 +40,13 @@ malformed ledgers, HTTP boundaries, live task data, experiment evidence, bookkee
 churn, intake metadata preservation, authoritative board outcomes, and finalization without
 launching a real model or editing a real app.
 It does not establish that every model will find useful changes for a multi-hour run.
+`tests/test_runtime.py` also runs the long-run scenarios: malformed agent-written fields,
+ledgers with bytes that are not UTF-8, usage limits on exit code 0, build artifacts every
+cycle, CLI crashes, parking after exhausted breakers, contained supervisor errors, a daemon
+killed mid-cycle and relaunched by `--supervise` (stopping the stale child), SIGTERM,
+finalization after a limit, cycle budgets in prompts, idle backoff, log rotation, and a
+worker that uses the helper CLIs it is told to use. The fake CLI takes `FAKE_SCRIPT`, a JSON
+list of one mode per launch.
 
 ### Knowledge graph suites
 
@@ -44,6 +60,9 @@ It does not establish that every model will find useful changes for a multi-hour
 | `tests/test_graph_store.py` | The SQLite store: partial sessions answer `context`, `search`, and `node` exactly as a full load does (80 random queries, plus knowledge reachable only through related links), writes touch only changed rows, search without FTS5, legacy `graph.json` migration, four kinds of damage plus a missing database recovered from the checkpoint, rollback, readers that never wait, fair writers under contention, compressed and bounded history, and freed pages returned to disk |
 | `tests/test_graph_dream.py` | Every inference rule at its thresholds (support, share of evidence, contradiction, hysteresis, retention across pruning, second generation never chained, area majority, co-citation overlap, shared-file wording, blockers), rejection, determinism, confidence-weighted context, dormancy and forgetting on the dream clock within one run, protected knowledge, exact restore of pruned and merged nodes, recall by citation, by re-recording, and by returning work, verdicts, gaps, and safe consolidation |
 | `tests/test_graph_dream.py` 72-hour run | A world with a known truth (modules, their knowledge, noise citations, blockers): 432 cycles, a dream every 18. At every dream it checks structure, every inferred link's rule, confidence, and evidence, precision of at least 0.95 for every rule with 10 or more links, and recall of at least 0.55; at the end, unused notes were forgotten within the run, valuable knowledge was never touched, and a forgotten note restores. Set `IMPROVE_GRAPH_DREAM_SOAK_CYCLES` to run longer |
+| `tests/test_toon.py` | The TOON encoder and decoder against all 564 official conformance fixtures (byte-exact encoding, decoded values and errors, strict and lenient options), round trips of every fixture and of randomized values with every delimiter, canonical numbers, quoting rules, host-type normalization, surrogate and UTF-8 refusal, the `uniform` and `truncate` view helpers, the stdin CLI, and the size reductions on representative ledger and query shapes |
+| `tests/test_ledger.py` | The ledger helper: ranking identical to the SKILL.md order, status/area/file/id filters, bounded and full views, counts, discovery and run views, JSON and delimiter modes, canonical `set` rewrites that merge duplicate rows and validate fields, `add`, damaged lines, and a repository without a ledger |
+| `tests/test_graph_policy.py` | Protected user and learning knowledge survives fade, contradiction, and caps; only corruption is damage (a constraint error rolls back without restoring a checkpoint); a held `graph.lock` fails fast with exit 3 while readers continue; lessons import once and return only when reinforced; whole-token gate attribution; supervisor blocks are not knowledge; stable co-change links; fresh graphs are not due until their interval; `history --offset`; `unlink`, `proposals`, `consolidate` |
 | `tests/test_graph_performance.py` | Real CLI processes on a steady-state graph (task cap reached, 4,000+ history rows): median wall time and peak memory for reads and writes, a file's `context` and `node` at least 20% faster than a whole-graph read and lighter in memory, daemon sync/refine/dream within a cycle gap, and a board poll that reuses an unchanged graph |
 
 Latency ceilings are deliberately generous; they catch quadratic regressions rather than
@@ -68,7 +87,11 @@ uv run --with playwright python tests/browser_board.py --chrome /path/to/chrome
 ```
 
 These exercise filtering, task details, automatic refresh, export, escaped task text,
-connection recovery, run-health/report states, and mobile/tablet overflow. A fixture with
+connection recovery, run-health/report states, heartbeat and cycle ages with their
+thresholds, the cycle timeline, the journal, daemon-log, and quarantine dialogs with focus
+return, the blocked-reason banner, the stale-data model (controls stay enabled for thirty
+seconds without fresh data, then disable, then recover), the dark theme toggle, and
+mobile/tablet overflow. A fixture with
 over 2,000 finished tasks checks bounded row rendering, pagination, search across pages,
 keyboard navigation, date fallbacks, and position preservation during live updates.
 Control checks cover pause/resume/stop with fake Codex and Claude workers, unchanged

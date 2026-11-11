@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from graph_support import ROOT, archive, check_invariants, environment, load, make_repo, restore_environment, write_ledger, write_run  # noqa: E402
 import improve_graph as graph  # noqa: E402
+import improve_toon as toon  # noqa: E402
 import improve_learning as learning  # noqa: E402
 
 TRACKED = ["src/api/db.py", "src/api/auth.py", "src/api/pool.py", "src/ui/cart.tsx", "src/ui/button.tsx",
@@ -426,12 +427,12 @@ class CommandLineQueryTests(RichGraph):
         as_json = json.loads(self.run_cli("context", "--files", "src/api/db.py", "--json").stdout)
         self.assertEqual(as_json["seeds"], ["file:src/api/db.py"])
         self.assertTrue(all(row["type"] == "blocker" for row in
-                            json.loads(self.run_cli("search", "simulator", "--type", "blocker").stdout)))
-        self.assertEqual(len(json.loads(self.run_cli("search", "cart", "--limit", "1").stdout)), 1)
-        self.assertEqual(json.loads(self.run_cli("node", "area:ui").stdout)["node"]["id"], "area:ui")
-        self.assertEqual(json.loads(self.run_cli("path", "file:src/api/db.py", "task:r1:t1").stdout)[0]["to"], "task:r1:t1")
-        self.assertEqual(json.loads(self.run_cli("hotspots", "--limit", "1").stdout)[0]["file"], "src/api/db.py")
-        self.assertEqual(json.loads(self.run_cli("stats").stdout)["runs"], 2)
+                            toon.loads(self.run_cli("search", "simulator", "--type", "blocker").stdout)))
+        self.assertEqual(len(toon.loads(self.run_cli("search", "cart", "--limit", "1").stdout)), 1)
+        self.assertEqual(toon.loads(self.run_cli("node", "area:ui").stdout)["node"]["id"], "area:ui")
+        self.assertEqual(toon.loads(self.run_cli("path", "file:src/api/db.py", "task:r1:t1").stdout)[0]["to"], "task:r1:t1")
+        self.assertEqual(toon.loads(self.run_cli("hotspots", "--limit", "1").stdout)[0]["file"], "src/api/db.py")
+        self.assertEqual(toon.loads(self.run_cli("stats").stdout)["runs"], 2)
 
     def test_errors_exit_two_without_tracebacks(self):
         for args in (("context",), ("node", "file:none.py"), ("path", "area:ui", "area:none"),
@@ -448,9 +449,9 @@ class CommandLineQueryTests(RichGraph):
             run = lambda *args: subprocess.run([sys.executable, str(ROOT / "scripts/improve_graph.py"), "--repo",
                                                 str(repo), *args], capture_output=True, text=True, timeout=30)
             self.assertEqual(run("brief").stdout.strip(), "The knowledge graph is empty.")
-            self.assertEqual(json.loads(run("stats").stdout)["nodes"], 0)
-            self.assertEqual(json.loads(run("hotspots").stdout), [])
-            self.assertEqual(json.loads(run("search", "anything").stdout), [])
+            self.assertEqual(toon.loads(run("stats").stdout)["nodes"], 0)
+            self.assertEqual(toon.loads(run("hotspots").stdout), [])
+            self.assertEqual(toon.loads(run("search", "anything").stdout), [])
             self.assertFalse(graph.graph_path(repo).exists(), "reads never create the store")
 
 

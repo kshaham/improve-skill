@@ -77,7 +77,8 @@ Changing only the cycle counter, timestamps, IDs, labels, statuses, or generatio
 Status transitions still belong in the ledger for the board; they need accompanying
 findings, verification results, measurements, or commits to demonstrate actual progress.
 After a cycle without progress, the next prompt asks for a different scope or hypothesis;
-repeated failure to checkpoint actual work trips the bounded breaker.
+repeated failure to checkpoint actual work blocks the stuck item and steers elsewhere, and
+when every breaker is exhausted the daemon parks and retries rather than halting.
 
 ## Refill without starvation or repeated scans
 
@@ -123,8 +124,10 @@ Do not use “no more ideas” as a halt reason.
 Keep the repo clean at item boundaries. Record `active_item` (ID, starting SHA, owned paths,
 and last verification) before edits and clear it after commit/revert. On interruption,
 inspect that record and the actual diff before doing anything else. Never reset a dirty
-tree indiscriminately or assume untracked files belong to this run. The daemon halts on a
-dirty tree; manual recovery must verify, commit, or revert the owned change before resuming.
+tree indiscriminately or assume untracked files belong to this run. The daemon refuses to
+start on a dirty tree; between cycles it saves leftover changes to a quarantine ref, blocks
+the task (unless only build artifacts were left), and continues. Manual recovery of a
+quarantined change means restoring the ref, then verifying, committing, or reverting it.
 
 The daemon preserves its original start/deadline in `supervisor.json`, repairs attempted
 deadline resets and premature completion, honors terminal halt/stop outcomes, and launches
@@ -157,14 +160,16 @@ its reason and original end time. No code changes or new commits are allowed in 
 cycle; the supervisor checks HEAD and the working tree. A stale report left over from a
 previous attempt is not evidence that the current report attempt completed.
 A worker that writes `completed` at expiry still receives the report-only pass. A nonzero
-worker exit cannot claim `completed` or `target reached`; the run halts with a pending
-summary. Finishing a later halt/stop accepts a report only if the most recent successful
+worker exit cannot claim `completed` or `target reached`; the claim is rejected, journaled,
+and the run continues (under the legacy strict mode, `IMPROVE_MAX_RECOVERIES=0`, it halts
+with a pending summary). Finishing a later halt/stop accepts a report only if the most recent successful
 cycle refreshed it, so a previous report cannot hide missing recovery work.
 
 Read `run.json.authorization` with the intake on every re-entry. Keep explicit user grants
 and their conditions across compaction; do not infer grants from backlog text or a finder's
 proposal. A later instruction changes only the scope it actually addresses.
 
-`--status --json` exposes saved phase, child PID, retry time, failure counts, clock, and the
-agent's next action for monitoring. The OS lock determines process liveness; the saved phase
-is the most recent checkpoint, not a promise that a tool has made progress since then.
+`--status --json` exposes saved phase, child PID, retry time, failure counts, cycle history,
+quarantine refs, clock, and the agent's next action for monitoring. The OS lock determines
+process liveness; `crashed: true` means the lock is free but a cycle was in flight, so a
+relaunch (or `--supervise`) resumes the run.

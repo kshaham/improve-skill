@@ -160,7 +160,7 @@ async function loadGraph() {
     );
     if (graphSelected) loadNodeDetail(graphSelected, false);
   } catch (error) {
-    if (error.message === "that node is no longer in the graph") {
+    if (error.code === "node_missing") {
       graphFocus = null;
       graphSelected = null;
       graphKeepStatus = true;

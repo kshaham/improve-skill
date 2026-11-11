@@ -26,9 +26,11 @@ import sqlite3
 import stat
 import subprocess
 import sys
+import time
 
 from improve_graph_store import GraphState, Store, StoreDamaged, is_damage, restore_backup, set_aside
 from improve_runtime import StateError, epoch, read_json, stamp
+import improve_toon as toon
 
 VERSION = 1
 TYPES = ("run", "task", "area", "file", "gate", "blocker", "insight")
@@ -58,6 +60,10 @@ DECAY = 0.9
 FADE_SCORE = 0.2
 FADE_AFTER_RUNS = 8
 FINISHED = ("done", "rejected", "blocked")
+# Knowledge the user or the learning store wrote is steering: automatic maintenance never
+# archives, caps, or forgets it. Agents may rate it; only a user may archive it.
+PROTECTED_SOURCES = ("user", "learning")
+LOCK_WAIT_SECONDS = 30
 STOP_WORDS = frozenset("a an and are as at be by for from has in is it its of on or that the this to was were when with".split())
 
 _cache = {}
@@ -65,6 +71,22 @@ _cache = {}
 
 class GraphError(StateError):
     """Raised for invalid graph input; the message is safe to show a user."""
+
+
+class GraphBusy(GraphError):
+    """Another writer holds the graph; the caller may retry later (CLI exit 3)."""
+
+
+def lock_wait_seconds():
+    value = os.environ.get("IMPROVE_GRAPH_LOCK_WAIT", str(LOCK_WAIT_SECONDS))
+    return float(value) if re.fullmatch(r"\d+(\.\d+)?", value) else float(LOCK_WAIT_SECONDS)
+
+
+def protected(node, tick=None):
+    """True when automatic maintenance must leave this node alone."""
+    if node.get("pinned") or node.get("source") in PROTECTED_SOURCES:
+        return True
+    return tick is not None and int(node.get("protected_until_tick", -1)) > tick
 
 
 def graph_path(repo):
@@ -84,7 +106,7 @@ def legacy_path(path):
 
 
 def empty_graph():
-    return {"version": VERSION, "revision": 0, "nodes": {}, "edges": {}, "runs": [], "aliases": {},
+    return {"version": VERSION, "revision": 0, "nodes": {}, "edges": {}, "runs": [], "aliases": {}, "lessons": {},
             "refine": {"history": []}, "tick": 0,
             "dream": {"history": [], "proposals": [], "rejected": {}, "dropped": [], "gaps": []}}
 
@@ -244,16 +266,58 @@ def locked(repo, partial=False):
 @contextlib.contextmanager
 def writer_queue(path):
     """Writers wait their turn on a file lock: SQLite's own busy-retry is not fair, and a busy
-    daemon could otherwise starve an agent's or the board's write. Readers never wait."""
+    daemon could otherwise starve an agent's or the board's write. Readers never wait. The
+    wait is bounded (IMPROVE_GRAPH_LOCK_WAIT): a writer hung elsewhere must not hang an
+    agent, so after the bound the caller gets GraphBusy and may retry later."""
     fd = os.open(path.with_name("graph.lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "a+") as stream:
-        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+    owner_closes = True
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise GraphError("graph.lock must be a regular file")
-        fcntl.flock(stream, fcntl.LOCK_EX)
+        if not acquire_lock(fd, lock_wait_seconds()):
+            owner_closes = False  # The waiting thread releases and closes once it gets the lock.
+            raise GraphBusy(f"another process has held the knowledge graph for over {lock_wait_seconds():.0f}s; "
+                            "retry later (this never blocks a task)")
         try:
             yield
         finally:
-            fcntl.flock(stream, fcntl.LOCK_UN)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        if owner_closes:
+            os.close(fd)
+
+
+def acquire_lock(fd, timeout):
+    """A fair (blocking, queued) flock with a deadline. The blocking call runs in a helper
+    thread; if the deadline passes first the helper gives the lock straight back when it
+    eventually arrives, so an abandoned wait never holds the graph."""
+    import threading
+    state = {"acquired": False, "abandoned": False}
+    guard, done = threading.Lock(), threading.Event()
+
+    def take():
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError:
+            done.set()
+            return
+        with guard:
+            if state["abandoned"]:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    os.close(fd)
+                return
+            state["acquired"] = True
+        done.set()
+
+    waiter = threading.Thread(target=take, name="graph-lock", daemon=True)
+    waiter.start()
+    done.wait(timeout)
+    with guard:
+        if state["acquired"]:
+            return True
+        state["abandoned"] = True
+    return False
 
 
 @contextlib.contextmanager
@@ -281,6 +345,11 @@ def session(path, partial):
             recovered = recover(path)
     if recovered:
         graph["refine"]["recovered"] = {"at": stamp(), "from": recovered.split(" ")[0], "detail": recovered}
+    if int(graph.get("version", VERSION)) > VERSION:
+        store.rollback()
+        store.close()
+        raise GraphError(f"graph.db was written by a newer skill (format {graph['version']}, this one reads {VERSION}); "
+                         "update the skill before writing to it")
     graph.store = store
     checkpoints = (graph["refine"].get("last_at"), graph["dream"].get("last_at"))
     try:
@@ -624,11 +693,11 @@ def ingest_run(graph, state, run_id, control=None, repo=None):
         for path in task_files(task, repo):
             ensure(graph, "file:" + path, "file", path, seq)
             keep(node_id, link(graph, node_id, "touches", "file:" + path, seq))
-        verification = json.dumps(task.get("verification") or task.get("last_verification") or "")
-        for name, gate in gate_ids.items():
-            if len(name) > 2 and name in verification:
-                keep(node_id, link(graph, node_id, "verified_by", gate, seq))
-        if reason or status == "blocked":
+        for name in verified_gates(task, gate_ids):
+            keep(node_id, link(graph, node_id, "verified_by", gate_ids[name], seq))
+        # A supervisor block ("3 cycles without evidence", "left uncommitted changes") is an
+        # event of the run, not knowledge about the file; it would only pollute blockers.
+        if (reason or status == "blocked") and task.get("blocked_by") != "supervisor":
             reason = clean(reason or task.get("note") or "unspecified", 300)
             key = blocker_key(reason) or "unspecified"
             blocker = "blocker:" + short_hash(key)
@@ -660,21 +729,51 @@ def ingest_run(graph, state, run_id, control=None, repo=None):
     return entry
 
 
+def verified_gates(task, gate_ids):
+    """Gates a task's verification names. A structured list is exact; free text matches
+    whole gate names only, so a gate called `test` does not claim `latest`."""
+    verification = task.get("verification") or task.get("last_verification") or ""
+    names = []
+    if isinstance(verification, dict) and isinstance(verification.get("gates"), list):
+        names = [str(name) for name in verification["gates"]]
+    elif isinstance(verification, list) and all(isinstance(item, str) for item in verification):
+        names = verification
+    if names:
+        return [name for name in gate_ids if name in names]
+    text = json.dumps(verification) if not isinstance(verification, str) else verification
+    found = []
+    for name in gate_ids:
+        # A gate name may contain '.' or ':' but prose punctuation after it must not hide a match.
+        if len(name) > 2 and re.search(rf"(?<![\w.:-]){re.escape(name)}(?![\w-])(?![.:]\w)", text):
+            found.append(name)
+    return found
+
+
 def import_lessons(graph, repo):
-    """Mirror learning.json lessons as insight nodes so they are connected to areas and files."""
-    from improve_learning import load as load_learning, store_path
+    """Mirror learning.json lessons as insight nodes, once per lesson. A lesson comes back
+    only when it was reinforced since, so capped or archived lessons do not return on
+    every sync."""
+    from improve_learning import load as load_learning, normalized as lesson_key, store_path
 
     lessons = load_learning(store_path(repo), repair=False)["lessons"]
+    imported = graph.setdefault("lessons", {})
     for lesson in lessons[:MAX_INSIGHTS]:
         text = lesson.get("text")
         if not isinstance(text, str) or len(text) < 8:
             continue
+        key = lesson.get("key") if isinstance(lesson.get("key"), str) else lesson_key(text)
+        strength = int(lesson.get("reinforced", 1) or 1)
+        if int(imported.get(key, 0)) >= strength:
+            continue
         node = add_insight(graph, text, "lesson", source="learning", reinforce=False)
-        node["reinforced"] = max(int(node.get("reinforced", 1)), int(lesson.get("reinforced", 1) or 1))
+        node["reinforced"] = max(int(node.get("reinforced", 1)), strength)
         area = lesson.get("area")
         if isinstance(area, str) and re.fullmatch(r"[a-z][a-z0-9_-]{0,39}", area):
             upsert(graph, "area:" + area, "area", area)
             link(graph, node["id"], "about", "area:" + area)
+        imported[key] = strength
+    for key in list(imported)[:max(0, len(imported) - 2 * MAX_INSIGHTS)]:
+        del imported[key]
 
 
 def run_identity(directory):
@@ -690,11 +789,20 @@ def run_identity(directory):
 
 
 def refine_due(graph, interval):
-    """True when the last refinement is older than `interval` seconds (or never happened)."""
-    if interval is None or interval <= 0 or not graph["nodes"]:
+    """True when the last refinement is older than `interval` seconds, or never happened:
+    file and area statistics are useful from the first ingest on."""
+    return due(graph["refine"], interval, bool(graph["nodes"]), first_time=True)
+
+
+def due(record, interval, populated, first_time=False):
+    """`first_time` says whether a record that was never stamped is due at once; otherwise
+    the interval is measured from `since`, the first ingest."""
+    if interval is None or interval <= 0 or not populated:
         return False
+    if not record.get("last_at") and first_time:
+        return True
     try:
-        return epoch(graph["refine"].get("last_at")) + interval <= epoch(stamp())
+        return epoch(record.get("last_at") or record.get("since")) + interval <= epoch(stamp())
     except StateError:
         return True
 
@@ -705,6 +813,8 @@ def sync(repo, include_history=None, refine_after=False, refine_interval=None, d
     repo = Path(repo)
     state = repo / ".improve"
     with locked(repo) as graph:
+        for record in (graph["refine"], graph["dream"]):
+            record.setdefault("since", stamp())
         known = {row.get("run_id") for row in graph["runs"]}
         history = state / "history"
         backfill = include_history if include_history is not None else not graph["runs"]
@@ -1013,8 +1123,6 @@ def refine(graph, repo=None):
             in_area.setdefault(edge["dst"], []).append(edge["src"])
         elif edge["rel"] == "used_in":
             used.setdefault(edge["src"], []).append(edge["dst"])
-    for key in [key for key, edge in graph["edges"].items() if edge["rel"] == "co_changed"]:
-        del graph["edges"][key]
     pairs = {}
     by_task = {}
     for file_id, task_ids in touched.items():
@@ -1025,9 +1133,14 @@ def refine(graph, repo=None):
             for index, left in enumerate(sorted(files)):
                 for right in sorted(files)[index + 1:]:
                     pairs[(left, right)] = pairs.get((left, right), 0) + 1
-    for (left, right), weight in sorted(pairs.items(), key=lambda item: -item[1])[:MAX_CO_CHANGE]:
-        link(graph, left, "co_changed", right, weight=weight)
-    report["co_changed"] = min(len(pairs), MAX_CO_CHANGE)
+    wanted = {edge_key(left, "co_changed", right): weight
+              for (left, right), weight in sorted(pairs.items(), key=lambda item: -item[1])[:MAX_CO_CHANGE]}
+    for key in [key for key, edge in graph["edges"].items() if edge["rel"] == "co_changed" and key not in wanted]:
+        del graph["edges"][key]
+    for key, weight in wanted.items():
+        left, _, right = key.split("|", 2)
+        link(graph, left, "co_changed", right, weight=weight)  # Updates the weight in place; created_at is kept.
+    report["co_changed"] = len(wanted)
 
     files = tracked_files(repo)
     directories = {str(parent) for path in files or () for parent in Path(path).parents if str(parent) != "."}
@@ -1061,7 +1174,7 @@ def refine(graph, repo=None):
     # 4. Score everything; fade insights that stopped earning their place.
     for node in nodes.values():
         node["score"] = round(score(node, current), 4)
-        if node["type"] == "insight" and not node.get("pinned") and not node.get("archived"):
+        if node["type"] == "insight" and not protected(node, tick) and not node.get("archived"):
             idle = current - max(int(node.get("last_seq", 0)), int(node.get("restored_seq", -1)))
             wrong = int(node.get("wrong", 0))
             if wrong >= 2 and wrong > int(node.get("useful", 0)) + int(node.get("cited_done", 0)):
@@ -1074,7 +1187,7 @@ def refine(graph, repo=None):
 
     # 5. Bound size: drop the weakest unconnected files and archived insights.
     linked = {end for edge in graph["edges"].values() for end in (edge["src"], edge["dst"])}
-    orphans = [key for key, node in nodes.items() if key not in linked and not node.get("pinned") and (
+    orphans = [key for key, node in nodes.items() if key not in linked and not protected(node, tick) and (
         node["type"] == "blocker" or node["type"] == "file" and not node.get("base"))]
     report["pruned_orphans"] = len(orphans)
     deleted = [key for key in orphans if nodes[key].get("stale")]
@@ -1083,7 +1196,7 @@ def refine(graph, repo=None):
                  op="orphaned")
     for kind, limit, counter in (("file", MAX_FILES, "pruned_files"), ("insight", MAX_INSIGHTS, None),
                                  ("blocker", MAX_BLOCKERS, None)):
-        group = sorted((node for node in nodes.values() if node["type"] == kind and not node.get("pinned")),
+        group = sorted((node for node in nodes.values() if node["type"] == kind and not protected(node, tick)),
                        key=lambda node: (not node.get("archived"), node["score"], node["id"]))
         excess = [node["id"] for node in group[:max(0, len(group) - limit)]]
         remove_nodes(graph, excess, reason=f"weakest {kind} over the {limit}-node bound", op="capped")
@@ -1460,6 +1573,11 @@ def print_context(result):
     for row in result["files"]:
         lines.append(f"{row['file']}: {row['done']}/{row['attempts']} past attempts verified"
                      + (" (file no longer tracked)" if row.get("stale") else ""))
+    known = [seed[len("file:"):] for seed in result.get("seeds", []) if seed.startswith("file:")]
+    unmeasured = [path for path in known if path not in {row["file"] for row in result["files"]}]
+    if unmeasured:
+        lines.append("Known files here without outcome statistics yet: " + ", ".join(unmeasured[:8])
+                     + (f" and {len(unmeasured) - 8} more" if len(unmeasured) > 8 else ""))
     for title, key, render in (
             ("Knowledge", "insights", lambda n: f"[{n['id']}] {n.get('kind', '')}: {n.get('summary', n['label'])}"),
             ("Past tasks here", "past_tasks", lambda n: f"[{n.get('status')}] {n['label']}" + (f" - {n['outcome_note']}" if n.get("outcome_note") else "")),
@@ -1508,9 +1626,30 @@ def history(repo, limit=30, offset=0, types=None, query=None, include_restored=F
         return {"total": total, "rows": [history_view(row) for row in rows]}
 
 
+def tabular(value):
+    """Give every array of objects in a result one key set, so TOON prints it as a table."""
+    if isinstance(value, list):
+        items = [tabular(item) for item in value]
+        return toon.uniform(items) if items and all(isinstance(item, dict) for item in items) else items
+    if isinstance(value, dict):
+        return {key: tabular(item) for key, item in value.items()}
+    return value
+
+
+def render_result(result, fmt="toon"):
+    """CLI output for the agent: text stays text; structures print as TOON (or JSON)."""
+    if isinstance(result, str):
+        return result
+    if fmt == "json":
+        return json.dumps(result, indent=2)
+    return toon.dumps(tabular(result))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", required=True)
+    parser.add_argument("--format", choices=("toon", "json"), default=os.environ.get("IMPROVE_FORMAT", "toon"),
+                        help="structured output format (default toon; IMPROVE_FORMAT overrides)")
     sub = parser.add_subparsers(dest="action", required=True)
     sync_parser = sub.add_parser("sync", help="ingest the current run (and archived runs on first use)")
     sync_parser.add_argument("--history", action="store_true", help="re-ingest every archived run")
@@ -1525,7 +1664,8 @@ def main(argv=None):
     ctx.add_argument("--area")
     ctx.add_argument("--text")
     ctx.add_argument("--limit", type=int, default=8)
-    ctx.add_argument("--json", action="store_true")
+    ctx.add_argument("--json", action="store_true", help="structured JSON instead of the text brief")
+    ctx.add_argument("--toon", action="store_true", help="structured TOON instead of the text brief")
     find = sub.add_parser("search", help="rank nodes by words")
     find.add_argument("text")
     find.add_argument("--type", action="append", choices=TYPES)
@@ -1558,6 +1698,7 @@ def main(argv=None):
     past.add_argument("--query")
     past.add_argument("--id")
     past.add_argument("--limit", type=int, default=30)
+    past.add_argument("--offset", type=int, default=0, help="skip this many newest rows (paging)")
     past.add_argument("--all", action="store_true", help="include removals that were already restored")
     back = sub.add_parser("restore", help="bring a removed node back with its links")
     back.add_argument("id")
@@ -1605,13 +1746,15 @@ def main(argv=None):
                 else:
                     result = reject_link(graph, args.src, args.rel, args.dst, by="agent", reason=args.reason)
         elif args.action == "history":
-            result = history(repo, args.limit, 0, args.type, args.query, args.all, args.id)
+            result = history(repo, args.limit, max(0, args.offset), args.type, args.query, args.all, args.id)
         elif args.action in ("context", "search", "node"):
             with reading(repo) as graph:
                 if args.action == "context":
                     load_context(graph, args.files, args.area, repo, args.text)
                     result = context(graph, args.files, args.area, args.text, args.limit, repo)
-                    if not args.json:
+                    if args.json:
+                        args.format = "json"
+                    elif not args.toon:
                         result = print_context(result)
                 elif args.action == "search":
                     load_search(graph, args.text)
@@ -1631,8 +1774,15 @@ def main(argv=None):
                 result = [proposal_view(graph, row) for row in graph["dream"]["proposals"]] or "No proposals."
             else:
                 result = summary(graph)
-        print(result if isinstance(result, str) else json.dumps(result, indent=2))
+        print(render_result(result, args.format))
         return 0
+    except GraphBusy as exc:
+        print(f"improve-graph: {exc}", file=sys.stderr)
+        return 3
+    except sqlite3.OperationalError as exc:
+        retryable = any(word in str(exc).lower() for word in ("locked", "busy"))
+        print(f"improve-graph: {exc}" + ("; retry later" if retryable else ""), file=sys.stderr)
+        return 3 if retryable else 2
     except (StateError, OSError, ValueError, sqlite3.Error) as exc:
         print(f"improve-graph: {exc}", file=sys.stderr)
         return 2

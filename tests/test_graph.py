@@ -11,9 +11,12 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
+import support  # noqa: E402,F401  (git isolation)
 
 import improve_board as board  # noqa: E402
 import improve_graph as graph  # noqa: E402
+import improve_toon as toon  # noqa: E402
 import improve_learning as learning  # noqa: E402
 
 
@@ -234,15 +237,15 @@ class GraphEngineTests(GraphFixture):
         self.assertEqual(run("sync", "--refine").returncode, 0)
         note = run("note", "--kind", "pitfall", "--text", "Cart tests need the iOS 18 simulator", "--about", "src/ui/cart.tsx")
         self.assertEqual(note.returncode, 0, note.stderr)
-        node_id = json.loads(note.stdout)["id"]
+        node_id = toon.loads(note.stdout)["id"]
         self.assertIn(node_id, run("context", "--files", "src/ui/cart.tsx").stdout)
         self.assertIn("Cart empty state", run("context", "--files", "src/ui/cart.tsx").stdout)
-        self.assertEqual(json.loads(run("rate", node_id, "useful").stdout)["useful"], 1)
+        self.assertEqual(toon.loads(run("rate", node_id, "useful").stdout)["useful"], 1)
         self.assertEqual(run("link", node_id, "fixes", "blocker:nothing").returncode, 2)
         self.assertEqual(run("link", node_id, "relates_to", "area:ui").returncode, 0)
         self.assertIn(node_id, run("brief").stdout)
-        self.assertIn(node_id, [row["id"] for row in json.loads(run("search", "simulator").stdout)])
-        self.assertEqual(json.loads(run("stats").stdout)["runs"], 2)
+        self.assertIn(node_id, [row["id"] for row in toon.loads(run("search", "simulator").stdout)])
+        self.assertEqual(toon.loads(run("stats").stdout)["runs"], 2)
         self.assertIn("improve-graph:", run("node", "insight:missing").stderr)
 
 

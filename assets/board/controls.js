@@ -17,8 +17,15 @@ const requestLabels = {
   decision: "Proposal decision",
   note: "Task note",
   focus: "Focus areas",
+  retry: "Retry task",
+  withdraw: "Withdraw request",
 };
 const REQUEST_PAGE_SIZE = 20;
+
+// Request types the paired skill runtime accepts; retry/withdraw need a newer runtime.
+function supportsRequestType(kind) {
+  return (snapshot?.controls?.request_types || []).includes(kind);
+}
 
 async function boardJSON(path, options = {}) {
   const controller = new AbortController();
@@ -29,13 +36,14 @@ async function boardJSON(path, options = {}) {
       cache: "no-store",
       signal: controller.signal,
     });
-    const data = await response.json();
+    const data = await responseJSON(response);
     if (!response.ok) {
       if (response.status === 403) controlsToken = null;
       const error = new Error(
         data.error || "The board could not save this action.",
       );
       error.status = response.status;
+      error.code = data.code || null;
       throw error;
     }
     return data;
@@ -100,6 +108,7 @@ function renderControls() {
     "reject-proposal",
     "follow-up-task",
     "add-task-note",
+    "retry-task",
   ])
     $(id).disabled = !connected || sending || !controls.requests_available;
   $("open-report").disabled =
@@ -118,7 +127,7 @@ function renderControls() {
               ? "Current run"
               : "Requests available";
   $("control-note").textContent = !connected
-    ? "Reconnecting… Your saved requests and task history are preserved."
+    ? staleReason()
     : controls.reason ||
       "Restart the board service to load its updated controls.";
   const pending = (snapshot?.requests || []).filter(
@@ -178,7 +187,10 @@ function renderRequests() {
   const taskMap = new Map(snapshot.tasks.map((task) => [task.key, task]));
   const linkedTasks = (row) =>
     (row.task_keys || []).map((key) => taskMap.get(key)).filter(Boolean);
-  const signature = JSON.stringify(page.map((row) => [row, linkedTasks(row)]));
+  const canWithdraw = supportsRequestType("withdraw");
+  const withdrawable = (row) =>
+    canWithdraw && row.status === "pending" && row.source_run === "current" && row.type !== "withdraw";
+  const signature = JSON.stringify([canWithdraw, page.map((row) => [row, linkedTasks(row)])]);
   if (signature === requestSignature) return;
   requestSignature = signature;
   const opened = new Set(
@@ -217,9 +229,9 @@ function renderRequests() {
         element(
           "span",
           "request-badge " + row.status,
-          { pending: "Pending", applied: "Applied", declined: "Declined" }[
+          { pending: "Pending", applied: "Applied", declined: "Declined", withdrawn: "Withdrawn" }[
             row.status
-          ],
+          ] || row.status,
         ),
       );
       const body = element("div", "request-body");
@@ -259,6 +271,13 @@ function renderRequests() {
         }
         body.append(links);
       }
+      if (withdrawable(row)) {
+        const withdraw = element("button", "withdraw-request", "Withdraw");
+        withdraw.type = "button";
+        withdraw.title = "Ask the skill to drop this request before acting on it";
+        withdraw.addEventListener("click", () => openRequest("withdraw", null, null, null, row));
+        body.append(withdraw);
+      }
       item.append(summary, body);
       return item;
     }),
@@ -270,13 +289,15 @@ function renderRequests() {
       .focus({ preventScroll: true });
 }
 
-function openRequest(kind, task = null, decision = null, restored = null) {
+// `target` is the pending request a withdrawal refers to; every other kind targets a task.
+function openRequest(kind, task = null, decision = null, restored = null, target = null) {
   requestDraft = {
     type: kind,
     run_id: snapshot.current.control_id || null,
     task_key: kind === "task" ? undefined : task?.key,
     decision,
   };
+  if (kind === "withdraw") requestDraft.target_id = target?.id;
   requestRetry = null;
   $("request-form").reset();
   $("request-error").hidden = true;
@@ -287,10 +308,16 @@ function openRequest(kind, task = null, decision = null, restored = null) {
         : "Decline proposal"
       : requestLabels[kind];
   $("request-context").textContent = task
-    ? task.title
-    : kind === "guidance"
-      ? "Tell the skill what to focus on, change, or avoid. It will review your guidance before choosing its next task."
-      : "Describe a result you want. The skill will turn this request into a task with acceptance checks.";
+    ? kind === "retry"
+      ? "Ask the skill to re-queue “" + task.title + "” at its next checkpoint. Say what changed, if anything."
+      : task.title
+    : kind === "withdraw"
+      ? "Withdraw “" +
+        (target?.title || target?.task_title || target?.text || requestLabels[target?.type] || "this request") +
+        "” before the skill acts on it. Optionally say why."
+      : kind === "guidance"
+        ? "Tell the skill what to focus on, change, or avoid. It will review your guidance before choosing its next task."
+        : "Describe a result you want. The skill will turn this request into a task with acceptance checks.";
   draftContext = {
     text: $("request-context").textContent,
     followup: kind === "task" ? task?.key : null,
@@ -420,6 +447,8 @@ function taskControls(task) {
   $("task-controls").hidden = !editable;
   $("approve-proposal").hidden = $("reject-proposal").hidden =
     task.status !== "proposed";
+  $("retry-task").hidden = !(task.status === "blocked" && supportsRequestType("retry"));
+  $("retry-task").onclick = () => openRequest("retry", task);
   $("change-priority").onclick = () => openRequest("priority", task);
   $("approve-proposal").onclick = () =>
     openRequest("decision", task, "approve");
@@ -515,6 +544,7 @@ function initControls() {
       button.addEventListener("click", () => $(button.dataset.close).close()),
     );
   $("open-report").addEventListener("click", () => {
+    rememberOpener($("open-report"));
     const reports = snapshot.runs.filter((run) => run.report_available);
     options(
       $("report-run"),
@@ -530,6 +560,7 @@ function initControls() {
   $("report-run").addEventListener("change", loadReport);
   $("report-dialog").addEventListener("close", () => {
     reportLoad++;
+    restoreOpenerFocus();
   });
   $("download-report").addEventListener("click", () => {
     if (!loadedReportRun) return;

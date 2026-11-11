@@ -16,7 +16,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from graph_support import LongSession, archive, check_invariants, environment, load, make_repo, restore_environment, write_ledger, write_run  # noqa: E402
+from graph_support import budget, LongSession, archive, check_invariants, environment, load, make_repo, restore_environment, write_ledger, write_run  # noqa: E402
 import improve_board as board  # noqa: E402
 import improve_graph as graph  # noqa: E402
 
@@ -93,7 +93,7 @@ class GraphReadEndpointTests(LargeBoardGraph):
         self.assertLessEqual(len(view["nodes"]), 250)
         self.assertTrue(view["truncated"])
         self.assertGreater(view["total_nodes"], 2000)
-        self.assertLess(seconds, 1.0)
+        self.assertLess(seconds, budget(1.0))
         self.assertLess(size, 1024 * 1024)
         ids = {node["id"] for node in view["nodes"]}
         self.assertTrue(all(edge["src"] in ids and edge["dst"] in ids for edge in view["edges"]))
@@ -109,7 +109,7 @@ class GraphReadEndpointTests(LargeBoardGraph):
         focus, seconds, size = self.get("/api/graph", focus="area:ui", depth=3, limit=800)
         self.assertEqual(focus["focus"], "area:ui")
         self.assertLessEqual(len(focus["nodes"]), 800)
-        self.assertLess(seconds, 1.5)
+        self.assertLess(seconds, budget(1.5))
         self.assertLess(size, 3 * 1024 * 1024)
         hits = self.get("/api/graph", q="runner offline")[0]
         self.assertTrue(any(node["type"] == "blocker" for node in hits["nodes"]))
@@ -132,7 +132,7 @@ class GraphReadEndpointTests(LargeBoardGraph):
         detail, seconds, _ = self.get("/api/graph/node", id="area:ui")
         self.assertEqual(len(detail["links"]), 200)
         self.assertGreater(detail["total_links"], 200)
-        self.assertLess(seconds, 1.0)
+        self.assertLess(seconds, budget(1.0))
         for note in (self.notes[0], self.notes[-1]):
             self.assertEqual(self.get("/api/graph/node", id=note)[0]["node"]["id"], note)
 
@@ -140,7 +140,7 @@ class GraphReadEndpointTests(LargeBoardGraph):
         files = self.files[:25]
         context, seconds, _ = self.get("/api/graph/context", file=files, area="ui", text="cache key",
                                        exclude="task:live:L0")
-        self.assertLess(seconds, 1.0)
+        self.assertLess(seconds, budget(1.0))
         self.assertLessEqual(len([seed for seed in context["seeds"] if seed.startswith("file:")]), 20)
         self.assertNotIn("task:live:L0", [task["id"] for task in context["past_tasks"]])
         self.assertTrue(context["insights"])
@@ -158,7 +158,7 @@ class GraphReadEndpointTests(LargeBoardGraph):
                                                   "last_dream", "tick", "inferred"},
                          "the polled snapshot carries counters only; the graph itself is fetched on demand")
         self.assertIsInstance(snapshot["graph"]["nodes"], int)
-        self.assertLess(seconds, 3.0)
+        self.assertLess(seconds, budget(3.0))
 
 
 class GraphCurationTests(LargeBoardGraph):
@@ -243,7 +243,7 @@ class GraphCurationTests(LargeBoardGraph):
         token = self.token()
         started = time.perf_counter()
         result = self.post({"action": "refine", "request_id": str(uuid.uuid4())}, token)
-        self.assertLess(time.perf_counter() - started, 5.0)
+        self.assertLess(time.perf_counter() - started, budget(5.0))
         self.assertIn("Refined", result["message"])
         for _ in range(60):
             self.note(f"Bulk note {uuid.uuid4().hex} keeps the op log bounded", token=token)
@@ -308,7 +308,7 @@ class DreamEndpointTests(LargeBoardGraph):
         token = self.token()
         started = time.perf_counter()
         first = self.post(request, token)
-        self.assertLess(time.perf_counter() - started, 10)
+        self.assertLess(time.perf_counter() - started, budget(10))
         self.assertEqual(self.post(request, token), first)
         self.assertEqual(load(self.repo)["tick"], tick + 1)
         self.assertIn("Dreamed:", first["message"])

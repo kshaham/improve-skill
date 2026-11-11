@@ -28,9 +28,9 @@ across runs), refines, and then, deterministically:
 
 import time
 
-from improve_graph import (DREAM_RELATIONS, FINISHED, MERGE_SIMILARITY, GraphError, add_insight, clean, edge_key,
-                           fetch_types, hotspots, merge_into, refine, remove_nodes, resolve, short_hash, stamp,
-                           tokens, epoch, StateError)
+from improve_graph import (DREAM_RELATIONS, FINISHED, MERGE_SIMILARITY, PROTECTED_SOURCES, GraphError, add_insight,
+                           clean, due, edge_key, fetch_types, hotspots, merge_into, refine, remove_nodes, resolve,
+                           short_hash, stamp, tokens)
 
 DORMANT_TICKS = 8
 FORGET_TICKS = 8
@@ -56,7 +56,6 @@ MAX_DREAM_LOG = 30
 MAX_DROPPED = 200
 MAX_PROPOSALS = 8
 CLUSTER_MAX = 6
-PROTECTED_SOURCES = ("user", "learning")
 UNDIRECTED = ("co_cited", "similar_to")
 
 
@@ -66,12 +65,8 @@ def outcome(status):
 
 
 def dream_due(graph, interval):
-    if interval is None or interval <= 0 or not graph["nodes"]:
-        return False
-    try:
-        return epoch(graph["dream"].get("last_at")) + interval <= epoch(stamp())
-    except StateError:
-        return True
+    """True when the last dream (or, before any, the first ingest) is older than `interval` seconds."""
+    return due(graph["dream"], interval, bool(graph["nodes"]))
 
 
 class Evidence:

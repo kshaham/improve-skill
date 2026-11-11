@@ -10,6 +10,7 @@
     <title>Improve · Task board</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/board.css" />
+    <script src="/theme.js" defer></script>
     <script src="/controls.js" defer></script>
     <script src="/workflow.js" defer></script>
     <script src="/drafts.js" defer></script>
@@ -22,6 +23,7 @@
     <script src="/overview.js" defer></script>
     <script src="/graph-layout.js" defer></script>
     <script src="/graph.js" defer></script>
+    <script src="/health.js" defer></script>
     <script src="/board.js" defer></script>
   </head>
   <body>
@@ -102,7 +104,23 @@
           <strong>Current run</strong><span id="run-meta"></span>
         </div>
         <div id="run-checkpoint"></div>
+        <div class="health-ages">
+          <span id="health-heartbeat" class="health-age" hidden></span
+          ><span id="health-cycle" class="health-age" hidden></span>
+        </div>
+        <ul id="health-counters" class="health-counters" aria-label="Supervisor counters"></ul>
+        <div id="cycle-timeline" class="cycle-timeline" role="img" aria-label="Recent cycles" hidden></div>
         <div id="run-notice" role="status" hidden></div>
+        <div class="health-actions">
+          <button id="open-journal" type="button">Journal</button
+          ><button id="open-log" type="button">Daemon log</button
+          ><button id="open-quarantine" type="button">Quarantine</button
+          ><button id="notify-toggle" type="button" aria-pressed="false">Notify me</button>
+        </div>
+        <details id="notice-log" class="notice-log" hidden>
+          <summary>Events <span id="notice-count" class="view-count">0</span></summary>
+          <ul id="notice-list"></ul>
+        </details>
       </section>
       <section class="control-panel" aria-label="Control the current run">
         <div class="control-heading">
@@ -405,6 +423,7 @@
               <option value="pending">Pending</option>
               <option value="applied">Applied</option>
               <option value="declined">Declined</option>
+              <option value="withdrawn">Withdrawn</option>
             </select></label
           >
         </div>
@@ -582,15 +601,18 @@
       <footer>
         <span>Local to this computer · Changes are saved in your project</span
         ><button id="layout-toggle" class="link-button" type="button">Switch to mobile view</button
+        ><button id="theme-toggle" class="link-button" type="button">Theme: auto</button
         ><span id="updated">Waiting for data</span>
       </footer>
     </main>
     <nav id="mobile-nav" class="mobile-nav" aria-label="Board sections">
       <button type="button" data-view="board"><span class="nav-glyph" aria-hidden="true">▥</span>Board</button>
       <button type="button" data-view="history"><span class="nav-glyph" aria-hidden="true">✓</span>History</button>
+      <button type="button" data-view="overview"><span class="nav-glyph" aria-hidden="true">◫</span>Overview</button>
       <button id="nav-steer" class="nav-steer" type="button" aria-label="Steer by voice"><span class="mic-icon" aria-hidden="true"></span></button>
-      <button type="button" data-view="focus"><span class="nav-glyph" aria-hidden="true">◎</span>Focus</button>
       <button type="button" data-view="requests"><span class="nav-glyph" aria-hidden="true">✉</span>Requests<span id="nav-requests-count" class="nav-badge" hidden></span></button>
+      <button type="button" data-view="graph"><span class="nav-glyph" aria-hidden="true">⌘</span>Knowledge</button>
+      <button type="button" data-view="focus"><span class="nav-glyph" aria-hidden="true">◎</span>Focus</button>
     </nav>
     <dialog id="voice-dialog" class="voice-dialog" aria-labelledby="voice-title">
       <div class="dialog-top">
@@ -627,6 +649,7 @@
         </button>
       </div>
       <h2 id="detail-title"></h2>
+      <p id="detail-blocked" class="detail-blocked" role="note" hidden></p>
       <div class="task-actions">
         <button id="add-task-note" type="button">Add note</button>
         <button id="copy-task-link" type="button">Copy task link</button
@@ -643,6 +666,7 @@
         hidden
       >
         <button id="change-priority" type="button">Change priority</button
+        ><button id="retry-task" type="button" hidden>Retry task</button
         ><button id="approve-proposal" type="button">Approve proposal</button
         ><button id="reject-proposal" class="danger" type="button">
           Decline proposal
@@ -805,6 +829,24 @@
       <pre id="report-text"></pre>
       <div class="dialog-actions">
         <button id="download-report" type="button">Download report</button>
+      </div>
+    </dialog>
+    <dialog id="text-dialog" aria-labelledby="text-dialog-title">
+      <div class="dialog-top">
+        <strong id="text-dialog-title">Run journal</strong
+        ><button
+          type="button"
+          data-close="text-dialog"
+          aria-label="Close this view"
+        >
+          ✕
+        </button>
+      </div>
+      <p id="text-dialog-note" class="dialog-context"></p>
+      <pre id="text-dialog-body" class="text-view"></pre>
+      <div id="text-dialog-list" class="quarantine-list" hidden></div>
+      <div class="dialog-actions">
+        <button id="text-dialog-reload" type="button">Reload</button>
       </div>
     </dialog>
   </body>

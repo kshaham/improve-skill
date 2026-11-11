@@ -15,10 +15,11 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from graph_support import (ROOT, World, check_invariants, environment, load, make_repo, restore_environment,  # noqa: E402
-                           untrack, write_ledger, write_run)
+from graph_support import (ROOT, World, budget, check_invariants, environment, load, make_repo,  # noqa: E402
+                           restore_environment, slow, untrack, write_ledger, write_run)
 import improve_dream as dreaming  # noqa: E402
 import improve_graph as graph  # noqa: E402
+import improve_toon as toon  # noqa: E402
 import improve_learning as learning  # noqa: E402
 
 SOAK_CYCLES = int(os.environ.get("IMPROVE_GRAPH_DREAM_SOAK_CYCLES", "432"))
@@ -534,11 +535,11 @@ class RestoreAndRecallTests(DreamCase):
         result = subprocess.run([sys.executable, str(ROOT / "scripts/improve_graph.py"), "--repo", str(self.repo),
                                  "restore", tip, "--reason", "the CDN bug came back"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)["restored"]["reason"], "the CDN bug came back")
+        self.assertEqual(toon.loads(result.stdout)["restored"]["reason"], "the CDN bug came back")
         self.assertIn(graph.edge_key(tip, "about", "file:ui/x.ts"), load(self.repo)["edges"])
         listing = subprocess.run([sys.executable, str(ROOT / "scripts/improve_graph.py"), "--repo", str(self.repo),
                                   "history", "--all", "--query", "cdn"], capture_output=True, text=True)
-        self.assertEqual(json.loads(listing.stdout)["rows"][0]["id"], tip)
+        self.assertEqual(toon.loads(listing.stdout)["rows"][0]["id"], tip)
 
 
 class AssessAndConsolidateTests(DreamCase):
@@ -598,6 +599,7 @@ class AssessAndConsolidateTests(DreamCase):
         self.assertEqual(load(self.repo)["nodes"][summary["id"]]["cited_done"], 1, "old ids credit the consolidated note")
 
 
+@slow
 class SeventyTwoHourDreamTests(unittest.TestCase):
     """A 72-hour run in a world with a known truth, checked at every dream."""
 

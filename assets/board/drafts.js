@@ -8,7 +8,7 @@ function draftKey(descriptor = requestDraft, context = draftContext) {
   return JSON.stringify([
     descriptor.run_id,
     descriptor.type,
-    descriptor.task_key || descriptor.task_keys || "",
+    descriptor.task_key || descriptor.task_keys || descriptor.target_id || "",
     descriptor.decision || "",
     context.followup || "",
   ]);

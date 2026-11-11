@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import uuid
 
 # Helpers import this module by name even when its CLI is executed as a script.
@@ -25,12 +26,14 @@ import uuid
 if __name__ == "__main__":
     sys.modules.setdefault("improve_runtime", sys.modules[__name__])
 
-VERSION = "1.14.0"
+VERSION = "1.15.0"
 HOST_MARKERS = {"codex": ("CODEX_THREAD_ID", "CODEX_CI"),
                 "claude": ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
 SANDBOX_MODES = ("read-only", "workspace-write", "danger-full-access")
 INTAKE_KEYS = ("outcomes", "features", "ui", "assets", "performance", "bugs",
                "security", "quality", "boundaries", "success")
+# A clock stepped backwards by NTP or DST must not read as a run from the future.
+CLOCK_SKEW_SECONDS = 300
 LIMIT_PATTERN = re.compile(r"hit your (usage )?limit|usage limit reached|rate_limit_error|"
                            r"429 too many requests|out of extra usage", re.I)
 
@@ -146,12 +149,12 @@ def timing(run, now=None):
     start, deadline = epoch(run.get("started_at")), epoch(run.get("deadline"))
     if deadline <= start:
         raise StateError("deadline must be later than started_at")
-    if start > now:
+    if start > now + CLOCK_SKEW_SECONDS:
         raise StateError("started_at is in the future; check the system clock")
     last = run.get("last_report_hour", 0)
     if type(last) is not int or last < 0:
         raise StateError("last_report_hour must be a nonnegative integer")
-    elapsed, remaining, total = now - start, deadline - now, deadline - start
+    elapsed, remaining, total = max(0, now - start), deadline - now, deadline - start
     return dict(now=stamp(now), started_at=run["started_at"], deadline=run["deadline"],
                 elapsed_seconds=elapsed, remaining_seconds=remaining, total_seconds=total,
                 hour=min(elapsed // 3600 + 1, math.ceil(total / 3600)),
@@ -253,16 +256,17 @@ def evidence_rows(path):
                "ended_at", "placed_at", "generation", "next_scope", "id", "title", "status",
                "user_priority", "focus_priority", "board_request_id", "user_notes"}
     fingerprints = set()
-    with path.open() as stream:
-        for number, line in enumerate(stream, 1):
+    # Damaged lines are repaired between cycles; here they simply carry no evidence.
+    with path.open(errors="replace") as stream:
+        for line in stream:
             if not line.strip():
                 continue
             try:
                 row = json.loads(line)
-            except ValueError as exc:
-                raise StateError(f"invalid JSON in {path.name}:{number}") from exc
+            except ValueError:
+                continue
             if not isinstance(row, dict):
-                raise StateError(f"{path.name}:{number} must contain an object")
+                continue
             normalized = {k: v for k, v in row.items() if k not in ignored}
             if isinstance(normalized.get("pieces"), list):
                 normalized["pieces"] = [
@@ -273,12 +277,26 @@ def evidence_rows(path):
     return fingerprints
 
 
+def coerce_count(value):
+    """A nonnegative integer from what an agent wrote, or None when nothing sensible can be read."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 0:
+        return value
+    if isinstance(value, float) and value.is_integer() and value >= 0:
+        return int(value)
+    if isinstance(value, str) and re.fullmatch(r"\d+", value.strip()):
+        return int(value.strip())
+    return None
+
+
 def snapshot(repo):
     state = repo / ".improve"
     run = read_json(state / "run.json") if (state / "run.json").exists() else {}
-    cycle = run.get("cycle", 0)
-    if type(cycle) is not int or cycle < 0:
-        raise StateError("cycle must be a nonnegative integer")
+    # A malformed cycle is repaired between cycles; here it simply counts as no checkpoint.
+    cycle = coerce_count(run.get("cycle", 0))
+    if cycle is None:
+        cycle = 0
     setup = {key: run[key] for key in ("preflight_complete", "gates", "baseline_commit",
              "focus", "journeys", "detectors", "scanners") if key in run}
     return dict(cycle=cycle, head=git(repo, "rev-parse", "HEAD"), setup=setup,
@@ -348,6 +366,9 @@ class Supervisor:
         self.stop_path = self.state / "stop.request"
         self.stopping = False
         self.last_report_ok = False
+        self.failures = 0
+        self.failure_kinds = []
+        self.next_wait = None
         self.timeout = env_integer("IMPROVE_CYCLE_TIMEOUT", 14400 if args.skill == "improve-max" else 3600)
         self.gap = env_integer("IMPROVE_CYCLE_GAP", 2, 0)
         self.too_fast = env_integer("IMPROVE_TOO_FAST", 25, 0)
@@ -355,6 +376,7 @@ class Supervisor:
         self.limit_wait = env_integer("IMPROVE_LIMIT_WAIT", 900)
         self.limit_cap = env_integer("IMPROVE_LIMIT_WAIT_CAP", 3600)
         self.limit_budget = env_integer("IMPROVE_LIMIT_WAIT_BUDGET", 14400)
+        self.limit_budget_explicit = os.environ.get("IMPROVE_LIMIT_WAIT_BUDGET") is not None
         self.final_timeout = env_integer("IMPROVE_FINAL_TIMEOUT", 300)
         self.finish_grace = env_integer("IMPROVE_FINISH_GRACE", 120, 0)
         # Resilience: work around failures instead of ending the run.
@@ -363,13 +385,31 @@ class Supervisor:
         self.max_worker_halts = env_integer("IMPROVE_MAX_WORKER_HALTS", 2, 0)
         self.cooldown = env_integer("IMPROVE_RECOVERY_COOLDOWN", 60, 0)
         self.cooldown_cap = env_integer("IMPROVE_RECOVERY_COOLDOWN_CAP", 900, 0)
+        # Parking: when every breaker is exhausted, wait and try again instead of ending a
+        # run that still has time. IMPROVE_PARK=0 restores the terminal halt.
+        self.park_enabled = env_integer("IMPROVE_PARK", 1, 0) > 0
+        self.park_wait = env_integer("IMPROVE_PARK_WAIT", 900, 1)
+        self.park_cap = env_integer("IMPROVE_PARK_WAIT_CAP", 3600, 1)
+        self.max_crashes = env_integer("IMPROVE_MAX_CRASHES", 5, 1)
+        self.idle_after = env_integer("IMPROVE_IDLE_AFTER", 6, 1)
+        self.idle_gap_cap = env_integer("IMPROVE_IDLE_GAP_CAP", 900, 0)
+        self.log_max_bytes = env_integer("IMPROVE_LOG_MAX_BYTES", 50 * 1024 * 1024, 65536)
+        self.min_free_mb = env_integer("IMPROVE_MIN_FREE_MB", 200, 0)
         self.graph_refine_interval = 60 * env_integer("IMPROVE_GRAPH_REFINE_MINUTES", 30, 0)
         self.graph_dream_interval = 60 * env_integer("IMPROVE_GRAPH_DREAM_MINUTES", 180, 0)
+
+    @property
+    def strict(self):
+        """Legacy contract: with recoveries disabled, state errors halt instead of being worked around."""
+        return self.max_recoveries == 0
 
     def log(self, message):
         line = f"{stamp()} {message}"
         print(line, flush=True)
-        with (self.state / "daemon.log").open("a") as stream:
+        path = self.state / "daemon.log"
+        with contextlib.suppress(OSError):
+            rotate_log(path, self.log_max_bytes)
+        with path.open("a") as stream:
             stream.write(line + "\n")
 
     def journal(self, message):
@@ -388,6 +428,16 @@ class Supervisor:
         from improve_control import pause_requested
         return pause_requested(self.repo, self.control.get("run_id", self.control["started_at"]))
 
+    def pause_requested_quietly(self):
+        """For waits: a damaged pause file must not turn a cooldown into a crash."""
+        try:
+            return self.pause_requested()
+        except (StateError, OSError):
+            return False
+
+    def deadline_epoch(self):
+        return epoch(self.control["deadline"])
+
     def wait_while_paused(self):
         """Pause between clean cycles; the original wall-clock deadline still applies."""
         if not self.pause_requested():
@@ -396,17 +446,21 @@ class Supervisor:
         self.log("paused by user; original deadline unchanged")
         heartbeat = time.monotonic()
         while (self.pause_requested() and not self.stop_requested()
-               and time.time() < epoch(self.control["deadline"])):
+               and time.time() < self.deadline_epoch()):
             if time.monotonic() - heartbeat >= 5:
                 self.save_control(phase="paused")
                 heartbeat = time.monotonic()
-            time.sleep(0.1)
+            time.sleep(0.25)
         self.save_control(phase="between-cycles")
         return True
 
     def prepare(self):
         run = read_json(self.run_path) if self.run_path.exists() else None
         control = read_json(self.control_path) if self.control_path.exists() else None
+        if run is not None:
+            from improve_resilience import repair_run
+            if repair_run(run):
+                atomic_json(self.run_path, run)
         recorded = control or run
         report_only = self.args.finalize or (recorded and timing(recorded)["remaining_seconds"] <= 0)
         intake_path = self.state / "intake.json"
@@ -447,9 +501,13 @@ class Supervisor:
             self.control = dict(started_at=stamp(started), deadline=stamp(started + duration(self.args.duration)))
         self.control.update(skill=self.args.skill, args=self.args.args, repo=str(self.repo),
                             engine=self.engine, codex_sandbox=self.codex_sandbox, model=self.model,
-                            board_control_version=1)
+                            board_control_version=1, skill_root=str(Path(__file__).resolve().parent.parent),
+                            cycle_timeout_seconds=self.timeout, finish_grace_seconds=self.finish_grace)
         self.control.setdefault("run_id", uuid.uuid4().hex)
-        timing(self.control)
+        info = timing(self.control)
+        if not self.limit_budget_explicit:
+            # A multi-day run crosses several usage windows; budget waits in proportion.
+            self.limit_budget = max(self.limit_budget, info["total_seconds"] // 3)
         for key in ("consecutive_failures", "next_limit_wait", "limit_waited_seconds"):
             value = self.control.get(key, 0)
             if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
@@ -458,7 +516,7 @@ class Supervisor:
         wait_start = self.control.get("limit_wait_started_at")
         if retry is not None:
             retry_epoch = epoch(retry)
-            if retry_epoch > epoch(self.control["deadline"]):
+            if retry_epoch > self.deadline_epoch():
                 raise StateError("retry_at cannot extend beyond the original deadline")
             if wait_start is not None and epoch(wait_start) > retry_epoch:
                 raise StateError("limit_wait_started_at cannot be later than retry_at")
@@ -492,10 +550,28 @@ class Supervisor:
         self.control[key] = (value if type(value) is int and value >= 0 else 0) + 1
         return self.control[key]
 
+    def settle_stale_child(self):
+        """A daemon that died mid-cycle leaves its agent running; stop it before relaunching."""
+        from improve_resilience import stale_child, terminate_group
+        pid = stale_child(self.control)
+        if pid is None:
+            if self.control.get("child_pid") is not None:
+                self.save_control(child_pid=None)
+            return
+        self.log(f"a previous cycle (pid {pid}) is still running; stopping it before launching another")
+        stopped = terminate_group(pid, grace=min(self.finish_grace, 30) or 5)
+        self.journal(f"Stopped a stale agent process (pid {pid}) left by an earlier daemon"
+                     + ("" if stopped else "; it did not exit and may still hold the tree")
+                     + ". Its uncommitted edits, if any, are quarantined before the next cycle.")
+        self.save_control(child_pid=None, phase="between-cycles")
+
     def recover(self, reason):
-        """Block the stuck item, steer to other work, cool down, and keep the run going."""
+        """Steer to other work, cool down, and keep the run going. The task in flight is
+        blocked only when the failures were about the work itself; a CLI crash or a limit
+        says nothing about the task."""
         from improve_resilience import block_active_item, suggest_lane
-        task = block_active_item(self.state, reason)
+        about_work = any(kind in ("no_evidence", "quarantine") for kind in self.failure_kinds) or not self.failure_kinds
+        task = block_active_item(self.state, reason) if about_work else None
         attempt = self.bump("recoveries")
         self.bump("recoveries_total")
         lane = suggest_lane(self.state, self.run_focus())
@@ -507,11 +583,32 @@ class Supervisor:
         self.save_control(consecutive_failures=0, last_error=correction)
         self.journal(correction)
         self.log(f"recovery {attempt}/{self.max_recoveries}: {reason}" + (f"; blocked {task}" if task else ""))
+        self.failure_kinds = []
         delay = min(self.cooldown * 2 ** (attempt - 1), self.cooldown_cap) if self.cooldown else 0
         if delay:
             self.save_control(phase="recovering")
             self.wait(delay)
             self.save_control(phase="between-cycles")
+
+    def park(self, reason):
+        """Every breaker is exhausted but the deadline has not passed: wait, reset, retry.
+        Returns False when parking is disabled and the caller must halt."""
+        if not self.park_enabled:
+            return False
+        attempt = self.bump("parks")
+        delay = min(self.park_wait * 2 ** (attempt - 1), self.park_cap)
+        until = min(int(time.time()) + delay, self.deadline_epoch())
+        message = (f"Parked ({attempt}): {reason}. Waiting until {stamp(until)} and then trying again; "
+                   "the deadline is unchanged. Set IMPROVE_PARK=0 to halt instead.")
+        self.save_control(phase="parked", park_until=stamp(until), child_pid=None, consecutive_failures=0,
+                          recoveries=0, worker_halts=0, crashes=0, limit_waited_seconds=0, retry_at=None,
+                          limit_wait_started_at=None, last_error=message)
+        self.failures, self.failure_kinds = 0, []
+        self.journal(message)
+        self.log(f"parked for {human(until - int(time.time()))}: {reason}")
+        self.wait(delay)
+        self.save_control(phase="between-cycles", park_until=None)
+        return True
 
     def soften_worker_halt(self, outcome):
         """A worker halt becomes a blocked task; only repeated halts end the run."""
@@ -529,36 +626,62 @@ class Supervisor:
         self.log(f"worker halt converted to a blocked task ({self.control['worker_halts']}/{self.max_worker_halts}): {reason}")
         return True
 
-    def quarantine_cycle(self, outcome):
-        """Save leftover edits to a private ref and restore a clean tree."""
+    def artifact_paths(self):
+        with contextlib.suppress(StateError, OSError, ValueError):
+            if self.run_path.exists():
+                value = read_json(self.run_path).get("artifact_paths")
+                if isinstance(value, list):
+                    return [item for item in value if isinstance(item, str)][:50]
+        return []
+
+    def quarantine_cycle(self, outcome, kind="tracked", between=False):
+        """Save leftover edits to a private ref and restore a clean tree. Edits and new
+        files block the task in flight; build artifacts alone are saved and cleaned
+        without blaming the task."""
         from improve_resilience import block_active_item, clear_worker_halt, quarantine_changes
         cycle = 0
         with contextlib.suppress(StateError, OSError, ValueError):
             cycle = read_json(self.run_path).get("cycle", 0) if self.run_path.exists() else 0
-        ref = quarantine_changes(self.repo, f"cycle-{cycle}")
+        label = f"cycle-{cycle}" + ("-artifacts" if kind == "artifacts" else "") + ("-between" if between else "")
+        ref = quarantine_changes(self.repo, label)
         self.bump("quarantines")
-        task = block_active_item(self.state, f"Cycle left uncommitted, unverified changes; saved to {ref} for review")
+        task = None
+        if kind != "artifacts":
+            task = block_active_item(self.state, f"Cycle left uncommitted, unverified changes; saved to {ref} for review")
         if outcome in ("completed", "target reached"):
             # Success claimed over unverified edits is not trusted.
             clear_worker_halt(self.state, outcome)
-        self.journal(f"Quarantined uncommitted cycle changes to {ref}"
-                     + (f"; task {task} blocked" if task else "") + ". Restore with: git checkout " + ref + " -- .")
-        self.log(f"quarantined uncommitted changes to {ref}")
+        what = "build artifacts (untracked output that is not ignored)" if kind == "artifacts" else "uncommitted cycle changes"
+        self.journal(f"Quarantined {what} to {ref}" + (f"; task {task} blocked" if task else "")
+                     + ". Restore with: git checkout " + ref + " -- .")
+        self.log(f"quarantined {what} to {ref}")
         return ref
 
     def save_control(self, **changes):
         self.control.update(changes, heartbeat_at=stamp())
         atomic_json(self.control_path, self.control)
 
+    def record_cycle(self, started_at, seconds, rc, advanced, outcome, limited):
+        rows = self.control.get("cycle_history") if isinstance(self.control.get("cycle_history"), list) else []
+        rows.append({"started_at": started_at, "seconds": round(seconds, 1), "rc": rc, "advanced": bool(advanced),
+                     "outcome": outcome, "limited": bool(limited)})
+        self.control["cycle_history"] = rows[-48:]
+
     def reconcile(self):
         if not self.run_path.exists():
             return None
+        from improve_resilience import repair_run
         run = read_json(self.run_path)
-        changed = any(run.get(k) != self.control[k] for k in ("started_at", "deadline"))
-        if changed:
+        problems = repair_run(run)
+        changed = bool(problems)
+        if problems:
+            self.journal("Repaired agent-written run state: " + "; ".join(problems))
+            self.log("repaired run.json: " + "; ".join(problems))
+        if any(run.get(k) != self.control[k] for k in ("started_at", "deadline")):
             for key in ("started_at", "deadline"):
                 run[key] = self.control[key]
             self.journal("Restored the original start/deadline after a cycle changed it.")
+            changed = True
         result = terminal_outcome(run, self.args.skill, self.args.args)
         if run.get("outcome") == "completed" and result is None:
             run["outcome"] = None
@@ -570,17 +693,21 @@ class Supervisor:
         return result
 
     def repair_state(self, saved_run):
-        """Restore run.json and quarantine broken ledger lines a cycle left behind."""
-        from improve_resilience import repair_ledgers
+        """Restore run.json and quarantine broken ledger lines a cycle left behind.
+        Returns (summary, severe): damaged ledgers or an unreadable run.json are severe
+        (the cycle wrote carelessly); a coerced field is corrected and mentioned only."""
+        from improve_resilience import repair_ledgers, repair_run
         problems = repair_ledgers(self.state)
+        severe = bool(problems)
         try:
             if self.run_path.exists():
                 value = read_json(self.run_path)
-                if not isinstance(value, dict):
-                    raise StateError("run.json must contain an object")
-                if "cycle" in value and (type(value["cycle"]) is not int or value["cycle"] < 0):
-                    raise StateError("cycle must be a nonnegative integer")
+                repaired = repair_run(value)
+                if repaired:
+                    atomic_json(self.run_path, value)
+                    problems.extend(repaired)
         except (StateError, ValueError):
+            severe = True
             if saved_run is None:
                 self.run_path.replace(self.run_path.with_name("run.damaged.json"))
             else:
@@ -592,12 +719,14 @@ class Supervisor:
         if problems:
             self.journal("Repaired state after a cycle: " + "; ".join(problems))
             self.log("repaired state: " + "; ".join(problems))
-        return "; ".join(problems)
+        return "; ".join(problems), severe
 
-    def wait(self, seconds):
-        until = min(time.time() + seconds, epoch(self.control["deadline"]))
+    def wait(self, seconds, past_deadline=False):
+        until = time.time() + seconds
+        if not past_deadline:
+            until = min(until, self.deadline_epoch())
         started = time.monotonic()
-        while time.time() < until and not self.stop_requested() and not self.pause_requested():
+        while time.time() < until and not self.stop_requested() and not self.pause_requested_quietly():
             time.sleep(min(0.25, max(0, until - time.time())))
         return time.monotonic() - started
 
@@ -625,8 +754,21 @@ class Supervisor:
                             limit_wait_started_at=stamp(accounted_until) if pending else None,
                             retry_at=stamp(retry) if pending else None)
 
+    def start_limit_wait(self):
+        """Begin a bounded account-limit wait; returns False when the budget is spent."""
+        waited = self.control.get("limit_waited_seconds", 0)
+        if waited >= self.limit_budget:
+            return False
+        now = int(time.time())
+        delay = min(max(1, self.next_wait), self.limit_budget - waited, max(0, self.deadline_epoch() - now))
+        self.journal(f"Account usage limit; waiting up to {human(delay)}. Original deadline unchanged.")
+        self.next_wait = min(max(1, self.next_wait) * 2, self.limit_cap)
+        self.save_control(phase="account-limit", retry_at=stamp(now + math.ceil(delay)),
+                          limit_wait_started_at=stamp(now), next_limit_wait=self.next_wait)
+        return True
+
     def prompt(self, final=False):
-        remaining = max(0, epoch(self.control["deadline"]) - int(time.time()))
+        remaining = max(0, self.deadline_epoch() - int(time.time()))
         skill_path = Path(__file__).resolve().parent.parent / ("max/SKILL.md" if self.args.skill == "improve-max" else "SKILL.md")
         prefix = "$" if self.engine == "codex" else "/"
         graph_script = Path(__file__).with_name("improve_graph.py")
@@ -641,10 +783,22 @@ first cycle are initialized during preflight. The supervisor's immutable start i
 {self.control['started_at']} and deadline is {self.control['deadline']}.
 Copy those exact timestamps into run.json; never calculate a replacement deadline.
 Do not schedule wakeups, launch another daemon, or sleep to fill the duration.
+Cycle budget: this process is killed after {self.timeout}s ({human(self.timeout)}) of wall time, plus
+{self.finish_grace}s of cleanup grace after the deadline or a stop. Choose work whose editing and
+verification fit well inside that budget, checkpoint the ledger before any gate that may run long,
+and return early with a clean tree rather than be killed mid-edit.
 The supervisor owns the local task board ({'disabled by --no-board' if self.args.no_board else 'auto-start enabled'}).
 Do not start or stop a board from this child cycle. Keep backlog.jsonl current: record
 each task before work, set in_progress before editing, then its verified final status.
 Keep completed/rejected tasks, verification evidence, and actual commit SHAs for the board.
+Helper output is TOON (Token-Oriented Object Notation), which costs fewer tokens than JSON:
+`key: value`; `name[N]{{f1,f2}}:` declares N rows with fields f1,f2, one comma-separated row per
+line; `name[N]: a,b` is a list; `key: []` is empty; `- ` lines are list items; quoted strings use
+JSON escapes. Pass --format json to any helper for JSON. Read the backlog through the ledger
+helper instead of the raw file (it ranks, filters, and bounds text; `--full` shows everything):
+python3 {shlex.quote(str(Path(__file__).with_name('improve_ledger.py')))} --repo {shlex.quote(str(self.repo))} queue
+Also: `tasks --status blocked`, `tasks --file PATH`, `show ID`, `counts`, `discovery`, `run`, and
+`set ID --status done --commit SHA --note '...'` or `add --json '{{...}}'` for canonical writes.
 Read pending board requests before selecting each item with:
 python3 {shlex.quote(str(Path(__file__).with_name('improve_control.py')))} --repo {shlex.quote(str(self.repo))} pending
 Follow {Path(__file__).resolve().parent.parent / 'references/board-control.md'} to apply and acknowledge them.
@@ -661,6 +815,8 @@ scan, changed finding, verification result, or commit. Do not repeat an identica
 Check .improve/stop.request and the clock between items and tool calls. On stop or expiry,
 settle the current item only. The supervisor allows {self.finish_grace}s of cleanup grace.
 Only record a halt for a concrete blocker; a dry scan or rejected candidate is not one.
+Write run.json fields exactly as documented: outcome is null, "completed", "stopped by user",
+"target reached", or "halted: <reason>"; cycle and last_report_hour are integers.
 Previous cycle correction, if any: {self.control.get('last_error', 'none')}.
 Resilience: if a task fails, a tool or gate is unavailable, or you are stuck, do not halt.
 Mark that task blocked in backlog.jsonl with a concrete blocked_reason, then continue with
@@ -676,6 +832,7 @@ Record file-specific knowledge (a pitfall, technique, convention, or decision) w
 python3 {shlex.quote(str(graph_script))} --repo {shlex.quote(str(self.repo))} note --kind pitfall --text 'ONE SENTENCE' --about file:PATH area:AREA
 Mark graph knowledge that proved false with `rate ID wrong`, and a wrong inferred link with `unlink SRC REL DST`.
 If knowledge you need was forgotten, find it with `history --query WORDS` and bring it back with `restore ID`. Follow {Path(__file__).resolve().parent.parent / 'references/knowledge-graph.md'}.
+A graph or learning helper error (exit 2 or 3) is never a reason to block a task or halt; note it and continue.
 {self.memory_brief(final)}
 {"FINALIZATION ONLY: start no new work. This run ended or its deadline passed. Ignore pause for this report-only pass and report pending board requests as unimplemented. Preserve an existing halt/stop outcome and original end time. Write .improve/final-report.md from actual git and ledger evidence, append it to journal.md, set summary_pending false, and set completed only for deadline expiry. Never claim unverified changes passed." if final else "Complete a useful cycle, leave a clean tree, and return; the supervisor will relaunch you."}
 """
@@ -692,8 +849,8 @@ If knowledge you need was forgotten, find it with `history --query WORDS` and br
             knowledge = brief(graph, shlex.quote(str(Path(__file__).with_name("improve_graph.py"))),
                               shlex.quote(str(self.repo)))
             parts = [guidance(self.repo), knowledge, recovery_brief(self.state, self.run_focus())]
-        except (StateError, OSError, ValueError) as exc:
-            self.log(f"learning/recovery brief unavailable: {exc}")
+        except Exception as exc:  # noqa: BLE001 - a brief is advisory; a launch must not depend on it.
+            self.log(f"learning/recovery brief unavailable: {type(exc).__name__}: {exc}")
             return ""
         return "\n\n".join(part for part in parts if part)
 
@@ -710,7 +867,7 @@ If knowledge you need was forgotten, find it with `history --query WORDS` and br
         started = time.monotonic()
         cutoff = started + (self.final_timeout if final else self.timeout)
         if not final:
-            cutoff = min(cutoff, started + max(0, epoch(self.control["deadline"]) - time.time()) + self.finish_grace)
+            cutoff = min(cutoff, started + max(0, self.deadline_epoch() - time.time()) + self.finish_grace)
         log_path = self.state / "daemon.log"
         offset = log_path.stat().st_size if log_path.exists() else 0
         with log_path.open("ab", buffering=0) as output:
@@ -746,7 +903,7 @@ If knowledge you need was forgotten, find it with `history --query WORDS` and br
             tail = output.read().decode(errors="replace")
         rc = 124 if timed_out else rc
         self.last_report_ok = (rc == 0 and report.exists() and report.stat().st_mtime_ns != previous_write
-                               and bool(report.read_text().strip()))
+                               and bool(report.read_text(errors="replace").strip()))
         return rc, time.monotonic() - started, tail
 
     def finish(self, outcome, summary_pending=None):
@@ -755,13 +912,14 @@ If knowledge you need was forgotten, find it with `history --query WORDS` and br
         if summary_pending is None:
             summary_pending = not self.last_report_ok
         self.control.update(outcome=outcome, ended_at=self.control.get("ended_at") or stamp(),
-                            summary_pending=summary_pending, phase="ended", child_pid=None)
+                            summary_pending=summary_pending, phase="ended", child_pid=None, park_until=None)
         atomic_json(self.control_path, self.control)
         if self.run_path.exists():
-            run = read_json(self.run_path)
-            run.update(outcome=outcome, ended_at=self.control["ended_at"], summary_pending=summary_pending)
-            atomic_json(self.run_path, run)
-        self.journal(f"Run ended: {outcome}. Remaining: {human(epoch(self.control['deadline']) - int(time.time()))}."
+            with contextlib.suppress(StateError):
+                run = read_json(self.run_path)
+                run.update(outcome=outcome, ended_at=self.control["ended_at"], summary_pending=summary_pending)
+                atomic_json(self.run_path, run)
+        self.journal(f"Run ended: {outcome}. Remaining: {human(self.deadline_epoch() - int(time.time()))}."
                      + (" Final narrative report is pending; no agent success is implied." if summary_pending else ""))
         self.learn()
         self.log(f"daemon finished: {outcome}")
@@ -772,8 +930,8 @@ If knowledge you need was forgotten, find it with `history --query WORDS` and br
             from improve_learning import record_run
             from improve_resilience import read_rows
             record_run(self.repo, self.control, read_rows(self.state / "backlog.jsonl"))
-        except (StateError, OSError, ValueError) as exc:
-            self.log(f"could not record run learning: {exc}")
+        except Exception as exc:  # noqa: BLE001 - learning is best effort at run end.
+            self.log(f"could not record run learning: {type(exc).__name__}: {exc}")
         self.sync_graph(dream=True)
 
     def sync_graph(self, dream=False):
@@ -793,117 +951,322 @@ If knowledge you need was forgotten, find it with `history --query WORDS` and br
                 report = result["refine"]
                 self.log(f"knowledge graph refined: {report['nodes']} nodes, {report['merged']} merged, "
                          f"{report['faded']} faded, {report['stale_files']} stale files")
-        except (StateError, OSError, ValueError, RecursionError, sqlite3.Error) as exc:
-            self.log(f"could not update the knowledge graph: {exc}")
+        except Exception as exc:  # noqa: BLE001 - the graph is memory, not the work.
+            self.log(f"could not update the knowledge graph: {type(exc).__name__}: {exc}")
 
     def finalize(self):
-        """A bounded report-only launch; retryable without granting more work time."""
+        """A bounded report-only launch; retryable without granting more work time. An
+        account limit during the report gets a short wait and another attempt."""
         original = self.control.get("outcome")
         original_head = git(self.repo, "rev-parse", "HEAD")
         self.log("requesting final report without new work")
-        rc, _, _ = self.launch(final=True)
+        wait_seconds = min(self.limit_wait, self.limit_cap)
+        for attempt in range(3):
+            rc, _, output = self.launch(final=True)
+            if rc and attempt < 2 and LIMIT_PATTERN.search(output) and not self.stop_requested():
+                self.journal(f"Account usage limit during the final report; retrying in {human(wait_seconds)}.")
+                self.save_control(phase="account-limit", retry_at=stamp(int(time.time()) + wait_seconds))
+                self.wait(wait_seconds, past_deadline=True)
+                self.save_control(phase="between-cycles", retry_at=None)
+                wait_seconds = min(wait_seconds * 2, self.limit_cap)
+                continue
+            break
         outcome = self.reconcile()
         if dirty(self.repo) or git(self.repo, "rev-parse", "HEAD") != original_head:
             return self.finish("halted: finalization modified repository work", summary_pending=True)
         return self.finish(original or outcome or "completed", summary_pending=rc != 0 or not self.last_report_ok)
 
     def run(self):
-        failures = self.control.get("consecutive_failures", 0)
-        next_wait = self.control.get("next_limit_wait", min(self.limit_wait, self.limit_cap))
+        self.failures = self.control.get("consecutive_failures", 0)
+        self.next_wait = self.control.get("next_limit_wait", min(self.limit_wait, self.limit_cap))
         if self.args.finalize:
             return self.finalize()
+        self.settle_stale_child()
         self.log(f"daemon {VERSION}: deadline={self.control['deadline']}; intake saved; one cycle per launch")
         while True:
-            outcome = self.reconcile()
-            if self.stop_requested():
-                return self.finish("stopped by user")
-            if dirty(self.repo):
-                return self.finish("halted: working tree has uncommitted changes; manual recovery required")
-            if outcome and outcome != "completed":
-                return self.finish(outcome)
-            if epoch(self.control["deadline"]) <= time.time():
-                return self.finalize()
-            if self.wait_while_paused():
-                continue
-            if failures >= self.max_failures:
-                if self.control.get("recoveries", 0) >= self.max_recoveries:
-                    detail = f" after {self.control.get('recoveries', 0)} recoveries" if self.max_recoveries else ""
-                    return self.finish(f"halted: {failures} consecutive failed or uncheckpointed cycles{detail}")
-                self.recover(f"{failures} consecutive cycles failed or recorded no new evidence")
-                failures = 0
-                continue
-            if self.control.get("retry_at"):
-                self.resume_limit_wait()
-                continue
-            before = snapshot(self.repo)
-            saved_run = self.run_path.read_bytes() if self.run_path.exists() else None
-            self.log(f"cycle starting ({human(epoch(self.control['deadline']) - int(time.time()))} left)")
             try:
-                rc, elapsed, output = self.launch()
-            except OSError as exc:
-                # A missing or crashing CLI is a failed cycle, not a dead supervisor.
-                self.save_control(child_pid=None, phase="between-cycles")
-                rc, elapsed, output = 127, 0.0, f"could not launch {self.engine}: {exc}"
-                self.log(output)
-            repaired = self.repair_state(saved_run)
+                result = self.iterate()
+            except (StateError, OSError) as exc:
+                if self.strict:
+                    raise
+                result = self.crashed_iteration(exc)
+            except Exception as exc:  # noqa: BLE001 - one bad cycle must not end a multi-day run.
+                result = self.crashed_iteration(exc)
+            if result is not None:
+                return result
+
+    def crashed_iteration(self, exc):
+        """An unexpected error inside one cycle is journaled and counted, not fatal."""
+        crashes = self.bump("crashes")
+        trace = traceback.format_exc()
+        self.log(f"supervisor error in cycle ({crashes}/{self.max_crashes}): {type(exc).__name__}: {exc}")
+        self.journal(f"Supervisor error during a cycle; the run continues.\n\n```\n{trace.rstrip()}\n```")
+        with contextlib.suppress(Exception):
+            self.save_control(phase="between-cycles", child_pid=None,
+                              last_error=f"The supervisor hit an internal error ({type(exc).__name__}: {str(exc)[:200]}); "
+                                         "state was left as is. Continue with eligible work.")
+        self.failures += 1
+        self.failure_kinds.append("crash")
+        if crashes >= self.max_crashes:
+            if not self.park(f"{crashes} consecutive supervisor errors ({type(exc).__name__}: {str(exc)[:120]})"):
+                return self.finish(f"halted: supervisor error repeated {crashes} times: {type(exc).__name__}: {exc}")
+            return None
+        delay = min(self.cooldown * 2 ** (crashes - 1), self.cooldown_cap) if self.cooldown else 0
+        if delay:
+            self.wait(delay)
+        return None
+
+    def iterate(self):
+        """One pass of the supervisor loop. Returns None to continue or the exit code to end."""
+        from improve_resilience import dirt
+        outcome = self.reconcile()
+        if self.stop_requested():
+            return self.finish("stopped by user")
+        kind = dirt(self.repo, self.artifact_paths())
+        if kind:
+            if not self.quarantine:
+                return self.finish("halted: working tree has uncommitted changes; manual recovery required")
+            self.quarantine_cycle(None, kind, between=True)
+        if outcome and outcome != "completed":
+            return self.finish(outcome)
+        if self.deadline_epoch() <= time.time():
+            return self.finalize()
+        if self.wait_while_paused():
+            return None
+        if self.failures >= self.max_failures:
+            if self.control.get("recoveries", 0) >= self.max_recoveries:
+                detail = f" after {self.control.get('recoveries', 0)} recoveries" if self.max_recoveries else ""
+                reason = f"{self.failures} consecutive failed or uncheckpointed cycles{detail}"
+                if self.max_recoveries and self.park(reason):
+                    return None
+                return self.finish(f"halted: {reason}")
+            self.recover(f"{self.failures} consecutive cycles failed or recorded no new evidence")
+            self.failures = 0
+            return None
+        if self.control.get("retry_at"):
+            self.resume_limit_wait()
+            return None
+        free_mb = free_space_mb(self.repo)
+        if self.min_free_mb and free_mb is not None and free_mb < self.min_free_mb:
+            # The first 6h run was lost to ENOSPC. Launching an agent onto a full disk only adds damage.
+            reason = f"only {free_mb} MB free on the repository's disk (minimum {self.min_free_mb} MB)"
+            if self.park(reason):
+                return None
+            return self.finish(f"halted: {reason}")
+        before = snapshot(self.repo)
+        saved_run = self.run_path.read_bytes() if self.run_path.exists() else None
+        self.log(f"cycle starting ({human(self.deadline_epoch() - int(time.time()))} left)")
+        cycle_started = stamp()
+        try:
+            rc, elapsed, output = self.launch()
+        except OSError as exc:
+            # A missing or crashing CLI is a failed cycle, not a dead supervisor.
+            self.save_control(child_pid=None, phase="between-cycles")
+            rc, elapsed, output = 127, 0.0, f"could not launch {self.engine}: {exc}"
+            self.log(output)
+        repaired, careless = self.repair_state(saved_run)
+        outcome = self.reconcile()
+        if self.stop_requested():
+            self.record_cycle(cycle_started, elapsed, rc, False, outcome, False)
+            return self.finish("stopped by user")
+        quarantined, kind = None, dirt(self.repo, self.artifact_paths())
+        if kind:
+            if not self.quarantine:
+                return self.finish("halted: cycle left uncommitted changes; manual recovery required")
+            try:
+                quarantined = self.quarantine_cycle(outcome, kind)
+            except StateError as exc:
+                return self.finish(f"halted: cycle left uncommitted changes that could not be saved ({exc}); manual recovery required")
             outcome = self.reconcile()
-            if self.stop_requested():
-                return self.finish("stopped by user")
-            quarantined = None
-            if dirty(self.repo):
-                if not self.quarantine:
-                    return self.finish("halted: cycle left uncommitted changes; manual recovery required")
-                try:
-                    quarantined = self.quarantine_cycle(outcome)
-                except StateError as exc:
-                    return self.finish(f"halted: cycle left uncommitted changes that could not be saved ({exc}); manual recovery required")
-                outcome = self.reconcile()
-            if outcome in ("completed", "target reached") and rc:
+        limited = bool(LIMIT_PATTERN.search(output))
+        if outcome in ("completed", "target reached") and rc:
+            if self.strict or not self.max_worker_halts:
                 return self.finish(f"halted: cycle claimed {outcome} but exited {rc}", summary_pending=True)
-            if outcome == "completed":
-                return self.finalize()
-            if outcome and outcome.startswith("halted:") and self.soften_worker_halt(outcome):
-                failures += 1
-                self.save_control(consecutive_failures=failures)
-                self.wait(self.gap)
-                continue
-            if outcome:
-                return self.finish(outcome)
-            # A requested checkpoint may return without new evidence; pausing itself
-            # neither increments nor clears the existing failure counter.
-            if self.pause_requested() and rc == 0:
-                continue
-            if rc and LIMIT_PATTERN.search(output):
-                waited = self.control.get("limit_waited_seconds", 0)
-                if waited >= self.limit_budget:
-                    return self.finish("halted: account-limit wait budget exhausted")
-                now = int(time.time())
-                delay = min(max(1, next_wait), self.limit_budget - waited,
-                            max(0, epoch(self.control["deadline"]) - now))
-                self.journal(f"Account usage limit; waiting up to {human(delay)}. Original deadline unchanged.")
-                next_wait = min(max(1, next_wait) * 2, self.limit_cap)
-                self.save_control(phase="account-limit", retry_at=stamp(now + math.ceil(delay)),
-                                  limit_wait_started_at=stamp(now), next_limit_wait=next_wait)
-                continue
-            next_wait = min(self.limit_wait, self.limit_cap)
-            after = snapshot(self.repo)
-            failed = rc != 0 or quarantined is not None or repaired or not advanced(before, after)
-            failures = failures + 1 if failed else 0
-            correction = ("Last cycle failed or supplied no new evidence. Inspect a different in-scope "
-                          "path/hypothesis and record what you checked; do not repeat the last scan.") if failed else None
-            if quarantined:
-                correction = (f"Last cycle left uncommitted changes; they were saved to {quarantined} and the tree was "
-                              "reset. Commit verified work before returning, or revert it and record why.")
-            elif repaired:
-                correction = f"Last cycle damaged saved state ({repaired}); it was repaired. Write ledgers atomically."
-            changes = dict(consecutive_failures=failures, next_limit_wait=next_wait, last_error=correction)
-            if not failed:
-                changes.update(recoveries=0, worker_halts=0)
-            self.save_control(**changes)
-            self.log(f"cycle returned {rc} in {human(elapsed)}; checkpoint {before['cycle']}->{after['cycle']}; failures={failures}"
-                     + ("; fast but checkpointed" if not failed and elapsed < self.too_fast else ""))
-            self.sync_graph()
+            from improve_resilience import clear_worker_halt
+            clear_worker_halt(self.state, outcome)
+            self.journal(f"Rejected a claim of {outcome!r} from a cycle that exited {rc}; the run continues.")
+            outcome = None
+            rc = rc or 1
+        if outcome == "completed":
+            self.record_cycle(cycle_started, elapsed, rc, True, outcome, limited)
+            return self.finalize()
+        if outcome and outcome.startswith("halted:") and self.soften_worker_halt(outcome):
+            self.failures += 1
+            self.failure_kinds.append("halt")
+            self.record_cycle(cycle_started, elapsed, rc, False, outcome, limited)
+            self.save_control(consecutive_failures=self.failures)
             self.wait(self.gap)
+            return None
+        if outcome:
+            self.record_cycle(cycle_started, elapsed, rc, False, outcome, limited)
+            return self.finish(outcome)
+        # A requested checkpoint may return without new evidence; pausing itself
+        # neither increments nor clears the existing failure counter.
+        if self.pause_requested() and rc == 0:
+            self.record_cycle(cycle_started, elapsed, rc, False, None, limited)
+            return None
+        after = snapshot(self.repo)
+        progressed = advanced(before, after)
+        if limited and not progressed:
+            # A usage limit is an environmental wait, not a failure, whatever the exit code.
+            self.record_cycle(cycle_started, elapsed, rc, False, None, True)
+            if not self.start_limit_wait():
+                if self.park("account-limit wait budget exhausted"):
+                    return None
+                return self.finish("halted: account-limit wait budget exhausted")
+            return None
+        self.next_wait = min(self.limit_wait, self.limit_cap)
+        tracked_quarantine = quarantined is not None and kind != "artifacts"
+        failed = rc != 0 or tracked_quarantine or careless or not progressed
+        if failed:
+            self.failures += 1
+            self.failure_kinds.append("quarantine" if tracked_quarantine else "repaired" if careless
+                                      else "no_evidence" if rc == 0 else "crash")
+        else:
+            self.failures, self.failure_kinds = 0, []
+        correction = ("Last cycle failed or supplied no new evidence. Inspect a different in-scope "
+                      "path/hypothesis and record what you checked; do not repeat the last scan.") if failed else None
+        if rc != 0 and rc != 124 and not progressed:
+            correction = (f"Last cycle's agent process exited {rc} without a checkpoint (a CLI or environment problem, "
+                          "not a task failure). Resume from run.json next_action.")
+        if rc == 124:
+            correction = (f"Last cycle was stopped at the {human(self.timeout)} cycle limit. Pick smaller items, "
+                          "checkpoint before long gates, and return with a clean tree well inside that budget.")
+        if quarantined and kind == "artifacts":
+            correction = (f"Last cycle left build artifacts; they were saved to {quarantined} and removed. "
+                          "Add them to .gitignore on the run branch (and commit that), list them in run.json artifact_paths, "
+                          "or clean them before returning.")
+        elif quarantined:
+            correction = (f"Last cycle left uncommitted changes; they were saved to {quarantined} and the tree was "
+                          "reset. Commit verified work before returning, or revert it and record why.")
+        elif careless:
+            correction = f"Last cycle damaged saved state ({repaired}); it was repaired. Write ledgers atomically."
+        elif repaired:
+            correction = (f"Last cycle wrote run.json fields the supervisor had to correct ({repaired}). "
+                          "Write outcome, cycle, and last_report_hour exactly as documented.")
+        changes = dict(consecutive_failures=self.failures, next_limit_wait=self.next_wait, last_error=correction)
+        idle = after["head"] == before["head"] and not (after["backlog"] - before["backlog"]) and not (after["bets"] - before["bets"])
+        if not failed:
+            changes.update(recoveries=0, worker_halts=0, crashes=0)
+            changes["idle_cycles"] = (self.control.get("idle_cycles", 0) or 0) + 1 if idle else 0
+        self.record_cycle(cycle_started, elapsed, rc, progressed, None, limited)
+        self.save_control(**changes)
+        self.log(f"cycle returned {rc} in {human(elapsed)}; checkpoint {before['cycle']}->{after['cycle']}; failures={self.failures}"
+                 + ("; fast but checkpointed" if not failed and elapsed < self.too_fast else ""))
+        self.sync_graph()
+        self.wait(self.idle_gap())
+        return None
+
+    def idle_gap(self):
+        """Discovery-only cycles back off so a dry run does not launch a model every few seconds."""
+        idle = self.control.get("idle_cycles", 0) or 0
+        if idle < self.idle_after:
+            return self.gap
+        gap = min(max(self.gap, 1) * 2 ** (idle - self.idle_after + 1), self.idle_gap_cap)
+        if gap != self.control.get("idle_gap"):
+            self.save_control(idle_gap=gap)
+            self.log(f"{idle} consecutive discovery-only cycles; waiting {human(gap)} before the next")
+        return gap
+
+
+def free_space_mb(path):
+    try:
+        return shutil.disk_usage(str(path)).free // (1024 * 1024)
+    except OSError:
+        return None
+
+
+def rotate_log(path, max_bytes, keep=3):
+    """Keep daemon.log bounded over a multi-day run: daemon.log.1 is the newest archive."""
+    if not path.exists() or path.stat().st_size <= max_bytes:
+        return False
+    for index in range(keep, 0, -1):
+        older = Path(f"{path}.{index}")
+        if index == keep:
+            older.unlink(missing_ok=True)
+        else:
+            newer = Path(f"{path}.{index + 1}")
+            if older.exists():
+                os.replace(older, newer)
+    os.replace(path, Path(f"{path}.1"))
+    return True
+
+
+def status_info(repo, state, lock):
+    from improve_board import board_status
+    from improve_resilience import quarantine_refs
+    info = {"running": lock_active(lock), "repo": str(repo)}
+    info["board"] = board_status(repo)
+    for name in ("supervisor.json", "run.json"):
+        if (state / name).exists():
+            info[name.removesuffix(".json")] = read_json(state / name)
+    recorded = info.get("supervisor") or info.get("run")
+    if recorded:
+        info["clock"] = recorded_timing(info.get("run"), info.get("supervisor"))
+    control = info.get("supervisor") or {}
+    # The lock is free but the saved phase says a cycle was in flight: the daemon died.
+    info["crashed"] = (not info["running"] and bool(control) and control.get("outcome") is None
+                       and control.get("phase") not in (None, "ended"))
+    info["quarantine"] = quarantine_refs(repo)
+    return info
+
+
+def supervise(args, repo, raw_argv):
+    """Relaunch the daemon until the run ends: a crash, a signal, or a reboot-time restart
+    must not end a multi-day run. Terminal outcomes, invalid input, and stop requests end it."""
+    state = repo / ".improve"
+    argv = [value for value in raw_argv if value != "--supervise"]
+    backoff = env_integer("IMPROVE_RELAUNCH_WAIT", 5, 0)
+    cap = env_integer("IMPROVE_RELAUNCH_WAIT_CAP", 300, 0)
+    relaunches, max_relaunches = 0, env_integer("IMPROVE_MAX_RELAUNCHES", 50, 0)
+    stopping = {"flag": False}
+
+    def forward_stop(*_):
+        # A stop to the watchdog is a stop to the run: the daemon honors stop.request at its checkpoint.
+        stopping["flag"] = True
+        with contextlib.suppress(OSError):
+            state.mkdir(exist_ok=True)
+            (state / "stop.request").touch()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, forward_stop)
+    while True:
+        result = subprocess.run([sys.executable, str(Path(__file__).resolve()), "daemon", *argv])
+        rc = result.returncode
+        if stopping["flag"]:
+            return rc if rc >= 0 else 1
+        control = {}
+        with contextlib.suppress(StateError, OSError):
+            if (state / "supervisor.json").exists():
+                control = read_json(state / "supervisor.json")
+        if rc == 2 or control.get("outcome") is not None or (state / "stop.request").exists():
+            return rc if rc >= 0 else 1
+        if control and epoch(control["deadline"]) <= time.time() and not control.get("summary_pending", True):
+            return 0
+        relaunches += 1
+        if max_relaunches and relaunches > max_relaunches:
+            print(f"improve: daemon crashed {relaunches} times; giving up", file=sys.stderr)
+            return 1
+        # The intake and --new-run were consumed by the first launch; a relaunch resumes.
+        cleaned = []
+        skip = False
+        for value in argv:
+            if skip:
+                skip = False
+                continue
+            if value == "--new-run":
+                continue
+            if value == "--intake":
+                skip = True
+                continue
+            if value.startswith("--intake="):
+                continue
+            cleaned.append(value)
+        argv = cleaned
+        delay = min(backoff * 2 ** (relaunches - 1), cap) if backoff else 0
+        print(f"{stamp()} daemon exited {rc} without a recorded outcome; relaunching in {delay}s", flush=True)
+        if delay:
+            time.sleep(delay)
 
 
 def daemon(args):
@@ -916,18 +1279,13 @@ def daemon(args):
         raise StateError("--repo must name the git repository root")
     state, lock = repo / ".improve", repo / ".improve/daemon.lock"
     if args.status:
-        info = {"running": lock_active(lock), "repo": str(repo)}
-        info["board"] = board_status(repo)
-        for name in ("supervisor.json", "run.json"):
-            if (state / name).exists():
-                info[name.removesuffix(".json")] = read_json(state / name)
+        info = status_info(repo, state, lock)
         recorded = info.get("supervisor") or info.get("run")
-        if recorded:
-            info["clock"] = recorded_timing(info.get("run"), info.get("supervisor"))
         if args.json:
             print(json.dumps(info))
         else:
-            print("running" if info["running"] else "not running")
+            print("running" if info["running"] else "crashed (lock free, cycle was in flight); relaunch to resume"
+                  if info["crashed"] else "not running")
             if info["board"]["running"]:
                 print(f"board={info['board']['url']}")
             if recorded:
@@ -937,6 +1295,8 @@ def daemon(args):
                     print(f"engine={info['supervisor'].get('engine', 'claude')} model={info['supervisor'].get('model') or 'CLI default'}")
                 run = info.get("run", {})
                 print(f"cycle={run.get('cycle', 0)} next_action={run.get('next_action', 'not yet recorded')}")
+            if info["quarantine"]:
+                print(f"quarantine refs={len(info['quarantine'])} (newest {info['quarantine'][0]['ref']})")
         return 0
     if args.json:
         raise StateError("--json is available with --status")
@@ -949,6 +1309,10 @@ def daemon(args):
         return 0
     if not args.duration and not (args.resume or args.finalize):
         raise StateError("--for is required (e.g. --for 6h)")
+    if args.supervise:
+        if args.dry_run:
+            raise StateError("--supervise cannot be combined with --dry-run")
+        return supervise(args, repo, getattr(args, "raw_argv", None) or sys.argv[2:])
     seconds = duration(args.duration) if args.duration else 0
     supervisor = Supervisor(args, repo)
     if dirty(repo):
@@ -1015,9 +1379,19 @@ def daemon(args):
             return supervisor.run()
         except (StateError, OSError) as exc:
             # Preserve a malformed run.json for diagnosis instead of replacing it.
-            supervisor.control.update(outcome=f"halted: {exc}", ended_at=stamp(), summary_pending=True)
+            supervisor.control.update(outcome=f"halted: {exc}", ended_at=stamp(), summary_pending=True, phase="ended")
             atomic_json(supervisor.control_path, supervisor.control)
             supervisor.journal(f"HALTED: {exc}. State preserved for manual recovery.")
+            raise
+        except BaseException as exc:
+            # A crash is not an outcome: the run is still live and a relaunch resumes it.
+            with contextlib.suppress(Exception):
+                supervisor.control.update(phase="crashed", child_pid=None,
+                                          last_error=f"Supervisor crashed: {type(exc).__name__}: {str(exc)[:200]}")
+                atomic_json(supervisor.control_path, supervisor.control)
+                supervisor.journal(f"CRASHED: {type(exc).__name__}: {exc}. The run is still live; "
+                                   "relaunch the daemon (or use --supervise) to resume with the same deadline.\n\n"
+                                   f"```\n{traceback.format_exc().rstrip()}\n```")
             raise
 
 
@@ -1046,6 +1420,8 @@ def main(argv=None):
     runner.add_argument("--board-port", type=port_number, help="board port; 0 chooses a free port")
     runner.add_argument("--board-allow-host", action="append", default=[], metavar="HOSTNAME",
                         help="HTTPS tunnel hostname the board also accepts (phone access); repeatable")
+    runner.add_argument("--supervise", action="store_true",
+                        help="watchdog: relaunch the daemon after a crash until the run ends")
     recovery = runner.add_mutually_exclusive_group()
     recovery.add_argument("--new-run", action="store_true", help="archive old state after a new intake")
     recovery.add_argument("--resume", action="store_true", help="resume a recovered halt/stop with its original deadline")
@@ -1056,7 +1432,9 @@ def main(argv=None):
     action.add_argument("--stop", action="store_true")
     runner.add_argument("--json", action="store_true", help="machine-readable --status")
     runner.add_argument("--version", action="version", version=f"improve-daemon {VERSION}")
-    args = parser.parse_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(raw)
+    args.raw_argv = raw[1:] if raw and raw[0] == "daemon" else raw
     try:
         return clock(args) if args.command == "clock" else daemon(args)
     except (StateError, OSError) as exc:

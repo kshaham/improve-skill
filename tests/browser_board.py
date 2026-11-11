@@ -131,7 +131,8 @@ def main():
             dict(id="ui-01", title="Improve mobile navigation", area="ui", status="ready", acceptance="The menu works at narrow widths."),
             dict(id="perf-01", title="Measure checkout latency", area="performance", status="in_progress", evidence="Profiling the checkout journey.", focus_priority=1),
             dict(id="bug-01", title="Fix retry handling", area="resilience", status="done", verification="Retry test passed", commit="abcdef123456"),
-            dict(id="test-01", title="Restore the integration environment", area="coverage", status="blocked", note="Test database unavailable."),
+            dict(id="test-01", title="Restore the integration environment", area="coverage", status="blocked", note="Test database unavailable.",
+                 blocked_reason="Runner offline since 02:00", blocked_by="supervisor", blocked_at=board.stamp(1700000000), block_count=2),
             dict(id="asset-01", title="Refresh onboarding illustrations", area="assets", status="proposed", acceptance="Review the proposed visual direction."),
             dict(id="perf-02", title="Cache account results", area="performance", status="rejected", note="Counter-scenario exposed stale authorization."),
         ]
@@ -232,6 +233,9 @@ def main():
                 expect(page.locator(".task-card")).to_have_count(1)
                 page.locator(".task-card").click()
                 expect(page.locator("#detail-content")).to_contain_text("Test database unavailable")
+                expect(page.locator("#detail-blocked")).to_contain_text("Blocked by the supervisor")
+                expect(page.locator("#detail-blocked")).to_contain_text("(2 times): Runner offline since 02:00")
+                expect(page.locator(".task-card .card-note")).to_contain_text("Runner offline since 02:00")
                 page.locator("#close-dialog").click()
                 page.locator("#search").fill("")
 
@@ -241,9 +245,15 @@ def main():
                            cycle=4, outcome="completed", last_activity_at=board.stamp(now - 5))
                 control = dict(started_at=run["started_at"], deadline=run["deadline"], outcome=None,
                                engine="codex", model="test-model", phase="account-limit", retry_at=board.stamp(now + 30),
-                               heartbeat_at=board.stamp(now), consecutive_failures=2, last_error="Inspect a new scope")
+                               heartbeat_at=board.stamp(now), consecutive_failures=2, last_error="Inspect a new scope",
+                               cycle_started_at=board.stamp(now - 2700), child_pid=4242, cycle_timeout_seconds=3600,
+                               quarantines=1, recoveries_total=2, crashes=0, limit_waited_seconds=90,
+                               cycle_history=[dict(started_at=board.stamp(now - 7200), seconds=600, rc=0, advanced=True),
+                                              dict(started_at=board.stamp(now - 6000), seconds=300, rc=0, advanced=False),
+                                              dict(started_at=board.stamp(now - 5000), seconds=120, rc=1, advanced=False, outcome="gate failed")])
                 board.atomic_json(state / "run.json", run)
                 board.atomic_json(state / "supervisor.json", control)
+                (state / "journal.md").write_text("# Hour 1\nJournal entry <b>kept as text</b>\n")
                 page.locator("#refresh").click()
                 expect(page.locator("#run-state")).to_have_text("Daemon not running")
                 expect(page.locator("#connection")).to_have_text("Board connected")
@@ -251,6 +261,24 @@ def main():
                 expect(page.locator("#run-notice")).to_contain_text("Consecutive failed or uncheckpointed cycles: 2")
                 expect(page.locator("#run-notice")).to_contain_text("Saved account-limit retry")
                 expect(page.locator("#warning")).to_contain_text("awaits supervisor confirmation")
+                # Run health: live ages, counters, the cycle timeline, and the operational views.
+                expect(page.locator("#health-heartbeat")).to_contain_text("Supervisor heartbeat")
+                expect(page.locator("#health-counters")).to_contain_text("Quarantines")
+                expect(page.locator("#health-counters li.attention")).to_have_count(1)
+                expect(page.locator(".cycle-bar")).to_have_count(3)
+                expect(page.locator(".cycle-bar.failed")).to_have_count(1)
+                page.locator("#open-journal").click()
+                expect(page.locator("#text-dialog-body")).to_contain_text("Journal entry <b>kept as text</b>")
+                assert page.locator("#text-dialog-body b").count() == 0
+                page.keyboard.press("Escape")
+                expect(page.locator("#text-dialog")).not_to_be_visible()
+                page.locator("#open-log").click()
+                expect(page.locator("#text-dialog-note")).to_contain_text("No daemon log yet")
+                page.keyboard.press("Escape")
+                page.locator("#open-quarantine").click()
+                expect(page.locator("#text-dialog-note")).to_contain_text("No quarantined work")
+                page.keyboard.press("Escape")
+                expect(page.locator("#open-quarantine")).to_be_focused()
                 control.update(outcome="halted: verification unavailable", summary_pending=True, phase="ended")
                 board.atomic_json(state / "supervisor.json", control)
                 page.locator("#refresh").click()
@@ -259,12 +287,17 @@ def main():
                 page.screenshot(path=str(artifacts / "mobile-health.png"), full_page=True)
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "Health panel overflows mobile viewport"
                 with board.repo_lock(state / "daemon.lock"):
-                    control["phase"] = "finalize"
+                    control.update(phase="finalize", outcome=None)
                     board.atomic_json(state / "supervisor.json", control)
                     page.locator("#refresh").click()
                     expect(page.locator("#run-state")).to_have_text("Writing final report")
+                    # 45 of 60 minutes used: the cycle age is amber, the heartbeat is fresh.
+                    expect(page.locator("#health-cycle")).to_have_text(re.compile(r"Cycle running for 4[5-9] min of 1 h 00 min limit"))
+                    expect(page.locator("#health-cycle")).to_have_class("health-age level-amber")
+                    expect(page.locator("#health-heartbeat")).to_have_class("health-age level-ok")
                 (state / "supervisor.json").unlink()
                 (state / "run.json").unlink()
+                (state / "journal.md").unlink()
                 page.locator("#refresh").click()
                 expect(page.locator("#run-health")).not_to_be_visible()
 
@@ -273,9 +306,26 @@ def main():
                 page.locator("#refresh").click()
                 expect(page.locator("#connection")).to_have_text("Disconnected · retrying")
                 expect(page.locator(".task-card")).to_have_count(3)
+                # Controls stay usable while the last snapshot is under 30 s old, then close with a reason.
+                expect(page.locator("#new-task")).to_be_enabled()
+                expect(page.locator("#updated")).to_contain_text("last refresh failed")
+                page.evaluate("lastSnapshotAt -= 31000; tickClock()")
+                expect(page.locator("#new-task")).to_be_disabled()
+                expect(page.locator("#control-note")).to_contain_text("No fresh data for")
                 page.unroute("**/api/board?*")
                 page.locator("#refresh").click()
                 expect(page.locator("#connection")).to_have_text("Board connected")
+                expect(page.locator("#new-task")).to_be_enabled()
+                # Dark theme: the footer toggle cycles auto, light, dark and is remembered per browser.
+                page.locator("#theme-toggle").click()
+                expect(page.locator("#theme-toggle")).to_have_text("Theme: light")
+                page.locator("#theme-toggle").click()
+                expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+                assert page.evaluate("getComputedStyle(document.body).backgroundColor") == "rgb(21, 22, 28)"
+                page.screenshot(path=str(artifacts / "dark-mobile.png"), full_page=True)
+                page.locator("#theme-toggle").click()
+                expect(page.locator("#theme-toggle")).to_have_text("Theme: auto")
+                assert page.evaluate("document.documentElement.dataset.theme") is None
                 tasks.clear()
                 write_tasks()
                 page.locator("#refresh").click()

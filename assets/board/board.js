@@ -9,11 +9,68 @@ let snapshot = null,
   historyAnchor = null,
   selectedTask = null,
   timer = null,
-  fetching = false;
+  fetchPromise = null,
+  lastSnapshotAt = 0,
+  snapshotBaseAt = 0,
+  pollOk = false,
+  pollFailures = 0,
+  boardEtag = null,
+  detailSignature = "",
+  dialogOpener = null,
+  columnLimits = {};
 const FINISHED = new Set(["done", "rejected"]);
 const PAGE_SIZE = 20,
-  RECENT_LIMIT = 5;
+  RECENT_LIMIT = 5,
+  COLUMN_PAGE = 100;
+// Polling: a failed poll keeps the controls usable while the last snapshot is fresh.
+const POLL_MS = 3000,
+  HIDDEN_POLL_MS = 10000,
+  POLL_TIMEOUT_MS = 7000,
+  MAX_BACKOFF_MS = 30000,
+  FRESH_WINDOW_MS = 30000;
 const countText = (value) => value.toLocaleString();
+const searchTexts = new WeakMap();
+function dataIsFresh() {
+  return lastSnapshotAt > 0 && Date.now() - lastSnapshotAt < FRESH_WINDOW_MS;
+}
+function dataAgeSeconds() {
+  return lastSnapshotAt ? Math.max(0, Math.round((Date.now() - lastSnapshotAt) / 1000)) : null;
+}
+function staleReason() {
+  const age = dataAgeSeconds();
+  return age === null
+    ? "Connecting… Your saved requests and task history are preserved."
+    : "No fresh data for " + age + " s. Controls return when the board reconnects; drafts are kept.";
+}
+// `connected` (controls.js) means "safe to act": the last poll succeeded, or data is recent.
+function updateConnected() {
+  const next = pollOk || dataIsFresh();
+  if (next !== connected) {
+    connected = next;
+    renderControls();
+  }
+  return connected;
+}
+function renderUpdatedAge() {
+  const age = dataAgeSeconds();
+  if (age === null) {
+    $("updated").textContent = "Waiting for data";
+    return;
+  }
+  $("updated").textContent = "Updated " + age + " s ago" + (pollOk ? "" : " · last refresh failed");
+  $("updated").title = "Last snapshot " + new Date(lastSnapshotAt).toLocaleTimeString();
+}
+function rememberOpener(node) {
+  dialogOpener = node?.dataset?.key || node?.id || null;
+}
+function restoreOpenerFocus() {
+  if (!dialogOpener || document.querySelector("dialog[open]")) return;
+  const target =
+    document.querySelector('[data-key="' + CSS.escape(dialogOpener) + '"]') ||
+    document.getElementById(dialogOpener);
+  dialogOpener = null;
+  target?.focus({ preventScroll: true });
+}
 const labels = {
   ready: "Queued",
   in_progress: "In progress",
@@ -48,15 +105,29 @@ function options(select, entries) {
   if (entries.some(([value]) => value === chosen)) select.value = chosen;
   select.dataset.options = signature;
 }
+// The searchable text of a task is built once per snapshot, not once per keystroke.
+function searchText(task) {
+  let text = searchTexts.get(task);
+  if (text === undefined) {
+    text = readable(task).toLowerCase();
+    searchTexts.set(task, text);
+  }
+  return text;
+}
 function filteredTasks() {
   const query = $("search").value.trim().toLowerCase();
+  const area = $("area").value,
+    priority = $("priority-filter").value;
   return snapshot.tasks.filter(
     (task) =>
-      ($("area").value === "all" || task.area === $("area").value) &&
-      ($("priority-filter").value === "all" ||
-        userPriority(task) === $("priority-filter").value) &&
-      (!query || readable(task).toLowerCase().includes(query)),
+      (area === "all" || task.area === area) &&
+      (priority === "all" || userPriority(task) === priority) &&
+      (!query || searchText(task).includes(query)),
   );
+}
+function openTaskFrom(opener, task) {
+  if (!$("task-dialog").open) rememberOpener(opener);
+  openTask(task);
 }
 function openTask(task) {
   if (selectedTask !== task.key) $("task-link-field").hidden = true;
@@ -67,8 +138,22 @@ function openTask(task) {
     " · ",
   );
   $("detail-title").textContent = task.title;
+  // A blocked task leads with why, and who decided: the worker or the supervisor.
+  const blockedReason = task.status === "blocked" ? readable(task.blocked_reason) : "";
+  $("detail-blocked").hidden = !blockedReason;
+  $("detail-blocked").textContent = blockedReason
+    ? "Blocked" +
+      (task.blocked_by ? " by the " + readable(task.blocked_by) : "") +
+      (Number.isFinite(Date.parse(task.blocked_at))
+        ? " at " + new Date(task.blocked_at).toLocaleString()
+        : "") +
+      (task.block_count > 1 ? " (" + countText(task.block_count) + " times)" : "") +
+      ": " +
+      blockedReason
+    : "";
   const sections = [
     ["Run", task.run_id === "current" ? "Current run" : task.run_id],
+    ["Supervisor note", task.supervisor_note],
     ["Description", task.claim !== task.title ? task.claim : null],
     ["Evidence", task.evidence],
     ["Acceptance checks", task.acceptance],
@@ -108,11 +193,13 @@ function openTask(task) {
     ["Kill criteria", task.kill],
     ["Branch", task.branch],
     ["Updated", task.updated_at || task.completed_at || task.created_at],
-  ];
-  $("detail-content").replaceChildren(
-    ...sections
-      .filter(([, value]) => value != null && value !== "")
-      .map(([title, value]) => {
+  ].filter(([, value]) => value != null && value !== "");
+  // Polls re-run openTask; unchanged content keeps its selection and scroll position.
+  const signature = JSON.stringify([task.key, sections]);
+  if (signature !== detailSignature) {
+    detailSignature = signature;
+    $("detail-content").replaceChildren(
+      ...sections.map(([title, value]) => {
         const section = element(
           "section",
           "detail-section" +
@@ -126,33 +213,61 @@ function openTask(task) {
         );
         return section;
       }),
-  );
+    );
+  }
   renderTaskKnowledge(task);
   if (!$("task-dialog").open) $("task-dialog").showModal();
   writeViewLocation();
 }
+function cardNote(task) {
+  return (
+    (task.status === "blocked" && task.blocked_reason) ||
+    task.note ||
+    task.evidence ||
+    task.acceptance ||
+    task.file ||
+    ""
+  );
+}
+function cardPriority(task) {
+  if (task.user_priority) return task.user_priority;
+  if (task.focus_priority != null || task.priority != null)
+    return "P" + readable(task.focus_priority ?? task.priority).replace(/^p/i, "");
+  return "";
+}
+// Everything a card shows; the board rebuilds only when one of these changes.
+function cardSignatureOf(task) {
+  return [
+    task.key,
+    task.status,
+    task.title,
+    task.area,
+    cardPriority(task),
+    cardNote(task),
+    task.commit || "",
+    savedFocus().areas[task.area] || "normal",
+  ];
+}
 function taskCard(task) {
-  const card = element("button", "task-card");
-  card.type = "button";
+  const card = element("article", "task-card");
+  card.tabIndex = 0;
+  card.setAttribute("role", "button");
   card.dataset.key = task.key;
   card.dataset.area = task.area;
   card.dataset.areaFocus = savedFocus().areas[task.area] || "normal";
   card.style.setProperty("--hue", areaHue(task.area));
-  card.setAttribute("aria-label", task.title + ", " + labels[task.status]);
+  const priority = cardPriority(task);
+  card.setAttribute(
+    "aria-label",
+    [task.id, task.title, priority ? "priority " + priority : "", labels[task.status]]
+      .filter(Boolean)
+      .join(", "),
+  );
   const eyebrow = element("div", "card-eyebrow");
   eyebrow.append(element("span", "task-id", task.id));
-  if (task.user_priority)
-    eyebrow.append(element("span", "priority", task.user_priority));
-  else if (task.focus_priority != null || task.priority != null)
-    eyebrow.append(
-      element(
-        "span",
-        "priority",
-        "P" + readable(task.focus_priority ?? task.priority).replace(/^p/i, ""),
-      ),
-    );
+  if (priority) eyebrow.append(element("span", "priority", priority));
   card.append(eyebrow, element("h3", "", task.title));
-  const note = task.note || task.evidence || task.acceptance || task.file;
+  const note = cardNote(task);
   if (note) card.append(element("p", "card-note", readable(note)));
   const footer = element("div", "card-footer");
   const areaTag = element("span", "area-tag", task.area);
@@ -164,7 +279,12 @@ function taskCard(task) {
     footer.append(element("span", "", "Archived"));
   else footer.append(element("span", "", "View details ↗"));
   card.append(footer);
-  card.addEventListener("click", () => openTask(task));
+  card.addEventListener("click", () => openTaskFrom(card, task));
+  card.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    openTaskFrom(card, task);
+  });
   return card;
 }
 function recordedDate(task) {
@@ -260,7 +380,7 @@ function taskRow(task) {
           userPriority(task),
         ),
   );
-  row.addEventListener("click", () => openTask(task));
+  row.addEventListener("click", () => openTaskFrom(row, task));
   item.append(row);
   return item;
 }
@@ -285,12 +405,28 @@ function replaceRows(id, tasks) {
       .find((row) => row.dataset.key === focus)
       ?.focus({ preventScroll: true });
 }
+function showMoreButton(column, remaining) {
+  const more = element(
+    "button",
+    "show-more",
+    "Show " + countText(Math.min(COLUMN_PAGE, remaining)) + " more of " +
+      countText(remaining) + " remaining",
+  );
+  more.type = "button";
+  more.dataset.column = column.id;
+  more.addEventListener("click", () => {
+    columnLimits[column.id] = (columnLimits[column.id] || COLUMN_PAGE) + COLUMN_PAGE;
+    cardSignature = "";
+    renderCards();
+  });
+  return more;
+}
 function renderBoard(tasks) {
   const columns = snapshot.columns.filter((column) => !FINISHED.has(column.id));
-  const signature = JSON.stringify([tasks, columns]);
+  const signature = JSON.stringify([tasks.map(cardSignatureOf), columns, columnLimits]);
   if (signature === cardSignature) return;
   cardSignature = signature;
-  const focus = document.activeElement?.dataset.key;
+  const focus = document.activeElement?.dataset.key || document.activeElement?.dataset.column;
   const scrollLeft = $("board").scrollLeft;
   $("board").replaceChildren(
     ...columns.map((column) => {
@@ -305,7 +441,10 @@ function renderBoard(tasks) {
         element("span", "column-count", items.length),
       );
       const list = element("div", "card-list");
-      list.append(...items.map(taskCard));
+      const shown = items.slice(0, columnLimits[column.id] || COLUMN_PAGE);
+      list.append(...shown.map(taskCard));
+      if (items.length > shown.length)
+        list.append(showMoreButton(column, items.length - shown.length));
       if (!items.length)
         list.append(element("div", "column-empty", "No tasks here"));
       section.append(heading, list);
@@ -314,8 +453,8 @@ function renderBoard(tasks) {
   );
   $("board").scrollLeft = scrollLeft;
   if (focus)
-    [...document.querySelectorAll(".task-card")]
-      .find((card) => card.dataset.key === focus)
+    [...document.querySelectorAll(".task-card, .show-more")]
+      .find((card) => card.dataset.key === focus || card.dataset.column === focus)
       ?.focus({ preventScroll: true });
 }
 function renderRecent(tasks) {
@@ -462,8 +601,8 @@ function renderCards() {
     }
   }
   writeViewLocation();
-  renderSelection();
-  renderMobile();
+  renderSelection(tasks);
+  renderMobile(tasks);
 }
 function resetHistory() {
   historyOffset = 0;
@@ -476,12 +615,19 @@ function selectView(view, outcome) {
     resetHistory();
   }
   renderCards();
+  // Learning and graph counters are fetched only for the tabs that show them.
+  if (
+    (view === "overview" && !snapshot?.learning) ||
+    (view === "graph" && !snapshot?.graph)
+  )
+    refresh();
 }
 function changeFilters() {
   resetHistory();
   resetWork();
   requestOffset = 0;
   requestAnchor = null;
+  columnLimits = {};
   renderCards();
 }
 function historyPage(direction) {
@@ -490,21 +636,34 @@ function historyPage(direction) {
   historyAnchor = null;
   renderCards();
 }
+// The server's clock drives the countdown; the browser only adds the time since the snapshot.
 function remaining() {
   if (!snapshot) return;
   const run = snapshot.current,
-    deadline = Date.parse(run.deadline);
-  if (!Number.isFinite(deadline) || run.outcome) {
+    clock = run.clock;
+  if (!clock || !Number.isFinite(clock.remaining_seconds) || run.outcome) {
     $("remaining").textContent = "";
     return;
   }
-  const seconds = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+  const seconds = Math.max(
+    0,
+    Math.ceil(clock.remaining_seconds - (Date.now() - snapshotBaseAt) / 1000),
+  );
   const h = Math.floor(seconds / 3600),
     m = Math.floor((seconds % 3600) / 60),
     s = seconds % 60;
   $("remaining").textContent = seconds
     ? (h ? h + "h " : "") + m + "m " + s + "s left"
     : "Deadline reached";
+  // Only a deadline this page watched run out is an event; an already-past one is just state.
+  if (!seconds && clock.remaining_seconds > 0) healthDeadlineReached(run);
+}
+function tickClock() {
+  remaining();
+  renderUpdatedAge();
+  renderHealthAges();
+  updateConnected();
+  if (!connected && snapshot) $("control-note").textContent = staleReason();
 }
 function renderHealth(run) {
   $("run-health").hidden = !run.started_at && !run.supervised;
@@ -544,6 +703,7 @@ function renderHealth(run) {
   if (run.last_error) notices.push(readable(run.last_error));
   $("run-notice").hidden = !notices.length;
   $("run-notice").textContent = notices.join("\n");
+  renderHealthExtras(run);
 }
 function render(data) {
   if (
@@ -557,9 +717,16 @@ function render(data) {
       "The current run changed. Reopen a task from the updated board.",
     );
   }
+  // Sections the poll did not request keep their last known value until their tab asks again.
+  if (snapshot) {
+    if (data.learning == null) data.learning = snapshot.learning;
+    if (data.graph == null) data.graph = snapshot.graph;
+    detectTransitions(snapshot, data);
+  }
   snapshot = data;
   $("repo").textContent = data.repo;
-  document.title = data.repo + " · Improve board";
+  document.title =
+    (healthAlert(data.current) ? "⚠ " : "") + data.repo + " · Improve board";
   options($("run"), [
     ["all", "All runs"],
     ...data.runs.map((run) => [run.id, run.label]),
@@ -599,7 +766,9 @@ function render(data) {
               ? "Waiting for account limit"
               : "Running"
       : run.supervised
-        ? "Daemon not running"
+        ? run.phase === "crashed"
+          ? "Daemon crashed"
+          : "Daemon not running"
         : run.started_at
           ? "Last run checkpoint"
           : "Tracking tasks");
@@ -632,13 +801,7 @@ function render(data) {
       return node;
     }),
   );
-  $("updated").textContent =
-    "Updated " +
-    new Date(data.updated_at).toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
+  renderUpdatedAge();
   renderCards();
   remaining();
   if ($("task-dialog").open && selectedTask) {
@@ -647,22 +810,85 @@ function render(data) {
     else $("task-dialog").close();
   }
 }
-async function refresh() {
-  if (fetching) return;
-  fetching = true;
+function boardUrl(run) {
+  const include = [];
+  if (activeView === "overview") include.push("learning");
+  if (activeView === "graph" || !snapshot || $("task-dialog").open)
+    include.push("graph");
+  return (
+    "/api/board?run=" + encodeURIComponent(run) + "&include=" + include.join(",")
+  );
+}
+async function responseJSON(response) {
+  try {
+    return await response.json();
+  } catch (error) {
+    void error;
+    return { error: "The board answered with status " + response.status + "." };
+  }
+}
+function markPollSuccess() {
+  pollOk = true;
+  pollFailures = 0;
+  lastSnapshotAt = Date.now();
+  $("connection").textContent = "Board connected";
+  $("connection").classList.remove("offline");
+  if (snapshot) {
+    $("warning").hidden = !snapshot.warnings.length;
+    $("warning").textContent = snapshot.warnings.join("\n");
+  }
+  updateConnected();
+}
+function markPollFailure(message) {
+  pollOk = false;
+  pollFailures += 1;
+  $("connection").textContent = "Disconnected · retrying";
+  $("connection").classList.add("offline");
+  $("warning").hidden = false;
+  const age = dataAgeSeconds();
+  $("warning").textContent =
+    "The board could not refresh. " +
+    (snapshot ? "Showing the last received tasks (" + age + " s old). " : "") +
+    message;
+  updateConnected();
+  renderUpdatedAge();
+}
+function pollDelay(requestedRun) {
+  if ($("run").value !== requestedRun) return 0;
+  if (!pollOk)
+    return Math.min(MAX_BACKOFF_MS, POLL_MS * 2 ** Math.max(0, pollFailures - 1));
+  return document.hidden ? HIDDEN_POLL_MS : POLL_MS;
+}
+async function poll() {
   $("refresh").disabled = true;
   clearTimeout(timer);
   const requestedRun = $("run").value;
+  const url = boardUrl(requestedRun);
   const controller = new AbortController(),
-    timeout = setTimeout(() => controller.abort(), 7000);
+    timeout = setTimeout(() => controller.abort(), POLL_TIMEOUT_MS);
   try {
-    const response = await fetch(
-      "/api/board?run=" + encodeURIComponent(requestedRun),
-      { cache: "no-store", signal: controller.signal },
-    );
-    const data = await response.json();
+    if (navigator.onLine === false) {
+      markPollFailure("This browser is offline.");
+      return;
+    }
+    const headers = {};
+    if (boardEtag && boardEtag.url === url)
+      headers["If-None-Match"] = boardEtag.value;
+    const response = await fetch(url, {
+      cache: "no-store",
+      signal: controller.signal,
+      headers,
+    });
     if ($("run").value !== requestedRun) return;
-    if (!response.ok && data.error === "unknown run") {
+    if (response.status === 304) {
+      // Nothing changed on disk; the snapshot stays and only its age resets. A bookmark
+      // read since the last render still needs one to apply its filters and task.
+      markPollSuccess();
+      if (pendingView && snapshot) render(snapshot);
+      return;
+    }
+    const data = await responseJSON(response);
+    if (!response.ok && data.code === "unknown_run") {
       $("run").value = "all";
       pendingView = null;
       viewNotice(
@@ -673,29 +899,29 @@ async function refresh() {
     }
     if (!response.ok)
       throw new Error(data.error || "Unable to read the ledger");
-    connected = true;
-    if ($("run").value === requestedRun) render(data);
-    $("connection").textContent = "Board connected";
-    $("connection").classList.remove("offline");
+    boardEtag = { url, value: response.headers.get("ETag") };
+    snapshotBaseAt = Date.now();
+    markPollSuccess();
+    render(data);
   } catch (error) {
-    connected = false;
-    renderControls();
-    $("connection").textContent = "Disconnected · retrying";
-    $("connection").classList.add("offline");
-    $("warning").hidden = false;
-    $("warning").textContent =
-      "The board could not refresh. " +
-      (snapshot ? "Showing the last received tasks. " : "") +
-      error.message;
+    markPollFailure(
+      error.name === "AbortError"
+        ? "The board took more than " + POLL_TIMEOUT_MS / 1000 + " s to answer."
+        : error.message,
+    );
   } finally {
     clearTimeout(timeout);
-    fetching = false;
     $("refresh").disabled = false;
-    timer = setTimeout(
-      refresh,
-      $("run").value !== requestedRun ? 0 : document.hidden ? 10000 : 3000,
-    );
+    timer = setTimeout(refresh, pollDelay(requestedRun));
   }
+}
+// Callers that just acted get a poll that starts after their action, even when one is in flight.
+function refresh() {
+  if (fetchPromise) return fetchPromise.then(() => refresh());
+  fetchPromise = poll().finally(() => {
+    fetchPromise = null;
+  });
+  return fetchPromise;
 }
 $("search").addEventListener("input", changeFilters);
 $("area").addEventListener("change", changeFilters);
@@ -706,6 +932,7 @@ $("run").addEventListener("change", () => {
   resetWork();
   requestOffset = 0;
   requestAnchor = null;
+  columnLimits = {};
   refresh();
 });
 $("history-outcome").addEventListener("change", changeFilters);
@@ -752,8 +979,10 @@ $("task-dialog").addEventListener("close", () => {
   if ($("task-dialog").open) return;
   selectedTask = null;
   taskKnowledgeKey = "";
+  detailSignature = "";
   $("task-link-field").hidden = true;
   writeViewLocation();
+  restoreOpenerFocus();
 });
 $("export").addEventListener("click", () => {
   if (!snapshot) return;
@@ -797,8 +1026,16 @@ $("export").addEventListener("click", () => {
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) refresh();
 });
-setInterval(remaining, 1000);
+window.addEventListener("online", () => refresh());
+window.addEventListener("offline", () => {
+  clearTimeout(timer);
+  markPollFailure("This browser is offline.");
+  timer = setTimeout(refresh, MAX_BACKOFF_MS);
+});
+setInterval(tickClock, 1000);
+initTheme();
 initControls();
+initHealth();
 initWorkflow();
 initGraph();
 refresh();

@@ -124,5 +124,6 @@ to push and merge is carried into `run.json.authorization` and honored after the
 the skill does not ask for that permission again. A general improvement request alone does
 not grant publishing, spending, or rewrite permission. Existing exclusions still apply.
 Unavailable verification gets bounded recovery, then affected work is benched; halt when
-nothing eligible can be verified. Interrupted dirty edits require manual recovery. Never
+nothing eligible can be verified. Under the daemon even that halt is softened: the task is
+blocked, and a run whose breakers are all exhausted parks and retries until its deadline. Interrupted dirty edits require manual recovery. Never
 reset/clean the whole tree or drop a stash to recover an item.

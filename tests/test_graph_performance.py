@@ -13,7 +13,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from graph_support import ROOT, LongSession, archive, check_disk, environment, load, make_repo, restore_environment, write_ledger, write_run  # noqa: E402
+from graph_support import budget, slow, ROOT, LongSession, archive, check_disk, environment, load, make_repo, restore_environment, write_ledger, write_run  # noqa: E402
 import improve_graph as graph  # noqa: E402
 
 SCRIPT = str(ROOT / "scripts/improve_graph.py")
@@ -31,6 +31,7 @@ MEASURE = (
     "sys.exit(code)\n")
 
 
+@slow
 class LongRunScale(unittest.TestCase):
     """20 archived runs of 300 tasks over 3,000 files, 300 cited notes, a live run, and dreams:
     about what a repository holds after several multi-day runs."""
@@ -97,8 +98,8 @@ class LongRunScale(unittest.TestCase):
         for name, wall, rss in (("context", context, context_rss), ("context with area", with_area, area_rss),
                                 ("search", search, search_rss), ("node", node, node_rss)):
             with self.subTest(command=name):
-                self.assertLess(wall, 400, f"{name} median {wall:.0f} ms")
-                self.assertLess(rss, 90, f"{name} peak {rss:.0f} MB")
+                self.assertLess(wall, budget(400), f"{name} median {wall:.0f} ms")
+                self.assertLess(rss, budget(90), f"{name} peak {rss:.0f} MB")
         # A file's context and a node read a neighborhood; an area walks all of its tasks by design.
         self.assertLess(context, whole * 0.8, f"context {context:.0f} ms vs whole-graph read {whole:.0f} ms")
         self.assertLess(node, whole * 0.8, f"node {node:.0f} ms vs whole-graph read {whole:.0f} ms")
@@ -109,9 +110,9 @@ class LongRunScale(unittest.TestCase):
         note, note_rss = self.cli("note", "--kind", "fact", "--text", "Performance probe note about cache keys",
                                   "--about", self.files[7], runs=5)
         rate, _ = self.cli("rate", self.notes[1], "useful", runs=5)
-        self.assertLess(note, 500, f"note median {note:.0f} ms")
-        self.assertLess(rate, 400, f"rate median {rate:.0f} ms")
-        self.assertLess(note_rss, 90)
+        self.assertLess(note, budget(500), f"note median {note:.0f} ms")
+        self.assertLess(rate, budget(400), f"rate median {rate:.0f} ms")
+        self.assertLess(note_rss, budget(90))
 
     def test_partial_reads_touch_a_fraction_of_the_graph(self):
         total = len(self.value["nodes"])
@@ -128,9 +129,9 @@ class LongRunScale(unittest.TestCase):
             with self.subTest(step=label):
                 started = time.perf_counter()
                 graph.sync(self.repo, **kwargs)
-                self.assertLess(time.perf_counter() - started, ceiling, label)
+                self.assertLess(time.perf_counter() - started, budget(ceiling), label)
         _, dream_rss = self.cli("dream", runs=1)
-        self.assertLess(dream_rss, 250, f"a whole-graph dream peaks at {dream_rss:.0f} MB")
+        self.assertLess(dream_rss, budget(250), f"a whole-graph dream peaks at {dream_rss:.0f} MB")
 
     def test_the_board_reuses_an_unchanged_graph(self):
         path = graph.graph_path(self.repo)
@@ -138,7 +139,7 @@ class LongRunScale(unittest.TestCase):
         started = time.perf_counter()
         for _ in range(50):
             self.assertIs(graph.load_cached(path), first)
-        self.assertLess((time.perf_counter() - started) / 50, 0.01, "an unchanged poll costs one tiny query")
+        self.assertLess((time.perf_counter() - started) / 50, budget(0.01), "an unchanged poll costs one tiny query")
         with graph.locked(self.repo, partial=True) as value:
             graph.add_insight(value, "Board cache invalidation probe", "fact")
         self.assertIsNot(graph.load_cached(path), first)

@@ -78,15 +78,16 @@ function markMobileColumn() {
     chip.setAttribute("aria-pressed", String(chip.dataset.status === mobileColumn));
 }
 
-function boardTasks() {
-  return filteredTasks().filter((task) => !FINISHED.has(task.status));
+function boardTasks(visibleTasks) {
+  return (visibleTasks || filteredTasks()).filter((task) => !FINISHED.has(task.status));
 }
 
-function renderMobile() {
+// `visibleTasks` is the filtered list board.js computed for this render.
+function renderMobile(visibleTasks = null) {
   if (!snapshot) return;
   const chips = $("mobile-columns");
   chips.hidden = activeView !== "board" || $("work-layout").value === "rows";
-  const tasks = boardTasks();
+  const tasks = boardTasks(visibleTasks);
   const signature = JSON.stringify(
     columnIds().map((id) => [id, tasks.filter((task) => task.status === id).length]),
   );

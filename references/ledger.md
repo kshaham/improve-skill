@@ -54,7 +54,11 @@ first); the clock compares it with elapsed time to say whether a report is due.
 dry sweep uses to find ground nobody has looked at. `dry_sweep` is which step of the sweep
 (0 = not dry, 1-4 = the step in SKILL.md's Escalation) the next refill runs.
 
-`outcome` stays `null` while the run is live - that is what marks a run as resumable. At the
+`outcome` stays `null` while the run is live - that is what marks a run as resumable.
+Write it exactly as one of the values below; the supervisor repairs anything else (an
+unknown string is cleared, `Halted ...` becomes `halted: ...`) and journals the repair.
+`cycle` and `last_report_hour` must be integers; integral floats and digit strings are
+coerced and journaled. At the
 end it becomes `completed` when the clock has exited `10`, `halted: <reason>` for a halt
 condition, `stopped by user`, or `target reached` for improve-max with explicit
 `--stop-at-target`. Never `completed` while the clock still says `RUNNING`. The supervisor
@@ -88,6 +92,11 @@ task counts against them. `focus_priority` links to the ordered focus plan; `acc
 requested result for feature/visual work; `reopens` links to a prior candidate only when
 new evidence permits reconsideration.
 `note` carries the rejection reason verbatim - the gate's actual output, not a paraphrase.
+When the supervisor blocks a task it rewrites the ledger atomically with one row per id,
+keeps `note`, and records `blocked_reason`, `blocked_by` (`supervisor` or `worker`),
+`blocked_at`, `block_count`, and `supervisor_note`. `artifact_paths` in `run.json` lists
+extra fnmatch patterns for untracked build output the supervisor may clean without
+blaming the task (common patterns such as `build/*` and `__pycache__/*` are built in).
 
 For the live board, add a concise `title`, `kind` (`change` or `investigation`), and UTC
 `created_at`/`updated_at`; record `started_at` and `completed_at` when applicable. These
@@ -121,25 +130,52 @@ themselves. When an item lands, copy its after-runs into `journeys.<name>.curren
 `run.json`; that is where the hourly journey line comes from. An item `rejected` for overlap, or `proposed` for a gain under five percent,
 keeps its runs.
 
-## Recipes
+## Reading and writing the ledger
 
-    # ranked ready queue after scope and critical-security checks
+Do not `cat` the ledgers: a raw row repeats every key and carries every evidence string
+into context. The ledger helper prints TOON (Token-Oriented Object Notation): one header
+that declares the columns, then one comma-separated row per task, with long text bounded
+to 100 characters unless `--full` is given. Measured on a 40-task backlog, the ranked
+queue view costs about 28% of the tokens of the raw rows it summarizes. `L` stands for
+`python3 <skill-directory>/scripts/improve_ledger.py --repo /absolute/repo`.
+
+    # ranked ready queue after scope and critical-security checks (user priority, focus, severity x confidence x blast)
+    L queue
+    L queue --area security --fields id,severity,file,claim
+
+    # inspect in-scope critical security findings for preemption
+    L tasks --status ready --area security --fields id,severity,confidence,file,claim
+
+    # is this finding already known (including dismissed)?
+    L tasks --file src/cart.ts --fields id,status,claim,note
+
+    # counts for the hourly report; the latest discovery passes; the run's own state
+    L counts
+    L discovery --limit 5
+    L run
+
+    # everything about one task, untruncated
+    L show q-0007
+
+    # set an item's status with its evidence (one canonical row per id, written atomically)
+    L set q-0007 --status in_progress
+    L set q-0007 --status done --commit "$SHA" --verification 'go test ./... (142 passed)' --counter none --graph-ref insight:1c4aec93a439
+    L set q-0007 --status rejected --note "$(cat gate-output.txt)"
+    L set q-0007 --status blocked --blocked-reason 'simulator failed to boot twice'
+    L set q-0007 --json-field 'measurement={"journey":"cold-launch","unit":"s","runs":[["before",1.84],["after",1.12]]}'
+
+    # add a new candidate
+    L add --json '{"id":"q-0008","area":"quality","tier":1,"severity":3,"confidence":0.9,"blast":2,"file":"x.go","line":4,"claim":"...","evidence":"...","failure":"...","status":"ready"}'
+
+`set` validates statuses, priorities, commit SHAs, severity, blast, and confidence, stamps
+`updated_at` (and `started_at`/`completed_at` on the matching transitions), merges any
+duplicate rows for the id, and leaves every other row byte-for-byte as it was. Add
+`--format json` to any command for JSON; `IMPROVE_FORMAT=json` does so for every helper.
+The jq equivalents still work for anyone reading the files by hand:
+
     jq -s 'map(select(.status=="ready"))
            | sort_by([(if .user_priority=="high" then 0 elif .user_priority=="low" then 2 else 1 end),
                       (.focus_priority // 999), -((.severity // 0) * (.confidence // 0) * (.blast // 0))])' .improve/backlog.jsonl
-
-    # inspect in-scope critical security findings for preemption
-    jq -s 'map(select(.status=="ready" and .area=="security" and .severity==5))' .improve/backlog.jsonl
-
-    # is this finding already known (including dismissed)?
-    jq -s --arg f "$FILE" 'map(select(.file==$f)) | map({claim,status,note})' .improve/backlog.jsonl
-
-    # counts for the hourly report
-    jq -s 'group_by(.area)[] | {area:.[0].area,
-            done:   map(select(.status=="done"))|length,
-            reject: map(select(.status=="rejected"))|length}' .improve/backlog.jsonl
-
-    # set an item's status
     jq -c --arg id "$ID" --arg s done --arg c "$SHA" \
        'if .id==$id then .status=$s | .commit=$c else . end' \
        .improve/backlog.jsonl > .improve/backlog.tmp && mv .improve/backlog.tmp .improve/backlog.jsonl
@@ -186,6 +222,11 @@ An interrupted item records `active_item: {"id":"q-0007","start_commit":"...",
 "owned_paths":["src/cart.ts"],"last_verification":"..."}`. Inspect both the actual git diff
 and this record before recovery. Never use the record as permission to erase unrelated work.
 
+
+`supervisor.json.cycle_history` holds the last 48 cycles (`started_at`, `seconds`, `rc`,
+`advanced`, `outcome`, `limited`); `crashes`, `parks`, `park_until`, `quarantines`,
+`recoveries_total`, `idle_cycles`, `cycle_timeout_seconds`, and `finish_grace_seconds` are
+supervisor bookkeeping for the board. Agents must not edit them.
 
 `final-report.md` is the durable final handover. A report-only retry preserves the original
 outcome and `ended_at`; a new report's timestamp is not a new run end time. The supervisor
