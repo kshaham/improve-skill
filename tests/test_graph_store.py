@@ -15,6 +15,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from support import fts5_available  # noqa: E402
 from graph_support import World, check_invariants, environment, load, make_repo, restore_environment, write_ledger, write_run  # noqa: E402
 import improve_graph as graph  # noqa: E402
 import improve_graph_store as store_module  # noqa: E402
@@ -185,6 +186,7 @@ class WriteTests(unittest.TestCase):
         self.assertEqual(load(self.repo), before)
         self.assertEqual(graph.history(self.repo, 5)["total"], 0)
 
+    @unittest.skipUnless(fts5_available(), "this Python's SQLite has no FTS5")
     def test_index_built_without_fts5_is_rebuilt_by_a_capable_writer(self):
         with mock.patch.object(Store, "fts_usable", lambda self: False):
             with graph.locked(self.repo, partial=True) as value:

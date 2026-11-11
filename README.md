@@ -1,40 +1,44 @@
 # /improve
 
-Continuous, verified codebase improvements for **Codex and Claude Code**, with a local
-board for tracking work and steering the run.
-
-Tell the skill how long to work. It asks ten questions about your priorities, builds a
-backlog, implements and checks improvements, and keeps discovering useful work until the
-deadline. Features, UI, graphics/assets, performance, bugs, security, and code quality can
-all be part of the focus.
+**Point an AI coding assistant at your repository, tell it how long to work, and come back
+to verified commits.** `/improve` runs inside **Claude Code** or **Codex** and keeps
+improving a codebase for the duration you ask for, from ninety minutes to a three-day
+weekend. It asks what you care about, finds concrete problems, fixes them one at a time
+behind your test suite, and never marks anything done that it could not prove. A local
+board shows every task, lets you steer, and tells you at a glance whether the run is
+healthy.
 
 ```text
-Codex:       $improve 4h
-Claude Code: /improve 90m ~/Code/api
+Claude Code:  /improve 4h
+Codex:        $improve 90m ~/Code/api
+Over days:    /improve-max 3d ~/Code/api --target 5x
 ```
 
-[Quick start](#quick-start) · [Board & screenshots](#local-board) ·
-[Background runs](#background-runs) · [How it works](#how-it-works) ·
-[Improve-max](#improve-max) · [Documentation](#documentation)
+[Get started](#get-started-in-five-minutes) · [What you get](#what-you-get) ·
+[The board](#the-board) · [Long unattended runs](#long-unattended-runs) ·
+[How it works](#how-a-run-works) · [Improve-max](#improve-max) · [Docs](#documentation)
 
-| Capability            | What you get                                                                       |
-| --------------------- | ---------------------------------------------------------------------------------- |
-| Your priorities first | Ten intake questions and an ordered focus plan before the timer starts             |
-| Continuous discovery  | An empty backlog triggers another investigation, not an early finish               |
-| Verified changes      | Evidence, acceptance checks, and relevant tests before work is marked done         |
-| Local control         | Task requests, notes, priorities, proposal decisions, and daemon pause/resume/stop |
-| Durable recovery      | Saved deadlines, checkpoints, requests, and reports across restarts                |
-| Knowledge graph       | Cross-run memory that dreams: infers links, forgets what is unused, restores on need |
-| Either assistant      | Background work uses the originating or explicitly selected Codex/Claude engine    |
+## What you get
 
-## Quick start
+| Capability | What it means |
+| --- | --- |
+| **Your priorities, not the model's** | Ten short intake questions become an ordered focus plan before the clock starts. Features, UI, assets, performance, bugs, security, and quality can all be in scope. |
+| **Proof, not vibes** | Every change runs the repository's own gates, a mutation check that makes the test go red, and an adversarial counter-scenario. Unverified work is reverted and recorded as rejected, with the evidence. |
+| **It does not stop early** | An empty backlog triggers a deeper search. Setbacks block one task, never the run. The daemon repairs bad state, survives crashes, parks and retries when the environment misbehaves, and only the deadline ends the run normally. |
+| **A board you can steer from** | Columns, history, run health with live heartbeat and cycle ages, notifications, journal and log viewers, voice commands, phone layout, dark mode. Add tasks, change priorities, approve proposals, pause, resume, or stop. |
+| **Token-frugal tooling** | Every helper the agent calls answers in TOON (Token-Oriented Object Notation): one header, one row per record, 35-70% fewer tokens than JSON on the backlog, request, and graph views a long run reads thousands of times. Storage stays JSON. |
+| **Memory across runs** | A knowledge graph of files, tasks, gates, blockers, and recorded lessons that the skill queries before each task and maintains on its own, keeping a history so nothing is lost. |
+| **Safe by default** | Never touches `main`, never pushes, never weakens a test, never bumps a dependency, never reads secrets. Explicit authorization is remembered and honored within its scope. |
+
+## Get started in five minutes
 
 ### 1. Install
 
-Requires **Git and Python 3.9+** on macOS/Linux. Background runs also require the selected
-assistant's authenticated CLI. The board needs no npm setup or hosted account.
+You need **Git and Python 3.9+** on macOS or Linux. Background runs also need the
+assistant's authenticated CLI (`claude` or `codex`). The board needs nothing else: no npm,
+no account, no network.
 
-For a fresh installation, clone once and link both skills into each assistant:
+Clone once and link both skills into each assistant you use:
 
 ```sh
 improve_checkout="$HOME/Code/improve-skill"
@@ -54,208 +58,200 @@ for improve_skills_dir in "$HOME/.claude/skills" "$HOME/.agents/skills"; do
 done
 ```
 
-Existing `~/.codex/skills` installations also work with the tested Codex CLI 0.160.0.
-Keep an existing installation in its current root to avoid duplicate skills. The commands
-preserve existing directories and links, including broken links. `improve-max` depends on
-the parent checkout's shared scripts and references.
-
-### 2. Choose a duration and answer the intake
-
-Open your target repository in either assistant and invoke the skill:
-
-```text
-$improve 4h
-/improve 90m ~/Code/api
-```
-
-Duration is required; the repository defaults to the current directory. The ten questions
-cover outcomes, features, UI, assets, performance, bugs, security, supporting quality,
-constraints, and success criteria. Answer them together if you prefer; “none” and “use
-your judgment” are valid answers. The timer starts after the intake. Resumed cycles reuse
-your answers and original deadline.
-
-See the [exact intake questions](references/intake.md) and
-[priority and verification guide](docs/workflow.md).
-
-### 3. Follow the work
-
-The skill shares a verified local board URL when the run starts. Open it to inspect tasks,
-submit direction, read responses, and review completed work. Changes are recorded in the
-target repository's `.improve/` directory, which should stay out of version control.
-
-### Updating
-
-For the linked installation above, update the shared checkout:
+Existing `~/.codex/skills` installations work too (tested with Codex CLI 0.160.0). Keep one
+installation per host so the skill does not appear twice. To update later:
 
 ```sh
 git -C "$HOME/Code/improve-skill" pull --ff-only
 ```
 
-For copied installations, sync the same revision into both existing skill directories and
-preserve executable permissions on `scripts/*.sh`. Reload the assistant if needed.
+### 2. Start a run
 
-## Local board
+Open your repository in Claude Code or Codex with a clean working tree and invoke the skill
+with a duration. The path defaults to the current directory.
 
-The board serves on `127.0.0.1`, uses local assets, and stays available after the improvement
-run ends. It reads recorded tasks directly, including `improve-max` experiments and archived
-runs. No separate task database or model calls are needed to browse it.
+```text
+/improve 4h
+$improve 90m ~/Code/api
+```
 
-### Work in progress
+### 3. Answer ten questions
 
-Use four working columns or a compact worklist. Sort and filter by priority, select up to
-50 unfinished current tasks for a bulk priority request, or open a task to inspect its
-evidence, add a note, create follow-up work, or decide a proposal.
+The skill asks what you want most, which features, screens, and assets matter, where it is
+slow, what is broken, what must stay untouched, and how you will judge success. Answer all
+ten in one message if you like; "none" and "use your judgment" are fine answers. The timer
+starts after the intake, and a resumed run never asks again.
+
+### 4. Open the board and let it work
+
+The skill prints a verified local URL, normally `http://127.0.0.1:8765`. The board shows
+the queue, the task in progress, blocked and proposed items, completed history with
+commits, and a run-health panel. Steer from the browser whenever you like; the skill
+applies your requests at its next checkpoint and records a response.
+
+Everything the run knows lives in the target repository's `.improve/` directory, which
+should stay out of version control. Review the result with the branch and commands the
+final report prints:
+
+```sh
+git log --oneline "$baseline_commit..improve/$date"
+```
+
+## The board
+
+The board is a local web app served from `127.0.0.1`. It reads the run's ledgers directly,
+stays available after the run ends, and includes `improve-max` experiments and archived
+runs.
 
 ![Local board showing active documentation tasks, working columns, and run controls](docs/screenshots/board.png)
 
-### Completed history
+**Work in progress.** Four working columns or a compact worklist; sort and filter by
+priority; select up to fifty tasks for a bulk priority change; open any task for its
+evidence, acceptance checks, verification, files, notes, and commits. Blocked tasks say
+who blocked them, why, and when, and offer a one-click **Retry** once the blocker is gone.
 
-Completed and rejected work moves into a searchable list, with twenty rows per page.
-Task details retain verification and commits. New results preserve your place while you
-browse older pages; exports include every matching page.
+**Run health.** Engine, model, cycle, phase, deadline countdown from the server clock, and
+two live ages: time since the supervisor's heartbeat and time the current cycle has run
+against its limit, amber at 75% and red past it. Counters for quarantines, recoveries,
+crashes, and limit waits, a timeline of the last 24 cycles, and buttons for the hourly
+**Journal**, the **Daemon log** tail, and the **Quarantine** refs with their restore
+command. Turn on **Notify me** for a browser notification when the run halts, parks, waits
+for a usage limit, reaches its deadline, blocks a task, or answers a request.
 
 ![Completed history showing compact task rows with areas, dates, and commit references](docs/screenshots/history.png)
 
-### Run overview
-
-Compare work by area, see queued priorities and pending requests, and browse recorded
-task activity and request responses. Click an event to open the associated work or export
-the overview as JSON.
+**History and overview.** Completed and rejected work in searchable, paginated rows with
+commits. Totals by area, high-priority queue, pending requests, verified-task counts, and a
+browsable activity log, all exportable as JSON.
 
 ![Run overview showing area totals, verification entry counts, and recorded task activity](docs/screenshots/overview.png)
 
-### Knowledge graph
+**Steering.** New tasks and guidance, priorities, proposal decisions, notes, per-area focus
+(prefer, normal, skip), twenty improvement-category tiles such as UI polish, security
+hardening, scaling, accessibility, or SEO, pause, resume, and stop. Pending requests can be
+withdrawn. Drafts survive reloads; task links and views are bookmarkable.
 
-The Knowledge tab draws the skill's cross-run memory: files, areas, tasks, gates,
-blockers, and the knowledge it has recorded. Search it, select a node to see its links and
-success rate, and pin, correct, archive, restore, or add knowledge. The skill queries this graph
-before each task, and it dreams: it infers links nobody wrote down, each with its evidence,
-and forgets what stopped being useful, keeping a history so anything can be restored.
+**Knowledge.** The Knowledge tab draws the cross-run graph: files, areas, tasks, gates,
+blockers, and recorded knowledge. Search it, pin or correct knowledge, add your own
+decisions and conventions (the skill treats them as constraints), and watch it dream:
+inferring links with evidence, forgetting what went unused, and restoring on request.
 
-These screenshots show this repository's actual local board, captured while updating these
-docs. [Capture details](docs/screenshots/README.md). Recorded verification means an entry
-exists; the board does not independently certify its result. Activity uses saved timestamps
-and request receipts, so it is not a complete audit log.
+**Phone and voice.** A phone layout with a bottom bar and swipeable columns, a dark theme
+that follows the system, and voice steering ("focus on security and skip docs", "new task:
+add offline mode, high priority", "pause the run"). For phone access put the board behind a
+private HTTPS tunnel and pass `--allow-host`.
 
-### Steer a run from the browser
-
-| Action                               | Behavior                                                                          |
-| ------------------------------------ | --------------------------------------------------------------------------------- |
-| New task or guidance                 | Save desired outcomes, acceptance checks, or a change in focus                    |
-| Priority, note, or proposal decision | Send direction tied to a current task; notes can annotate finished work           |
-| Requests                             | Browse pending/applied/declined responses and links to resulting work across runs |
-| Pause / resume / stop                | Control a live daemon at checkpoints; pause keeps the original deadline           |
-| Drafts and bookmarks                 | Recover unfinished forms and reopen a view or exact task                          |
-| Reports and exports                  | Read saved reports and download matching tasks, requests, or overview data        |
-
-Requests are applied by the skill at a checkpoint. **Applied** means the plan or ledger
-was updated; task verification determines **Done**. The board does not launch an agent or
-change its engine. Run controls require a running daemon; foreground sessions consume the
-same saved task requests.
-
-To open a board manually for a repository with an improvement ledger:
+The screenshots are real captures of this repository's board; the UI has gained the run
+health panel, notifications, and dark theme since they were taken. Open a board by hand for
+any repository with an improvement ledger:
 
 ```sh
 improve_board="$HOME/Code/improve-skill/scripts/improve-board.sh"
-improve_repo="$HOME/Code/my-app"
-"$improve_board" --repo "$improve_repo" --start
-"$improve_board" --repo "$improve_repo" --status --json
-"$improve_board" --repo "$improve_repo" --stop
+"$improve_board" --repo "$HOME/Code/my-app" --start      # prints the URL
+"$improve_board" --repo "$HOME/Code/my-app" --status --json
+"$improve_board" --repo "$HOME/Code/my-app" --stop       # the run keeps going
 ```
 
-Use the URL printed by `--start`; the preferred port is 8765, with a free-port fallback.
-Stopping the board does not stop the improvement run. See the [board guide](docs/board.md)
-for filters, drafts, request handling, ports, and service lifecycle.
+See the [board guide](docs/board.md) for every view, request type, and the service lifecycle.
 
-## Background runs
+## Long unattended runs
 
-Complete the interactive intake first. The skill passes `--engine codex` or `--engine claude`
-according to its host; a resumed run keeps its saved engine, model, and deadline.
+For runs that should outlive your terminal, finish the intake in the assistant, then hand
+the saved answers to the daemon. It launches one fresh assistant cycle after another until
+the saved deadline and starts the board for you.
 
 ```sh
 improve_daemon="$HOME/Code/improve-skill/scripts/improve-daemon.sh"
 improve_repo="$HOME/Code/api"
 
-# Launch a Codex run using answers already collected from the user.
-"$improve_daemon" --engine codex --repo "$improve_repo" --for 6h \
-  --intake /path/to/intake.json
+# A 48-hour Claude Code run, detached, with a watchdog that relaunches after a crash.
+mkdir -p "$improve_repo/.improve"
+nohup "$improve_daemon" --engine claude --repo "$improve_repo" --for 48h \
+  --intake /path/to/intake.json --supervise \
+  >"$improve_repo/.improve/launcher.log" 2>&1 </dev/null &
 
-# Inspect or stop the run from another terminal.
+# From another terminal.
 "$improve_daemon" --repo "$improve_repo" --status --json
 "$improve_daemon" --repo "$improve_repo" --stop
 ```
 
-Use `--engine claude` for Claude Code. The target repository must be clean at launch, and
-the CLI must have the permissions needed for the authorized work. A provider is never
-silently substituted when a CLI is missing.
+Use `--engine codex` from Codex. The daemon is built so that a 48 to 72 hour run reaches its
+deadline whatever happens along the way:
 
-The [runner guide](docs/running.md) covers detached launches, Codex sandbox settings,
-account-limit backoff, `--resume`, report-only `--finalize`, `--new-run`, and troubleshooting.
-The daemon cannot work while the machine is asleep or powered off.
+- **One task fails:** it is marked blocked with the reason and the next cycle moves on.
+- **The agent writes a bad field, damages a ledger, or leaves uncommitted changes:** the
+  state is repaired or restored, the changes are saved to a private quarantine ref, the
+  tree is reset, and the run continues. Build artifacts are cleaned without blaming a task.
+- **The CLI crashes or hits a usage limit:** no task is blamed; limits get bounded
+  exponential backoff that survives restarts.
+- **Every breaker is exhausted:** the run parks, waits, resets, and tries again instead of
+  halting while time remains.
+- **The daemon process dies:** `--status` says `crashed`, a relaunch resumes with the same
+  deadline, and `--supervise` does that for you. Any agent process left behind is stopped
+  and its edits are quarantined first.
+- **The disk fills up or the clock jumps:** the run parks or tolerates it rather than dying.
 
-## How it works
+Only three things end a run: the deadline, your stop, or a dirty tree that cannot be saved.
+The [runner guide](docs/running.md) covers every option, environment variable, recovery
+command, and the state files.
 
-1. **Agree on outcomes.** Save the ten answers, priorities, exclusions, and authorization.
-2. **Establish the baseline.** Start the clock, inspect the repository's gates, and create
-   an improvement branch. Setup counts toward the requested duration.
-3. **Discover and prioritize.** Find concrete gaps, refill the backlog, and rank eligible
-   work by user priority, focus, and evidence-based importance.
-4. **Implement and verify.** Settle one item at a time, keeping verified changes and
-   recording rejected ideas with their evidence.
-5. **Report and continue.** Save checkpoints and hourly reports, then keep finding work
-   until the deadline. Empty queues and finished batches are not reasons to stop;
-   status-only edits do not count as progress.
+## How a run works
 
-A stalled environment or explicit user stop can end a run early, with the actual reason
-recorded. Only deadline expiry permits a normal completion. Reports remain honest about
-work that could not be verified.
+1. **Agree on outcomes.** The ten answers become an ordered focus plan with exclusions and
+   any explicit authorization you granted.
+2. **Establish the baseline.** Start the clock, discover the repository's gates (build,
+   tests, linters, scanners), confirm they are green, and create an `improve/<date>` branch.
+3. **Discover and rank.** Read-only finders look for concrete, evidenced problems in the
+   areas you prioritized; each finding carries a file, a line, and a failure scenario.
+4. **Fix and prove.** One item at a time: edit, run the gates, break the fix to confirm the
+   test catches it, run a counter-scenario, then commit with a message that says why.
+   Rejected ideas stay in the ledger with their evidence so they are not retried.
+5. **Report and continue.** An honest report every hour, then more discovery, escalating
+   from defects to coverage to structure to bounded refactors until the deadline.
 
-By default, `/improve` does not push changes, edit `main`, weaken tests, change dependencies
-or schemas, or access secret files. Explicit user authorization is retained and honored
-within its scope. Findings needing broader authority become proposals while eligible work
-continues. See [workflow and boundaries](docs/workflow.md) for the full contract.
+Hard boundaries by default: no edits to `main`, no pushes or pull requests, no deleted or
+weakened tests, no dependency or schema changes, no secret files, no edits outside the
+target repository. See the [workflow guide](docs/workflow.md).
 
 ## Improve-max
 
-Use [`improve-max`](max/SKILL.md) for measured transformations over days: subsystem rewrites,
-framework changes, data layouts, or other larger bets. It adds characterization corpora,
-spikes, kill criteria, and incremental delivery while sharing intake, state, and the board.
+[`improve-max`](max/SKILL.md) is the courageous variant for multi-day performance bets:
+rewriting a subsystem, replacing a framework, changing a data layout or wire format. It
+adds characterization corpora, time-boxed spikes that must prove the gain before a bet is
+placed, strangler-style landing, and kill criteria, while sharing the intake, state, and
+board.
 
 ```text
-Codex:       $improve-max 3d ~/Code/api --target 5x --kinds design,data
 Claude Code: /improve-max 3d ~/Code/api --target 5x --kinds design,data
+Codex:       $improve-max 3d ~/Code/api --target 5x --kinds design,data
 ```
 
-Targets are measured goals, not promises. Reaching them returns to ordinary improvement
-until expiry unless `--stop-at-target` explicitly permits an early finish. Read the
-[bet protocol](max/references/bets.md) and
-[characterization guide](max/references/characterization.md) before using larger-change modes.
+Targets are measured goals, not promises; read the [bet protocol](max/references/bets.md)
+and [characterization guide](max/references/characterization.md) first.
 
 ## Documentation
 
-| Guide                                           | Read it for                                                       |
-| ----------------------------------------------- | ----------------------------------------------------------------- |
-| [Workflow](docs/workflow.md)                    | Intake, focus, discovery lanes, evidence, and boundaries          |
-| [Local board](docs/board.md)                    | Views, requests, drafts, reports, exports, and service lifecycle  |
-| [Runner and recovery](docs/running.md)          | Background execution, all CLI options, state, and troubleshooting |
-| [Development](docs/development.md)              | Python/browser checks and optional CodeGraph indexing             |
-| [Skill instructions](SKILL.md)                  | The full agent execution contract                                 |
-| [Request protocol](references/board-control.md) | Checkpoint handling and idempotent acknowledgments                |
-| [State schema](references/ledger.md)            | Durable run, task, and discovery records                          |
-| [Knowledge graph](references/knowledge-graph.md) | Graph contents, queries, dreaming, history, and restore          |
+| Guide | Read it for |
+| --- | --- |
+| [Workflow](docs/workflow.md) | Intake, focus, discovery lanes, evidence, and boundaries |
+| [Local board](docs/board.md) | Every view, request type, health signal, phone and voice use, service lifecycle |
+| [Runner and recovery](docs/running.md) | Background execution, all CLI options and environment variables, resilience, troubleshooting |
+| [Development](docs/development.md) | Fast and slow test suites, browser checks, CI |
+| [Skill instructions](SKILL.md) | The full agent execution contract |
+| [Request protocol](references/board-control.md) | How the skill applies and acknowledges board requests |
+| [State schema](references/ledger.md) | Durable run, task, and discovery records |
+| [Knowledge graph](references/knowledge-graph.md) | Graph contents, queries, dreaming, history, and restore |
+| [Architecture review and plan](docs/reviews/) | The 2026-11-08 code review and the remediation plan it produced |
 
 ## Development
 
-From the checkout:
-
 ```sh
-python3 -B -m unittest discover -s tests -v
-uv run --with playwright python tests/browser_board.py --chrome /path/to/chrome
+python3 -B -m unittest discover -s tests -v                      # fast suite
+IMPROVE_TEST_SLOW=1 python3 -B -m unittest discover -s tests -v  # plus soak, scale, performance
+uv run --with playwright python tests/browser_board.py           # board checks in a real browser
 ```
 
-Python tests use temporary repositories and fake Codex/Claude CLIs. Browser checks cover
-large ledgers, controls, drafts, archives, batch requests, and responsive layouts. They do
-not launch paid model runs. See [development and verification](docs/development.md) for
-requirements and screenshot artifacts.
+Tests use temporary repositories and fake assistant CLIs; nothing launches a paid model run.
+See the [development guide](docs/development.md).
 
 Licensed under [MIT](LICENSE).

@@ -14,8 +14,9 @@ installed skill's helper (use its actual absolute path):
 python3 /path/to/improve/scripts/improve_control.py --repo /absolute/repo pending
 ```
 
-It returns pending requests oldest first, the run identity, and pause/stop flags. A request
-saved during an item waits for its next checkpoint; never claim immediate interruption.
+It prints the run identity, the pause/stop flags, and pending requests oldest first as a
+TOON table (`requests[N]{id,type,...}:` then one row per request; `--format json` for JSON).
+A request saved during an item waits for its next checkpoint; never claim immediate interruption.
 Read and apply requests yourself. The supervisor makes their location discoverable but
 does not pretend that saving or displaying one has fulfilled it.
 
@@ -33,6 +34,8 @@ unimplemented work; it must not extend the deadline.
 | `priority` | Find the current task by its exact `task_key`; for a bet use `bets.jsonl`. Record `user_priority` as `high`, `normal`, or `low`, and rank accordingly within the user's scope and focus plan. Do not overwrite severity or fabricate supporting evidence. |
 | `note` | Append `{request_id: "<UUID>", text: "<user text>", at: "<UTC timestamp>"}` to the target's `user_notes`, only if that UUID is absent. Notes can annotate finished current tasks/bets; preserve status, evidence, verification, measurements, and rejection reasons. Acknowledge after saving. |
 | `focus` | `areas` maps task areas to `prefer` or `skip` (omitted areas are normal; an empty map resets to balanced). Optional `themes` lists improvement categories chosen from board tiles (see `references/categories.md`). Replace `run.json.focus.board_areas` with `{prefer: [...], skip: [...], themes: [...], request_id: "<UUID>", at: "<UTC timestamp>"}` and journal the change. Rank `prefer` areas ahead of unmarked areas after `user_priority`; do not start new tasks or finder lanes in `skip` areas, and leave existing ready work there queued rather than rejected. A later focus request fully replaces an earlier one. Focus cannot add areas excluded at intake, widen authorization, or suppress a confirmed critical in-scope vulnerability; say so in the acknowledgment when it applies. |
+| `retry` | The user says a blocked task's blocker is gone (`task_key`, `expected_status: blocked`; `text` may say what changed). Re-check the blocker; if it is cleared, set the task back to `ready` with a `reopens`-style note recording the request UUID and keep its original evidence; if it is still blocked, decline with what is still missing. Never retry without confirming the blocker changed. |
+| `withdraw` | The user cancelled a pending request (`target_id`). The helper already hides the target from `pending`; acknowledge the withdrawal as `applied` after confirming nothing from the target was applied, or `declined` with what had already been done. A request the skill already answered cannot be withdrawn. |
 | `decision` | Verify that the named item still awaits that decision. An approved ordinary proposal becomes eligible `ready` work; a declined proposal becomes `rejected` with the user's reason. For improve-max, preserve its required characterization/spike gates; approval does not mean a bet has landed or passed measurement. |
 
 Never apply an old request to a similarly named task in another run. Finished targets

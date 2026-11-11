@@ -59,7 +59,7 @@ def check_workflow(page, repo, tasks, write_tasks, artifacts):
     page.keyboard.press("Escape")
     # A delayed failure from the previous bookmark cannot replace the newer selection.
     delayed = []
-    page.route("**/api/board?run=missing-hold", lambda route: delayed.append(route))
+    page.route("**/api/board?run=missing-hold*", lambda route: delayed.append(route))
     page.evaluate("""() => {
         location.hash = 'run=missing-hold';
         document.getElementById('task-dialog').dispatchEvent(new Event('close'));
@@ -69,8 +69,8 @@ def check_workflow(page, repo, tasks, write_tasks, artifacts):
     assert delayed
     page.evaluate("fragment => { location.hash = fragment; }", link.split("#", 1)[1])
     expect(page.locator("#run")).to_have_value("current")
-    delayed[0].fulfill(status=400, json={"error": "unknown run"})
-    page.unroute("**/api/board?run=missing-hold")
+    delayed[0].fulfill(status=400, json={"error": "unknown run", "code": "unknown_run"})
+    page.unroute("**/api/board?run=missing-hold*")
     expect(page.locator("#task-dialog")).to_be_visible()
     expect(page.locator("#detail-title")).to_have_text("Useful task 0001")
     page.keyboard.press("Escape")

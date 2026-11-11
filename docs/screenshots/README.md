@@ -14,7 +14,9 @@ The images contain recorded work, not demo fixtures or generated mockups.
 | [overview.png](overview.png) | Current run's area totals and recorded activity |
 
 The board was serving during capture; no background improvement daemon was running.
-Unavailable run controls reflect that state. Screenshots are a snapshot, so their counts
+Unavailable run controls reflect that state. The UI has since gained the run health ages
+and cycle timeline, the Journal, Daemon log, and Quarantine views, notifications, retry and
+withdraw actions, and a dark theme (version 1.15.0); those are not in these images yet. Screenshots are a snapshot, so their counts
 and task statuses will differ from the live board as work continues.
 
 To refresh them:

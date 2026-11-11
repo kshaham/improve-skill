@@ -33,7 +33,9 @@ The board includes:
 - **Recent completions:** five compact rows below the board, with a link to the full history.
 - **History view:** completed and rejected tasks in rows with title, outcome, area, recorded
   date, and commit. Twenty rows per page keep long runs manageable; click any row for details.
-- **Task details:** evidence, acceptance checks, verification, files, notes, and commits.
+- **Task details:** evidence, acceptance checks, verification, files, notes, and commits. A
+  blocked task opens with a banner saying why it is blocked, whether the worker or the
+  supervisor blocked it, when, and how many times; its card shows the same reason.
 - **Task notes and request history:** add context to current tasks, including completed
   work, and read linked requests and responses in their details. Notes preserve existing
   verification; follow-up implementation gets a separate task.
@@ -65,7 +67,25 @@ The board includes:
 - **Search and filters:** find tasks by text, area, or run, including archived history.
 - **Live progress:** task counts, deadline, latest checkpoint, and recent investigations.
 - **Run health:** engine/model, cycle, checkpoint times, retry schedule, failure count,
-  and pending final report. A connected board is separate from a running daemon.
+  and pending final report. A connected board is separate from a running daemon. The panel
+  also shows live ages: how long since the supervisor's last heartbeat and how long the
+  current cycle has run against its limit ("Cycle running for 47 min of 1 h 00 min limit").
+  Both turn amber at 75% of the cycle limit and red past it (the heartbeat turns red past
+  twice the limit), so a hung child is told apart from a long cycle. Counters list
+  quarantines, recoveries, crashes, and time waited on account limits; a parked run shows
+  when it will retry. A compact timeline draws the last 24 cycles: green advanced, grey made
+  no progress, red exited with an error; hover a bar for its start, duration, and outcome.
+- **Journal, daemon log, quarantine:** three buttons in the run health panel open the run's
+  hourly `journal.md` (also for archived runs), the last 400 lines of the current run's
+  `daemon.log` (refreshing every five seconds while open), and the list of quarantined
+  snapshots the supervisor saved as `refs/improve/quarantine/*`, each with the
+  `git checkout <ref> -- .` command that restores it. All render as plain text.
+- **Notifications:** **Notify me** asks the browser for notification permission and then
+  alerts you once per event when the run halts, stops, or completes, parks or waits for an
+  account limit, reaches its deadline, fails three cycles in a row, blocks a task, or
+  answers one of your requests. The choice is remembered in this browser. Without
+  permission, the same events still appear in the panel's **Events** log (last 20), and the
+  tab title gains a warning mark while the run is halted or parked.
 - **Run controls:** pause after a clean checkpoint, resume, or stop a running daemon.
   Pause keeps the original wall-clock deadline; it works with either saved engine.
 - **Improvement categories:** tap one or more of twenty tiles such as UI/UX polish,
@@ -78,7 +98,8 @@ The board includes:
   links to a filtered board. The skill applies a saved focus at its next checkpoint; cards in
   preferred areas are marked *Focus* and skipped areas are dimmed.
 - **Mobile layout:** phones and small touch screens switch to it automatically: a bottom
-  navigation bar, one board column at a time (tap a status chip or swipe left/right),
+  navigation bar with Board, History, Overview, voice, Requests, Knowledge, and Focus
+  (it scrolls sideways on narrow screens), one board column at a time (tap a status chip or swipe left/right),
   larger touch targets, a sticky run status strip, and full-width sheets for forms. Use
   **Switch to mobile/desktop view** in the footer, or `?layout=mobile|desktop|auto`, to
   override detection in that browser.
@@ -92,6 +113,15 @@ The board includes:
 - **New tasks and guidance:** send desired outcomes, acceptance checks, or updated focus
   directly from the board. Change a current task's priority or approve/decline a proposal
   from its details.
+- **Retry and withdraw:** a blocked current task offers **Retry task**, which asks the skill
+  to re-queue it at its next checkpoint (say what changed, if anything). A pending request
+  in the Requests tab offers **Withdraw**, which asks the skill to drop it before acting.
+  Both are ordinary requests with checkpoint responses; a withdrawn request shows as
+  **Withdrawn** in the Requests tab. The buttons appear only when the
+  running skill version accepts those request types; an older runtime refuses them with a
+  clear message instead of saving them.
+- **Dark mode:** the board follows the system colour scheme. **Theme: auto** in the footer
+  cycles to light or dark for this browser.
 - **Follow-up tasks:** create a separate request from any task's details, including archived
   or completed work. The form retains its source task and commit for context.
 - **Recoverable drafts:** forms save locally as you type. Close and reopen them or use
@@ -113,7 +143,11 @@ The board includes:
 ## Saved work and request responses
 
 It reads `.improve/backlog.jsonl` directly, includes `improve-max` experiments from
-`bets.jsonl`, and refreshes every three seconds while visible.
+`bets.jsonl`, and refreshes every three seconds while visible. The footer shows how old
+the displayed data is. When a refresh fails, the board keeps the last snapshot and the
+controls stay usable while it is under 30 seconds old; after that they close with the
+reason ("No fresh data for N s") until a refresh succeeds. Retries back off from three
+seconds to thirty, pause while the browser is offline, and resume when it reconnects.
 There is no second task database to maintain. The skill records tasks before starting,
 updates their status as work progresses, and retains finished/rejected work. Existing
 ledgers work without migration; older work that was never recorded cannot be reconstructed.
@@ -195,7 +229,10 @@ verification entry exists, not that the board independently ran or passed a chec
 The current run panel flags an inactive daemon and missing final report, and shows when a
 report-only retry is running. It uses the supervisor's confirmed outcome, so a worker's
 premature completion cannot make an active supervised run look finished. Checkpoint times
-show the latest saved observations, not a guarantee that an agent is still making progress.
+show the latest saved observations, not a guarantee that an agent is still making progress;
+the heartbeat and cycle ages next to them are the staleness measure, and they keep counting
+in the browser between refreshes. The cycle limit comes from the supervisor; when an older
+daemon has not recorded one, the panel assumes one hour and says so.
 
 Malformed records and non-finite benchmark values such as `NaN` produce warnings while
 valid task history remains visible. The viewer never rewrites those source records.
@@ -212,5 +249,7 @@ reuse the existing board. Daemon `--no-board` skips startup; an unavailable boar
 prevents improvement work.
 
 Only Python 3.9+ is required. The server binds to `127.0.0.1` and uses local assets, with
-no npm setup or hosted service. Keep `.improve/` untracked. See
+no npm setup or hosted service. Besides ledgers and reports it serves the run journal, a
+bounded tail of the current run's `daemon.log` (at most 2,000 lines and 256 KiB), and the
+names of quarantine refs; nothing else from the repository. Keep `.improve/` untracked. See
 [board lifecycle and task schema](../references/board.md) for details and remote-host access.

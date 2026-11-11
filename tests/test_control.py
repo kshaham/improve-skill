@@ -9,8 +9,11 @@ import uuid
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
 
-from test_board import LedgerFixture, board
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # Works both under discover and as a named module.
+
+from test_board import LedgerFixture, board  # noqa: E402
 import improve_control as control
+import improve_toon as toon
 
 
 class ControlTests(LedgerFixture):
@@ -104,8 +107,8 @@ class ControlTests(LedgerFixture):
         return saved
 
     def request_data(self, kind="guidance", **updates):
-        return dict(id=str(uuid.uuid4()), run_id=control.run_identity(self.repo), type=kind,
-                    text="Focus on keyboard navigation", **updates)
+        return {**dict(id=str(uuid.uuid4()), run_id=control.run_identity(self.repo), type=kind,
+                       text="Focus on keyboard navigation"), **updates}
 
     def test_browser_capability_is_same_origin_and_separate_from_service_stop(self):
         for headers in ({}, {"X-Improve-Client": "board", "Origin": "https://outside.invalid"},
@@ -239,6 +242,41 @@ class ControlTests(LedgerFixture):
         self.http("/api/requests", payload)  # Retry after the target changed remains idempotent.
         self.rejected("/api/requests", self.request_data("decision", task_key="current:a", decision="reject"))
 
+    def test_retry_requests_target_only_blocked_current_tasks(self):
+        self.rows([dict(id="a", status="blocked", blocked_reason="Simulator unavailable"), dict(id="b", status="ready")])
+        payload = self.request_data("retry", task_key="current:a", text="The simulator is back")
+        self.http("/api/requests", payload)
+        saved = control.request_view(self.repo)[0]
+        self.assertEqual((saved["type"], saved["expected_status"], saved["task_key"]), ("retry", "blocked", "current:a"))
+        self.assertIn("Only a blocked task", self.rejected("/api/requests", self.request_data("retry", task_key="current:b")))
+        self.rejected("/api/requests", self.request_data("retry", task_key="current:missing"))
+        pending = control.request_view(self.repo)
+        self.assertEqual([row["status"] for row in pending], ["pending"])
+
+    def test_withdraw_removes_a_pending_request_from_the_worker_queue(self):
+        first = self.request_data()
+        self.http("/api/requests", first)
+        withdraw = self.request_data("withdraw", target_id=first["id"], text="")
+        self.http("/api/requests", withdraw)
+        rows = {row["id"]: row for row in control.request_view(self.repo)}
+        self.assertEqual(rows[first["id"]]["status"], "withdrawn")
+        self.assertIn("Withdrawn by the user", rows[first["id"]]["response"])
+        self.assertEqual(rows[withdraw["id"]]["status"], "pending", "the worker still acknowledges the withdrawal")
+        script = Path(board.__file__).with_name("improve_control.py")
+        result = subprocess.run([sys.executable, str(script), "--repo", str(self.repo), "pending"],
+                                check=True, capture_output=True, text=True)
+        self.assertEqual([row["id"] for row in toon.loads(result.stdout)["requests"]], [withdraw["id"]])
+        self.assertIn("already withdrawn", self.rejected("/api/requests", self.request_data("withdraw", target_id=first["id"], text="")))
+        self.rejected("/api/requests", self.request_data("withdraw", target_id=str(uuid.uuid4()), text=""))
+        self.rejected("/api/requests", self.request_data("withdraw", target_id="not-a-uuid", text=""))
+        # A request the skill already answered keeps its answer.
+        second = self.request_data()
+        self.http("/api/requests", second)
+        control.acknowledge(self.repo, second["id"], "applied", "Queued user-task")
+        self.http("/api/requests", self.request_data("withdraw", target_id=second["id"], text=""))
+        rows = {row["id"]: row for row in control.request_view(self.repo)}
+        self.assertEqual(rows[second["id"]]["status"], "applied")
+
     def test_proposal_and_priority_requests_support_bets(self):
         (self.state / "bets.jsonl").write_text(json.dumps(dict(id="b", hypothesis="Faster feed", status="proposed")) + "\n")
         self.http("/api/requests", self.request_data("decision", task_key="current:bet:b", decision="approve"))
@@ -305,10 +343,10 @@ class ControlTests(LedgerFixture):
         script = Path(board.__file__).with_name("improve_control.py")
         command = [sys.executable, str(script), "--repo", str(self.repo)]
         result = subprocess.run([*command, "pending"], check=True, capture_output=True, text=True)
-        self.assertEqual(json.loads(result.stdout)["requests"][0]["id"], payload["id"])
+        self.assertEqual(toon.loads(result.stdout)["requests"][0]["id"], payload["id"])
         subprocess.run([*command, "ack", "--id", payload["id"], "--status", "declined", "--note", "Outside the current scope"], check=True, capture_output=True)
         result = subprocess.run([*command, "pending"], check=True, capture_output=True, text=True)
-        self.assertEqual(json.loads(result.stdout)["requests"], [])
+        self.assertEqual(toon.loads(result.stdout)["requests"], [])
         self.assertFalse((self.state / "backlog.jsonl").exists())
 
     def test_report_route_is_bounded_and_never_follows_symlinks(self):
@@ -410,6 +448,6 @@ class ControlTests(LedgerFixture):
                 raise
         stdout, stderr = process.communicate(timeout=5)
         self.assertEqual(process.returncode, 0, stderr)
-        result = json.loads(stdout)
+        result = toon.loads(stdout)
         self.assertEqual(result["run_id"], replacement["run_id"])
         self.assertEqual(result["requests"][0]["run_id"], result["run_id"])

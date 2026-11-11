@@ -6,8 +6,9 @@ metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus) in plan mode
   created: 2026-09-05
   origin: Designed to spec in the ~/Code/bonsai session (plan shimmying-roaming-goose.md); daemon added 2026-09-06 after the first 6h run hit ENOSPC
-  version: 1.14.0
+  version: 1.15.0
   changelog: |
+    1.15.0 (2026-11-08) - the daemon survives bad agent writes, unexpected errors, crashes and stale children; parks instead of halting; limits recognized on any exit code; build artifacts are not task failures; cycle budget in every prompt; protected user knowledge, narrower damage recovery and a bounded graph lock; board liveness, notifications, journal/log/quarantine views; CI and a fast/slow test split
     1.14.0 (2026-10-04) - atomic bulk priority requests, task notes and request threads, run overview with recorded activity and exports, and progress checks that exclude operator bookkeeping
     1.13.0 (2026-10-04) - prioritized worklists, durable browser drafts, bookmarkable views and task links, follow-up requests, session reconnection, and explicit operator-priority ranking
     1.12.0 (2026-10-04) - searchable archived requests, links to resulting tasks and bets, report browsing across runs, stable request pagination, and consistent request checkpoints during archival
@@ -62,8 +63,9 @@ board. In daemon mode the supervisor starts it; child cycles must not start or s
 Honor `--no-board` or an explicit user opt-out. If serving fails, report the error and
 continue improvement work. Never claim a URL is available without a successful start/status.
 
-Record each accepted task in `backlog.jsonl` before working on it. Set `in_progress` before
-edits; update to `done`, `rejected`, `blocked`, or `proposed` with evidence after settling it.
+Record each accepted task in `backlog.jsonl` before working on it (`improve_ledger.py add`).
+Set `in_progress` before edits; update to `done`, `rejected`, `blocked`, or `proposed` with
+evidence after settling it (`improve_ledger.py set`).
 Retain finished tasks. Keep meaningful investigations in `discovery.jsonl`; don't invent
 tasks or outcomes to fill columns. The board shows current and archived ledgers, refreshes
 automatically, and stays available after completion. See [references/board.md](references/board.md)
@@ -146,10 +148,20 @@ and commit that housekeeping before the first item so it cannot leave a cycle di
     .improve/final-report.md final handover, with evidence and actual stop reason
     .improve/board.json     local board URL and private service identity; never commit
 
-Read `run.json`, `backlog.jsonl`, the focus plan, and the latest discovery checkpoint at
-the start of **every** cycle. Never carry loop state only in your context - assume you
-will be compacted mid-run. See `references/ledger.md` for
-the schema and the jq recipes.
+Read the run state, the ranked queue, the focus plan, and the latest discovery checkpoint
+at the start of **every** cycle through the ledger helper, not by reading the raw files:
+
+    python3 <skill-directory>/scripts/improve_ledger.py --repo <repo> run
+    python3 <skill-directory>/scripts/improve_ledger.py --repo <repo> queue
+    python3 <skill-directory>/scripts/improve_ledger.py --repo <repo> discovery --limit 5
+
+Every helper prints TOON (Token-Oriented Object Notation): `key: value` lines, and for a
+list of records one header `name[N]{field,field}:` followed by one comma-separated row per
+record, so a backlog costs a fraction of the tokens its JSON rows would. `show ID` prints
+one task in full; `set ID --status ... --commit ...` writes a canonical row. Pass
+`--format json` to any helper when you need JSON. Never carry loop state only in your
+context - assume you will be compacted mid-run. See `references/ledger.md` for the schema
+and the commands.
 
 **Entry is resumption first.** Before asking the intake again, every invocation checks
 for `.improve/run.json` with no `outcome`. If there is one, this is the same run: keep the
@@ -479,9 +491,28 @@ an approach stops working, mark that task `blocked` in `backlog.jsonl` with a co
 a `halted:` outcome only for a blocker that stops all remaining work. Under the daemon the
 supervisor backs this up: it converts a worker halt into a blocked task (only repeated
 halts end the run), saves leftover uncommitted edits to `refs/improve/quarantine/*` and
-restores a clean tree, repairs damaged ledger lines, and after repeated empty cycles
-blocks the stuck item and steers to the least recently explored eligible lane. Prompts
-list blocked tasks; do not retry one unless its blocker has changed.
+restores a clean tree, repairs damaged ledger lines and malformed `run.json` fields, and
+after repeated empty cycles blocks the stuck item and steers to the least recently explored
+eligible lane. A CLI crash, a usage limit, or build artifacts left in the tree never block
+the task in flight. When every breaker is exhausted the daemon parks (waits and retries)
+rather than halting while time remains. Prompts list blocked tasks; do not retry one
+unless its blocker has changed.
+
+### Cycle budget
+
+Under the daemon each cycle is one process with a wall-clock limit (`IMPROVE_CYCLE_TIMEOUT`,
+one hour by default; the prompt states the exact number) plus `IMPROVE_FINISH_GRACE` after
+the deadline or a stop. A cycle killed at the limit has its edits quarantined and its task
+blocked, so:
+
+- choose items whose editing, gates, and mutation check fit well inside the limit;
+- checkpoint `backlog.jsonl` and `run.json` before any gate that may run long;
+- return early with a clean tree and a persisted `next_action` rather than be interrupted;
+- for a gate slower than the limit, record it as a blocker with its measured time and
+  propose the item instead of running it.
+
+A graph or learning helper that fails (exit `2`, or `3` when another process holds the
+graph) is never a reason to block a task or halt: note it in the journal and continue.
 
 The skill learns across runs. `.improve/learning.json` keeps per-area verified-success
 rates, recurring blockers, and lessons; it survives `--new-run`. Each cycle prompt
@@ -591,7 +622,8 @@ build a real coverage profile) can miss the deadline entirely. So:
 - `scripts/improve-clock.sh` - elapsed, remaining, hour label, report due, deadline passed
 - `references/finder-briefs.md` - the per-lane subagent briefs, by tier
 - `references/verification.md` - discovering and recording this repo's gates
-- `references/ledger.md` - `.improve/` schema and jq recipes
+- `references/ledger.md` - `.improve/` schema and the ledger helper commands
+- `scripts/improve_ledger.py` - ranked queue, filtered task views, counts, and canonical writes, printed as TOON
 - `references/report-format.md` - the hourly report
 
 ## Running continuously
@@ -610,7 +642,9 @@ For example, from Codex:
 
 The runner requires Python 3.9+ and the selected CLI, uses the skill files beside itself,
 and works on macOS/Linux without jq or GNU timeout. Each launch is one cycle with durable
-state, a fixed deadline, bounded retries, and a finalization pass. The saved engine is fixed
+state, a fixed deadline, bounded retries, and a finalization pass. For a run of a day or
+more add `--supervise`, the watchdog that relaunches the daemon after a crash with the
+same deadline; a crashed daemon shows `crashed` in `--status` and a plain relaunch resumes. The saved engine is fixed
 for the run, including restarts from another host; omit `--engine` on recovery to keep it.
 For Codex, also pass `--codex-sandbox` with the current session's mode (`read-only`,
 `workspace-write`, or `danger-full-access`); never broaden the session's permissions. If the

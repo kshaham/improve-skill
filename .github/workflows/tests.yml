@@ -1,0 +1,53 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  fast:
+    name: unit and daemon tests (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Shell syntax
+        run: for script in scripts/*.sh; do bash -n "$script"; done
+      - name: Python syntax
+        run: python -m compileall -q scripts tests
+      - name: Fast suite
+        env:
+          IMPROVE_TEST_SPEED_FACTOR: "3"
+        run: python -B -m unittest discover -s tests -v
+
+  nightly:
+    name: soak, scale, performance, and browser checks
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Slow suites
+        env:
+          IMPROVE_TEST_SLOW: "1"
+          IMPROVE_TEST_SPEED_FACTOR: "3"
+        run: python -B -m unittest discover -s tests -v
+      - name: Browser checks
+        run: |
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+          python tests/browser_board.py
+          python tests/browser_graph.py
+          python tests/browser_graph_scale.py

@@ -35,8 +35,10 @@ function selectTaskRow(item, task) {
   item.prepend(check);
 }
 
-function renderSelection() {
+// `tasks` is the filtered list the caller already computed; controls.js calls without it.
+function renderSelection(tasks = null) {
   if (!snapshot) return;
+  const visibleTasks = tasks || filteredTasks();
   const identity = snapshot.current.control_id || null;
   if (selectionRun !== identity) {
     selectedWork.clear();
@@ -51,7 +53,7 @@ function renderSelection() {
     connected && !sending && snapshot.controls.requests_available;
   const shown = new Set(
     orderedWork(
-      filteredTasks().filter((task) => !FINISHED.has(task.status)),
+      visibleTasks.filter((task) => !FINISHED.has(task.status)),
     ).map((task) => task.key),
   );
   const hidden = [...selectedWork].filter((key) => !shown.has(key)).length;

@@ -13,6 +13,7 @@ import re
 import sys
 
 from improve_runtime import StateError, atomic_json, read_json, stamp
+import improve_toon as toon
 
 MAX_RUNS = 60
 MAX_LESSONS = 200
@@ -190,6 +191,8 @@ def board_summary(repo):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True)
+    parser.add_argument("--format", choices=("toon", "json"), default=os.environ.get("IMPROVE_FORMAT", "toon"),
+                        help="output format for `lesson` (default toon; IMPROVE_FORMAT overrides)")
     sub = parser.add_subparsers(dest="action", required=True)
     lesson = sub.add_parser("lesson", help="record a reusable lesson")
     lesson.add_argument("--text", required=True)
@@ -204,7 +207,8 @@ def main(argv=None):
         if args.action == "lesson":
             run = repo / ".improve" / "supervisor.json"
             run_id = read_json(run).get("run_id") if run.exists() else None
-            print(json.dumps(add_lesson(repo, args.text, args.area, args.scope, run_id)))
+            saved = add_lesson(repo, args.text, args.area, args.scope, run_id)
+            print(json.dumps(saved) if args.format == "json" else toon.dumps(saved))
         elif args.action == "guidance":
             print(guidance(repo) or "No learning recorded yet.")
         else:

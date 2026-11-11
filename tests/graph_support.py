@@ -9,6 +9,9 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
+
+from support import budget, slow  # noqa: E402,F401
 
 import improve_graph as graph  # noqa: E402
 

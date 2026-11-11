@@ -56,9 +56,16 @@ def unpack(value, empty):
 
 
 def is_damage(exc):
+    """True only for a database that cannot be read as a knowledge graph. A constraint
+    violation, a programming error, or a busy database is a bug or a wait, never a reason
+    to discard the live store for its checkpoint."""
     message = str(exc).lower()
-    return (isinstance(exc, sqlite3.DatabaseError) and not isinstance(exc, sqlite3.OperationalError)
-            or any(word in message for word in DAMAGE_WORDS))
+    if any(word in message for word in DAMAGE_WORDS):
+        return True
+    if isinstance(exc, (sqlite3.OperationalError, sqlite3.IntegrityError, sqlite3.ProgrammingError,
+                        sqlite3.DataError, sqlite3.InterfaceError)):
+        return False
+    return isinstance(exc, sqlite3.DatabaseError)
 
 
 class GraphState(dict):
@@ -530,5 +537,8 @@ def restore_backup(db_path, backup_path):
         return False
     temporary = Path(db_path).with_name("graph.restoring.db")
     shutil.copyfile(backup_path, temporary)
+    # A write-ahead log left by the old database would be replayed onto the restored one.
+    for suffix in ("-wal", "-shm"):
+        Path(str(db_path) + suffix).unlink(missing_ok=True)
     os.replace(temporary, db_path)
     return True

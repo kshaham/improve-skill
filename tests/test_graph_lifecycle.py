@@ -17,9 +17,10 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from graph_support import (ROOT, LongSession, archive, check_invariants, check_matches_ledger, copy_store,  # noqa: E402
+from graph_support import (budget, slow, ROOT, LongSession, archive, check_invariants, check_matches_ledger, copy_store,  # noqa: E402
                            check_disk, environment, load, make_repo, restore_environment, write_ledger, write_run)
 import improve_graph as graph  # noqa: E402
+import improve_toon as toon  # noqa: E402
 from improve_runtime import stamp  # noqa: E402
 
 SOAK_CYCLES = int(os.environ.get("IMPROVE_GRAPH_SOAK_CYCLES", "288"))
@@ -307,7 +308,7 @@ class ConcurrencyTests(GraphTestCase):
             for thread in threads:
                 thread.join(timeout=60)
         self.assertEqual([code for code, _, err in results if code], [], [err for code, _, err in results if code])
-        ids = {json.loads(out)["id"] for code, out, _ in results[:32]}
+        ids = {toon.loads(out)["id"] for code, out, _ in results[:32]}
         value = load(self.repo)
         self.assertEqual(len(ids), 32)
         self.assertTrue(ids <= set(value["nodes"]), "every concurrent note survived")
@@ -318,6 +319,7 @@ class ConcurrencyTests(GraphTestCase):
         check_matches_ledger(self, value, "live", rows, self.repo)
 
 
+@slow
 class LongSessionSoakTests(unittest.TestCase):
     """A compressed 48-hour run with history, checked after every single cycle."""
 
@@ -373,9 +375,9 @@ class LongSessionSoakTests(unittest.TestCase):
                 self.assertTrue(value["nodes"][f"file:{name}"]["stale"], name)
         check_disk(self, repo)
         # Generous ceilings: they catch quadratic regressions, not machine speed.
-        self.assertLess(worst["sync"], 2.0, worst)
-        self.assertLess(worst["refine"], 5.0, worst)
-        self.assertLess(worst["query"], 0.75, worst)
+        self.assertLess(worst["sync"], budget(2.0), worst)
+        self.assertLess(worst["refine"], budget(5.0), worst)
+        self.assertLess(worst["query"], budget(0.75), worst)
 
     def query_everything(self, value, repo, session, rand):
         started = time.perf_counter()
@@ -418,6 +420,7 @@ class LongSessionSoakTests(unittest.TestCase):
             self.assertEqual(value["nodes"]["area:" + area]["stats"]["attempts"], count, area)
 
 
+@slow
 class ScaleTests(unittest.TestCase):
     """A repository with a long history: 20 runs of 300 tasks, 3,000 files, 400 notes."""
 

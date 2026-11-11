@@ -20,8 +20,8 @@ improve_repo="$HOME/Code/my-app"
 ```
 
 `--start` launches a detached service and returns its actual local URL. Repeated starts
-reuse the same healthy service for that repository. The preferred port is 8765; an
-occupied preferred port falls back to an available one. Use `--port 0` to request a free
+reuse the same healthy service for that repository. The preferred port is 8765 (or
+`IMPROVE_BOARD_PORT` when set); an occupied preferred port falls back to an available one. Use `--port 0` to request a free
 port or `--port 9000` for a specific port. An occupied explicit port is an error. To change
 an existing service's port, stop it first. Omitting `--start` runs the server in the
 foreground until Ctrl-C. All modes require the Git repository root.
@@ -95,10 +95,16 @@ scrolling. Tab arrows switch Board/History/Overview/Requests/Knowledge; Enter op
 Escape closes its details.
 
 Open a card or row for evidence, acceptance checks, verification, files, and commit
-details. Export downloads JSON: History exports every matching finished task across all
+details. Blocked tasks lead with `blocked_reason`, `blocked_by`, `blocked_at`, and
+`block_count`, and show the supervisor's `supervisor_note` as its own section. Export downloads JSON: History exports every matching finished task across all
 pages with its outcome filter; Board exports all matching tasks, including finished work.
 The page refreshes every three seconds while visible and every ten seconds while hidden. Connection
-failures retain the last view and show a warning. Partial/malformed ledger rows generate
+failures retain the last view and show a warning with the data's age; controls stay enabled
+while the last snapshot is under 30 seconds old and then close with the reason until a
+refresh succeeds. Failed polls back off (3, 6, 12, 24, then 30 seconds), pause while the
+browser reports itself offline, and resume on reconnection. The countdown and the health
+ages advance from the server's clock plus the time since the snapshot, so a phone with a
+skewed clock still shows the right deadline. Partial/malformed ledger rows generate
 warnings while valid rows remain visible.
 Non-finite measurements (`NaN`, infinities, or overflowing numbers) are invalid records;
 they produce warnings rather than breaking the browser's entire task response.
@@ -147,6 +153,19 @@ The **Current run** health panel shows the saved engine/model, cycle/phase, work
 supervisor checkpoint times, account-limit retry, consecutive failures, and pending final
 report. Checkpoint timestamps are saved observations, not proof of continuous activity.
 **Board connected** means the viewer is responding; daemon liveness comes from its OS lock.
+The panel also reads the supervisor's `cycle_started_at`, `child_pid`,
+`cycle_timeout_seconds`, `finish_grace_seconds`, `quarantines`, `recoveries_total`,
+`crashes`, `limit_waited_seconds`, `next_limit_wait`, `park_until`, `ended_at`, and
+`cycle_history` (missing fields read as null or zero) and renders heartbeat and cycle ages
+with amber/red thresholds (75% and 100% of the cycle limit; the heartbeat is red past twice
+the limit), supervisor counters, and a timeline of the last 24 cycles. **Journal**,
+**Daemon log**, and **Quarantine** open text views of `journal.md` (per run, last 1 MiB),
+the current run's `daemon.log` tail (at most 2,000 lines, 256 KiB, refreshed every five
+seconds while open), and `refs/improve/quarantine/*` with a restore command per ref.
+**Notify me** enables browser notifications, each fired once per event: run outcome set,
+phase becomes `account-limit` or `parked`, three consecutive failures, deadline reached, a
+task entering Blocked, or a request receiving a response. The same events fill the panel's
+**Events** log without permission, and the tab title is marked while halted or parked.
 An active supervisor's null outcome takes precedence over an unconfirmed worker completion.
 Foreground completion recorded before its deadline is flagged without modifying the ledger.
 The panel remains about the current run when filtering archived task history.
@@ -168,18 +187,27 @@ board liveness and its URL without exposing the token.
 
 Run controls always target the current run, even while browsing archived tasks. Task
 priority/decision actions require unfinished current tasks; notes may target finished
-current work, and follow-up requests may reference any run. A replacement run has a new
+current work, and follow-up requests may reference any run. **Retry task** (`retry`, with
+the blocked task's `task_key`) and **Withdraw** (`withdraw`, with a pending request's
+`target_id`) are offered only when the paired runtime lists those types in
+`controls.request_types`; otherwise the server refuses them with `unsupported_request_type`.
+A replacement run has a new
 identity, so forms opened before it started are rejected with their drafts intact.
 Requests have stable IDs for safe retry after a lost response. The board shows their
 pending/applied/declined responses in a separate tab. `operator.lock` serializes submissions
-and acknowledgments, worker request reads, and board/report snapshots against new-run
-archival. The lock stays in place across runs. Archived pending requests do not become
-current work; a new submission always goes to the current run.
+and acknowledgments, worker request reads, and report reads against new-run archival; the
+polled board snapshot reads without it, because ledgers are replaced atomically and a
+half-archived state only produces warnings. The lock stays in place across runs. Archived
+pending requests do not become current work; a new submission always goes to the current run.
 
 The server binds only `127.0.0.1`, validates local Host headers, and serves allowlisted
 board assets, ledger fields, user requests/responses, and the bounded saved final report.
-It does not serve arbitrary repository files, intake answers, raw logs, or authorization
-state. Task, request, and report content renders as text, never HTML. Browser mutations
+Three read-only operational endpoints follow the same Host and origin rules: `/api/journal`
+(a run's `journal.md`, last 1 MiB), `/api/log` (the current run's `daemon.log` only, at most
+2,000 lines and 256 KiB), and `/api/quarantine` (ref names, commits, dates, and subjects of
+`refs/improve/quarantine/*`). None follows symlinks. The server does not serve arbitrary
+repository files, intake answers, other logs, or authorization state. Task, request,
+report, journal, and log content renders as text, never HTML. Browser mutations
 require an explicit same-origin request, a per-service browser capability, and a matching
 run identity. That capability cannot stop the board service; the CLI stop action uses a
 separate private token. Requests have length limits and are never executed as shell commands. Treat task

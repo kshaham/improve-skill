@@ -11,12 +11,13 @@ import sys
 import uuid
 
 from improve_runtime import StateError, atomic_json, stamp
+import improve_toon as toon
 
 MAX_BYTES = 8 * 1024 * 1024
 MAX_JSON_DEPTH = 64
 AREAS = ("general", "features", "ui", "assets", "performance", "quality", "security",
          "coverage", "concurrency", "resilience", "gate-speed", "docs", "accessibility", "contracts")
-REQUEST_TYPES = {"task", "guidance", "priority", "decision", "note", "focus"}
+REQUEST_TYPES = {"task", "guidance", "priority", "decision", "note", "focus", "retry", "withdraw"}
 FOCUS_LEVELS = ("prefer", "normal", "skip")
 # Improvement categories chosen from board tiles; references/categories.md defines each one.
 THEMES = ("ux", "animation", "security", "scale", "performance", "accessibility", "reliability",
@@ -159,7 +160,10 @@ def request_view_at(directory):
     receipts = local_json(directory / "board-receipts.json")
     result = []
     fields = ("id", "type", "created_at", "title", "text", "area", "priority",
-              "task_key", "task_title", "decision", "run_id", "expected_status", "areas", "themes")
+              "task_key", "task_title", "decision", "run_id", "expected_status", "areas", "themes", "target_id")
+    # A pending request the user withdrew leaves the worker's queue without a worker response.
+    withdrawn = {row.get("target_id"): row for row in value["requests"]
+                 if row.get("type") == "withdraw" and isinstance(row.get("target_id"), str)}
     for row in value["requests"]:
         receipt = receipts.get(row["id"], {})
         if not isinstance(receipt, dict):
@@ -167,9 +171,13 @@ def request_view_at(directory):
         status = receipt.get("status")
         if receipt and (status not in ("applied", "declined") or not isinstance(receipt.get("note"), str)):
             raise StateError("invalid board receipt; saved responses were preserved")
+        if status not in ("applied", "declined") and row["id"] in withdrawn:
+            status, note, at = "withdrawn", "Withdrawn by the user before the skill applied it.", withdrawn[row["id"]].get("created_at")
+        else:
+            note, at = receipt.get("note", ""), receipt.get("at")
         result.append({**{key: row[key] for key in fields if key in row},
-                       "status": status if status in ("applied", "declined") else "pending",
-                       "response": receipt.get("note", ""), "responded_at": receipt.get("at")})
+                       "status": status if status in ("applied", "declined", "withdrawn") else "pending",
+                       "response": note, "responded_at": at})
     return result
 
 
@@ -207,7 +215,7 @@ def prepare_request(data, tasks, value):
         request["priority"] = data.get("priority", "normal")
         if request["priority"] not in ("high", "normal", "low"):
             raise StateError("unknown priority")
-    if kind in ("priority", "decision", "note"):
+    if kind in ("priority", "decision", "note", "retry"):
         key = text_field(data, "task_key", 500)
         # Idempotent retries still work after a worker settles the target.
         request["task_key"] = key
@@ -215,6 +223,11 @@ def prepare_request(data, tasks, value):
             request["decision"] = data.get("decision")
             if request["decision"] not in ("approve", "reject"):
                 raise StateError("decision must be approve or reject")
+    if kind == "withdraw":
+        try:
+            request["target_id"] = str(uuid.UUID(str(data.get("target_id", ""))))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise StateError("withdraw needs the id of a pending request") from exc
     previous = next((row for row in value["requests"] if row["id"] == request_id), None)
     if previous:
         if any(previous.get(key) != item for key, item in request.items()):
@@ -222,7 +235,7 @@ def prepare_request(data, tasks, value):
         return previous
     if len(value["requests"]) >= 1000:
         raise StateError("This run has reached 1,000 board requests. Start a new run to archive them.")
-    if kind in ("priority", "decision", "note"):
+    if kind in ("priority", "decision", "note", "retry"):
         task = next((item for item in tasks if item["key"] == request["task_key"]), None)
         if not task or task.get("run_id") != "current":
             raise StateError("Only tasks in the current run can receive changes.")
@@ -230,7 +243,16 @@ def prepare_request(data, tasks, value):
             raise StateError("This task is already finished. Add a new task for follow-up work.")
         if kind == "decision" and task["status"] != "proposed":
             raise StateError("This task is no longer awaiting a proposal decision.")
+        if kind == "retry" and task["status"] != "blocked":
+            raise StateError("Only a blocked task can be retried.")
         request.update(task_title=task["title"], expected_status=task["status"])
+    if kind == "withdraw":
+        target = next((row for row in value["requests"] if row["id"] == request["target_id"]), None)
+        if target is None or target.get("type") == "withdraw":
+            raise StateError("That request is not in the current run.")
+        if any(row.get("type") == "withdraw" and row.get("target_id") == request["target_id"] for row in value["requests"]):
+            raise StateError("That request was already withdrawn.")
+        request["task_title"] = target.get("title") or target.get("task_title") or target.get("type")
     request["created_at"] = stamp()
     value["requests"].append(request)
     return request
@@ -291,6 +313,8 @@ def acknowledge(repo, request_id, status, note):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True)
+    parser.add_argument("--format", choices=("toon", "json"), default=os.environ.get("IMPROVE_FORMAT", "toon"),
+                        help="output format (default toon; IMPROVE_FORMAT overrides)")
     sub = parser.add_subparsers(dest="action", required=True)
     sub.add_parser("pending", help="read pending requests and cooperative control flags")
     ack = sub.add_parser("ack", help="acknowledge an applied or declined user request")
@@ -310,7 +334,12 @@ def main(argv=None):
                 result = dict(run_id=identity, pause_requested=pause_requested(repo, identity),
                               stop_requested=(state / "stop.request").exists(),
                               requests=[row for row in request_view(repo) if row["status"] == "pending"])
-        print(json.dumps(result, ensure_ascii=True))
+        if args.format == "json":
+            print(json.dumps(result, ensure_ascii=True))
+        else:
+            if isinstance(result.get("requests"), list):
+                result = {**result, "requests": toon.uniform(result["requests"])}
+            print(toon.dumps(result))
         return 0
     except (StateError, OSError) as exc:
         print(f"improve-control: {exc}", file=sys.stderr)

@@ -72,8 +72,10 @@ once outcomes are clear.
      their confidence, rule, and evidence
    - `G hotspots` lists files that resist change
    - `G path file:a.py area:security` shows how two nodes connect
-   - `G history --query "deadlock"` lists removed nodes and why they were removed
-   Add `--json` to `context` when a script consumes it.
+   - `G history --query "deadlock"` lists removed nodes and why they were removed (`--offset` pages)
+   `context` prints a text brief; `--toon` or `--json` prints the structure. Every other
+   command prints TOON by default (`--format json` for JSON; `IMPROVE_FORMAT=json` for all
+   helpers): a list of nodes is one header line and one row per node.
 
 ## When to write
 
@@ -130,7 +132,9 @@ exactly once), and bounds blockers, files, knowledge, and aliases.
 - archives agent knowledge never validated (not cited by a success, not marked useful, not
   repeated) after 8 dreams unused, and forgets archived agent knowledge after 8 more. It
   also forgets deleted files nothing refers to and gates no task uses. User, pinned,
-  learning-store, and recently restored knowledge is never cleaned up automatically.
+  learning-store, and recently restored knowledge is never cleaned up automatically: not
+  by dreaming, not by refinement's fade or contradiction rules, and not by the size caps.
+  An agent's `rate ID wrong` on user knowledge is recorded; only the user archives it.
 - flags `proven` and `contested` knowledge, lists knowledge gaps, proposes consolidations,
   and repairs alias chains and dangling rows.
 
@@ -145,7 +149,11 @@ revision; writers take turns through `graph.lock`; each session writes only the 
 changed; history is compressed and bounded; freed pages are returned to the disk. Each
 refine or dream checkpoints `graph.backup.db`. A damaged or foreign `graph.db` is set aside
 as `graph.damaged.db` and restored from that checkpoint (or rebuilt from the ledgers); a
-missing one is restored from the checkpoint. An older `graph.json` is migrated once. A graph
+missing one is restored from the checkpoint. Only real corruption counts as damage: a
+constraint or programming error rolls the write back and leaves the live store intact.
+A writer waits at most `IMPROVE_GRAPH_LOCK_WAIT` seconds (30) for the lock and then exits
+`3`; readers never wait. Supervisor blocks (no evidence, uncommitted changes) are not
+ingested as blockers; worker and agent blockers are. An older `graph.json` is migrated once. A graph
 problem never stops a run. The user can see, pin, archive, correct, restore, reject inferred
 links, add knowledge, and dream from the board's **Knowledge** tab; that reaches you in the
 next cycle's brief.
