@@ -164,6 +164,39 @@ class WikiTopicsViewTests(unittest.TestCase):
         rule = css[css.index(".wiki-topic h4 {"):]
         self.assertIn("text-transform: none;", rule[:rule.index("}")])
 
+class WikiLocationTests(unittest.TestCase):
+    def test_a_refresh_in_wiki_mode_renders_the_wiki_not_the_requests(self):
+        board = (ASSETS / "board.js").read_text()
+        chain = board[board.index('if (activeView === "overview") renderOverview();'):]
+        chain = chain[:chain.index("else renderRequests();")]
+        self.assertIn('else if (activeView === "graph" && wikiMode) renderWikiView();', chain)
+        script = (ASSETS / "wiki.js").read_text()
+        view = script[script.index("function renderWikiView() {"):]
+        self.assertIn("if (!wikiData) loadWiki();", view[:view.index("\n}")])
+        # A bookmark that switches pages while the wiki is loaded must re-render it.
+        self.assertIn("else if (wikiOnScreen !== wikiPage) renderWiki();", view[:view.index("\n}")])
+        self.assertIn("wikiOnScreen = wikiPage;", script[script.index("function renderWiki() {"):])
+
+    def test_wiki_pages_are_bookmarkable(self):
+        location = (ASSETS / "workflow.js").read_text()
+        writer = location[location.index("function writeViewLocation() {"):location.index("function readViewLocation() {")]
+        self.assertIn('if (activeView === "graph" && wikiMode) params.set("wiki", wikiPage);', writer)
+        reader = location[location.index("function readViewLocation() {"):]
+        reader = reader[:reader.index("resetHistory();")]
+        self.assertIn('pendingView.get("wiki")', reader)
+        self.assertIn("applyKnowledgeMode(true);", reader)
+        # A node bookmark shows the graph and wins over a wiki page.
+        self.assertLess(reader.index("showGraphMode();"), reader.index("applyKnowledgeMode(true);"))
+
+    def test_only_built_pages_can_be_opened(self):
+        # Inherited names (constructor, __proto__, toString) must not count as pages or renderers.
+        script = (ASSETS / "wiki.js").read_text()
+        self.assertIn("const wikiOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);", script)
+        self.assertIn("if (!wikiOwn(pages, wikiPage)) {", script)
+        self.assertIn("const render = wikiOwn(WIKI_PAGE_RENDERERS, name) ? WIKI_PAGE_RENDERERS[name] : null;", script)
+        fallback = script[script.index("if (!wikiOwn(pages, wikiPage)) {"):]
+        self.assertIn("writeViewLocation();", fallback[:fallback.index("}")])
+
 class WikiStyleTests(unittest.TestCase):
     def rule(self, css, selector):
         start = css.index("\n" + selector + " {")

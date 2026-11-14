@@ -11,6 +11,8 @@ const WIKI_FIXED_PAGES = [
   ["topics", "Topics"],
   ["sessions", "Sessions"],
 ];
+// Page names come from bookmarks: only a page the wiki built counts, never an inherited name.
+const wikiOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 // `1 note`, `2 notes`.
 const wikiPlural = (count, word) => `${countText(count)} ${count === 1 ? word : word + "s"}`;
 let wikiFilter = "",
@@ -18,6 +20,7 @@ let wikiFilter = "",
   wikiTotal = 0;
 let wikiData = null,
   wikiPage = "index",
+  wikiOnScreen = null,
   wikiLoading = false,
   wikiMode = false;
 
@@ -31,6 +34,7 @@ function applyKnowledgeMode(wiki) {
 
 function setKnowledgeMode(wiki) {
   applyKnowledgeMode(wiki);
+  writeViewLocation();
   if (wiki) loadWiki();
   else {
     graphFitPending = true;
@@ -43,6 +47,12 @@ function showGraphMode() {
   if (!wikiMode) return;
   applyKnowledgeMode(false);
   graphFitPending = true;
+}
+
+// The wiki changes only when a session finishes, so a board refresh loads it once.
+function renderWikiView() {
+  if (!wikiData) loadWiki();
+  else if (wikiOnScreen !== wikiPage) renderWiki();
 }
 
 async function loadWiki() {
@@ -78,7 +88,10 @@ function renderWiki() {
     );
     return;
   }
-  if (!pages[wikiPage]) wikiPage = "index";
+  if (!wikiOwn(pages, wikiPage)) {
+    wikiPage = "index";
+    writeViewLocation();
+  }
   const list = element("ul", "wiki-page-list");
   for (const [name, title] of wikiPages()) {
     const item = element("li");
@@ -92,6 +105,7 @@ function renderWiki() {
   $("wiki-pages").replaceChildren(list);
   wikiShown = wikiTotal = 0;
   $("wiki-page").replaceChildren(...wikiPageContent(wikiPage, pages[wikiPage], pages));
+  wikiOnScreen = wikiPage;
   $("wiki-filter-count").textContent =
     wikiFilter && wikiTotal
       ? `${countText(wikiShown)} of ${countText(wikiTotal)} notes on this page match`
@@ -103,6 +117,7 @@ function renderWiki() {
 function openWikiPage(name) {
   wikiPage = name;
   renderWiki();
+  writeViewLocation();
   $("wiki-page").focus({ preventScroll: true });
 }
 
@@ -341,7 +356,7 @@ const WIKI_PAGE_RENDERERS = {
 };
 
 function wikiPageContent(name, page, pages) {
-  const render = WIKI_PAGE_RENDERERS[name];
+  const render = wikiOwn(WIKI_PAGE_RENDERERS, name) ? WIKI_PAGE_RENDERERS[name] : null;
   return [element("h3", "", page.title || name), ...(render ? render(page, pages) : wikiAreaPage(page, pages))];
 }
 

@@ -91,7 +91,8 @@ function writeViewLocation() {
     const value = $(id).value;
     if (value !== fallback) params.set(key, value);
   }
-  if (activeView === "graph" && graphSelected) params.set("node", graphSelected);
+  if (activeView === "graph" && wikiMode) params.set("wiki", wikiPage);
+  else if (activeView === "graph" && graphSelected) params.set("node", graphSelected);
   if (selectedTask) {
     params.set("task", selectedTask);
     if (selectedTask.startsWith("current:"))
@@ -123,6 +124,12 @@ function readViewLocation() {
     showGraphMode();
     graphFitPending = true;
     loadNodeDetail(node, true);
+  }
+  // A wiki page bookmark (a node bookmark above wins and shows the graph).
+  const wiki = activeView === "graph" && !node ? pendingView.get("wiki")?.slice(0, 200) : null;
+  if (wiki) {
+    wikiPage = wiki;
+    applyKnowledgeMode(true);
   }
   for (const [key, [id, fallback]] of Object.entries(viewFields)) {
     const value = (pendingView.get(key) ?? fallback).slice(

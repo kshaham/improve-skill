@@ -596,6 +596,7 @@ function renderCards() {
       $("history-list").replaceChildren();
       historySignature = "";
       if (activeView === "overview") renderOverview();
+      else if (activeView === "graph" && wikiMode) renderWikiView();
       else if (activeView === "graph" && !wikiMode) renderGraphView();
       else renderRequests();
     }
