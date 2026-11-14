@@ -80,7 +80,10 @@ The board includes:
   skill rebuilds from the graph when a session finishes: an overview with key knowledge and
   areas, every note by kind with its verdict and where it applies, one page per area,
   **Changes** (what each session added, removed with the reason, and re-judged), and
-  **Dreams** (inferred links, archived and forgotten knowledge, proposals, gaps). Pages are
+  **Dreams** (inferred links, archived and forgotten knowledge, contradicting notes to settle,
+  proposals, gaps), and **Sessions** (each session's outcome, tasks, and knowledge recorded).
+  The overview lists the files that resist change; each note lists related notes, and any note
+  opens in the graph with one click. Pages are
   listed beside the page on a desktop and in a scrolling row on a phone. Before the first
   session ends there is no wiki yet, and the view says when it will appear.
 - **Run overview:** compare task totals by area, see high-priority queued work, pending
