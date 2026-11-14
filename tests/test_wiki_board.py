@@ -132,6 +132,7 @@ class WikiWordingTests(unittest.TestCase):
         script = (ASSETS / "wiki.js").read_text()
         self.assertIn('const wikiPlural = (count, word) => `${countText(count)} ${count === 1 ? word : word + "s"}`;', script)
         self.assertNotRegex(script, r"\$\{row\.notes\} notes")
+        self.assertNotIn("attempts verified", script, "attempts go through wikiPlural")
 
 class WikiStyleTests(unittest.TestCase):
     def rule(self, css, selector):

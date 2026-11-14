@@ -300,7 +300,7 @@ function wikiDreamsPage(page) {
 function wikiAreaPage(page, pages) {
   const rows = new Map(wikiAllNotes(pages).map((row) => [row.id, row]));
   return [
-    element("p", "", `${page.done || 0}/${page.attempts || 0} attempts verified${typeof page.success === "number" ? ` · success ${Math.round(page.success * 100)}%` : ""}`),
+    element("p", "", `${page.done || 0}/${wikiPlural(page.attempts || 0, "attempt")} verified${typeof page.success === "number" ? ` · success ${Math.round(page.success * 100)}%` : ""}`),
     wikiSection("Knowledge", [
       ...wikiCapped((page.knowledge || []).length, page.total),
       ...wikiNoteRows((page.knowledge || []).map((id) => rows.get(id)).filter(Boolean)),
