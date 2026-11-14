@@ -2262,23 +2262,34 @@ button.danger {
   gap: 8px;
   width: 100%;
 }
-.mobile .page-heading .actions button {
-  flex: 1;
-  padding-inline: 8px;
+.mobile .page-heading .actions button,
+.mobile .control-actions button {
+  flex: 1 1 auto;
+  justify-content: center;
+  padding-inline: 14px;
+  font-size: 14px;
+  white-space: nowrap;
 }
 .mobile .topbar {
   height: 40px;
 }
 .mobile .stats {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .mobile .stat {
-  padding: 10px 8px;
+  padding: 12px 14px;
   border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.mobile .stat:nth-child(2n) {
+  border-right: 0;
+}
+.mobile .stat:nth-last-child(-n + 2) {
   border-bottom: 0;
 }
 .mobile .stat span {
-  font-size: 10px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 .mobile .stat strong {
   font-size: 22px;
@@ -2311,9 +2322,6 @@ button.danger {
 }
 .mobile .control-actions > div {
   flex: 1 1 100%;
-}
-.mobile .control-actions button {
-  flex: 1;
 }
 .mobile .mobile-columns {
   display: flex;

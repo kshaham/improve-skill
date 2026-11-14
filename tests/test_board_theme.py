@@ -226,5 +226,29 @@ class TokenTests(unittest.TestCase):
                     self.assertGreaterEqual(ratio, minimum, f"{ratio:.2f}:1")
 
 
+
+class PhoneLayoutTests(unittest.TestCase):
+    """At 390px the page actions wrapped to two to four lines and the stat labels to three."""
+
+    def rule(self, selector):
+        match = re.search(r"\n" + re.escape(selector) + r"\s*\{([^}]*)\}", CSS)
+        self.assertIsNotNone(match, selector)
+        return match.group(1)
+
+    def test_phone_action_labels_stay_on_one_line(self):
+        body = self.rule(".mobile .page-heading .actions button,\n.mobile .control-actions button")
+        self.assertIn("white-space: nowrap;", body)
+        self.assertIn("flex: 1 1 auto;", body, "buttons size to their labels and the row wraps instead")
+        size = float(re.search(r"font-size:\s*([0-9.]+)px", body).group(1))
+        self.assertLessEqual(size, 14, "a 16px label cannot fit three to a 390px row")
+        # A stretched button must centre its content; the voice button is inline-flex.
+        self.assertIn("justify-content: center;", body)
+
+    def test_phone_stats_use_two_columns_with_one_line_labels(self):
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", self.rule(".mobile .stats"))
+        label = self.rule(".mobile .stat span")
+        self.assertIn("white-space: nowrap;", label)
+        self.assertGreaterEqual(float(re.search(r"font-size:\s*([0-9.]+)px", label).group(1)), 11)
+
 if __name__ == "__main__":
     unittest.main()
