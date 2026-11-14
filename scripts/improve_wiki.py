@@ -68,7 +68,8 @@ def run_state(state):
             # An unreadable record cannot prove the run has finished.
             return None, False
         return value.get("run_id") or value.get("started_at"), bool(value.get("outcome"))
-    return None, True
+    # No run files: no improve session ran here, so none has finished.
+    return None, False
 
 
 # ---------------------------------------------------------------- pages
@@ -561,7 +562,8 @@ def build(graph, repo, built_at=None):
     state = Path(repo) / ".improve"
     run_id, finished = run_state(state)
     if not finished:
-        return {"skipped": "a run is still live"}
+        live = (state / "supervisor.json").exists() or (state / "run.json").exists()
+        return {"skipped": "a run is still live" if live else "no improve session has finished here"}
     fetch_types(graph, "insight", "area", "file")
     directory = state / "wiki"
     result, manifest = pages(graph, read_manifest(directory), built_at or stamp(), run_id)

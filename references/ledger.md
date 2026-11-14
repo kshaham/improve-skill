@@ -64,6 +64,12 @@ condition, `stopped by user`, or `target reached` for improve-max with explicit
 `--stop-at-target`. Never `completed` while the clock still says `RUNNING`. The supervisor
 repairs an agent’s premature completion and records it in the journal. `summary_pending`
 means the narrative final report still needs writing; it does not claim verification.
+In a foreground run (no supervisor), record the outcome with
+`improve_ledger.py --repo R finish --outcome completed` after the final report: it refuses
+`completed` before the deadline, refuses a second outcome, and refuses under a supervisor.
+`stopped by user` and `halted: <reason>` may end a run early. The end-of-session
+`improve_graph.py sync --dream` that follows rebuilds the knowledge wiki only once the run
+has an outcome.
 Explicit `--resume` after recovery clears a halt/stop marker while preserving the deadline
 and journaling the previous outcome. A plain restart never clears terminal state.
 

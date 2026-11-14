@@ -24,7 +24,7 @@ import re
 import sys
 
 from improve_resilience import ledger_lock, merged_tasks, read_rows, rewrite_tasks
-from improve_runtime import StateError, atomic_json, read_json, stamp
+from improve_runtime import StateError, atomic_json, epoch, read_json, stamp
 import improve_toon as toon
 
 STATUSES = ("ready", "in_progress", "done", "rejected", "blocked", "proposed")
@@ -274,6 +274,38 @@ def set_run(state, changes):
     return {key: run[key] for key in changes}
 
 
+FINISH_OUTCOMES = ("completed", "stopped by user")
+
+
+def finish_run(state, outcome):
+    """Record a foreground run's outcome, as SKILL.md's last steps do before `sync --dream`.
+
+    `run-set` refuses the outcome because the supervisor owns it; without a supervisor this
+    is the one supported writer. `completed` needs the deadline to have passed (the clock's
+    exit 10); `stopped by user` and `halted: REASON` may end a run early. A run is finished
+    once."""
+    outcome = (outcome or "").strip()
+    halted = outcome.startswith("halted:") and outcome[len("halted:"):].strip()
+    if outcome not in FINISH_OUTCOMES and not halted:
+        raise StateError("outcome must be completed, stopped by user, or halted: REASON")
+    if (state / "supervisor.json").exists():
+        raise StateError("under the supervisor, the supervisor records the outcome; it never needs finish")
+    path = state / "run.json"
+    if path.is_symlink() or not path.is_file():
+        raise StateError("finish needs a run.json (and not a symlink)")
+    with ledger_lock(state):
+        run = read_json(path)
+        if run.get("outcome"):
+            raise StateError(f"this run already finished: {run['outcome']}")
+        if outcome == "completed":
+            deadline = run.get("deadline")
+            if not deadline or epoch(deadline) > epoch(stamp()):
+                raise StateError("completed is only for a run whose deadline has passed (the clock exits 10)")
+        run.update(outcome=outcome, ended_at=stamp(), summary_pending=False, phase="done")
+        atomic_json(path, run)
+    return {"outcome": outcome, "ended_at": run["ended_at"]}
+
+
 def add_discovery(state, row):
     """Append one discovery checkpoint (validated JSON object) to discovery.jsonl."""
     if not isinstance(row, dict) or not row:
@@ -344,6 +376,8 @@ def main(argv=None):
     run_setter = command("run-set", help="set run.json keys the agent owns (atomic, validated)")
     run_setter.add_argument("pairs", nargs="*", help="KEY=VALUE text values")
     run_setter.add_argument("--json-field", action="append", help="KEY=JSON for numbers, lists, objects, booleans")
+    finisher = command("finish", help="record a foreground run's outcome before the final sync --dream")
+    finisher.add_argument("--outcome", required=True, help="completed, stopped by user, or halted: REASON")
     discovery_adder = command("discovery-add", help="append one discovery checkpoint")
     discovery_adder.add_argument("--json", required=True, help="the checkpoint as a JSON object")
     bets = command("bets", help="improve-max bets")
@@ -379,7 +413,7 @@ def main(argv=None):
     repo = Path(args.repo).expanduser().resolve()
     try:
         state = state_path(repo)
-        tasks = merged_tasks(state) if args.action not in ("run", "discovery", "run-set", "discovery-add") else {}
+        tasks = merged_tasks(state) if args.action not in ("run", "discovery", "run-set", "discovery-add", "finish") else {}
         skipped = 0
         if args.action in ("queue", "tasks"):
             board = board_focus(state)
@@ -413,6 +447,8 @@ def main(argv=None):
             result = {"total": len(read_rows(state / "discovery.jsonl")), "passes": project(rows, DISCOVERY_FIELDS, args.full, args.width)}
         elif args.action == "run":
             result = run_view(state, full=args.full)
+        elif args.action == "finish":
+            result = finish_run(state, args.outcome)
         elif args.action == "run-set":
             changes = parse_run_pairs(args.pairs)
             changes.update(parse_fields(args.json_field, as_json=True))

@@ -387,7 +387,8 @@ def board_snapshot(repo, selected="current", include=SNAPSHOT_EXTRAS):
                        "limit_waited_seconds": count_field(control, "limit_waited_seconds"),
                        "next_limit_wait": finite_or_none(control.get("next_limit_wait")),
                        "park_until": text_value(control.get("park_until")) or None,
-                       "ended_at": text_value(control.get("ended_at")) or None,
+                       # A foreground run has no supervisor record; its run.json says when it ended.
+                       "ended_at": text_value(control.get("ended_at") if control else run.get("ended_at")) or None,
                        "cycle_history": cycle_history(control),
                        "heartbeat_age_seconds": age_seconds(control.get("heartbeat_at"), now),
                        "cycle_age_seconds": age_seconds(control.get("cycle_started_at"), now)}
