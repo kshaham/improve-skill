@@ -267,6 +267,11 @@ def build_parser():
     command("communities", "groups of files that change together or depend on each other")
     command("questions", "what is worth a look: contested, contradicted, changed, failing, bridging")
     command("diff", "what the latest dreams changed")
+    page = command("wiki", "the knowledge wiki, rebuilt from the graph when a session finishes")
+    page.add_argument("page", nargs="?", default="index",
+                      help="index (default), knowledge, changes, dreams, areas/NAME; `pages` lists them; "
+                           "`build` rebuilds the wiki once the session has finished")
+    page.add_argument("--markdown", action="store_true", help="print the page's Markdown instead of TOON or JSON")
     out = command("report", "the graph as a Markdown report")
     out.add_argument("--out", help="write to this file instead of printing")
     dump = command("export", "the graph as JSON, GraphML, or Markdown")
@@ -330,6 +335,10 @@ def main(argv=None):
             from improve_dream import dream
             with locked(repo) as graph:
                 result = graph_module.refine(graph, repo) if args.action == "refine" else dream(graph, repo)
+        elif args.action == "wiki":
+            result = wiki_command(args, repo)
+            if isinstance(result, str):
+                return write_out(result, None)
         elif args.action == "history":
             result = graph_module.history(repo, args.limit, max(0, args.offset), args.type, args.query, args.all, args.id)
         elif args.action in improve_code_cli.ACTIONS:
@@ -439,6 +448,31 @@ def with_code(graph, repo):
     except (graph_module.StoreDamaged, sqlite3.Error):
         store.close()
     return graph
+
+
+def wiki_command(args, repo):
+    """Read a wiki page (TOON by default), list the pages, or rebuild it after a session."""
+    import improve_wiki
+    directory = repo / ".improve" / "wiki"
+    if args.page == "build":
+        with locked(repo) as graph:
+            result = improve_wiki.build(graph, repo)
+        if result.get("skipped"):
+            raise StateError("the wiki is rebuilt only when an improve session finishes; " + result["skipped"])
+        return result
+    document = directory / "wiki.toon"
+    if not document.is_file() or document.is_symlink():
+        raise NotFound("no wiki yet: it is built when an improve session finishes "
+                       "(the run-end dream, or `sync --dream` after a foreground run's final report)")
+    pages = toon.loads(document.read_text())["pages"]
+    if args.page == "pages":
+        return [{"page": name, "title": page.get("title", name)} for name, page in pages.items()]
+    # Only a page the wiki built can be read: the name never becomes a free path.
+    if args.page not in pages:
+        raise NotFound(f"no wiki page {args.page!r}; `wiki pages` lists them")
+    if args.markdown:
+        return improve_wiki.render(pages)[args.page]
+    return pages[args.page]
 
 
 def write_out(text, out):
