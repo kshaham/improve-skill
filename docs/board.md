@@ -88,7 +88,9 @@ The board includes:
   containing every word you type (text, area, file, kind, or verdict). A list capped at its
   strongest notes says how many it leaves out. Pages are
   listed beside the page on a desktop and in a scrolling row on a phone. Before the first
-  session ends there is no wiki yet, and the view says when it will appear.
+  session ends there is no wiki yet, and the view says when it will appear. An open board
+  shows the rebuilt wiki when the next session ends, without a reload. Each wiki page has its
+  own bookmark (`#view=graph&wiki=topics`), and **Export wiki** downloads every page as JSON.
 - **Run overview:** compare task totals by area, see high-priority queued work, pending
   requests, and how many completed tasks have recorded verification. Browse twenty saved
   activity events at a time, filter task/request events, and open the associated details.
