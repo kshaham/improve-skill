@@ -135,8 +135,8 @@ inferring links with evidence, forgetting what went unused, and restoring on req
 whose code changed since, notes that contradict another, and blockers later work got past are
 marked; the tab lists failing files nobody has written about and the questions worth a look.
 Switch the tab to **Wiki** to read the knowledge wiki: the graph as pages (key knowledge,
-every note by kind, one page per area, what each session added or removed, what dreaming
-found). It is rebuilt only when a session finishes, so it never shifts under a running session.
+every note by kind, one page per area, topics dreaming discovered, what each session added or
+removed, what dreaming found), with a filter and a token-budgeted TOON form for agents. It is rebuilt only when a session finishes, so it never shifts under a running session.
 
 ![Knowledge wiki overview with key knowledge, areas, and the page list beside it](docs/screenshots/wiki.png)
 
