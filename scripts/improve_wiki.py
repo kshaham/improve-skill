@@ -74,6 +74,37 @@ def run_state(state):
 
 # ---------------------------------------------------------------- pages
 
+def as_text(value):
+    """A graph field as text: the build reads the graph as it is and must never crash on an odd
+    value, or the session ends without a wiki."""
+    return value if isinstance(value, str) else ""
+
+
+def as_number(value, fallback=0.0):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return number if number == number and abs(number) != float("inf") else fallback
+
+
+def as_dict(value):
+    return value if isinstance(value, dict) else {}
+
+
+def as_list(value):
+    return value if isinstance(value, list) else []
+
+
+def ratio(value):
+    """A success rate, or None when the graph has none (never NaN)."""
+    return None if value is None else round(as_number(value), 3)
+
+
+def as_count(value):
+    return int(as_number(value))
+
+
 def clip(text, limit=TEXT_LIMIT):
     text = " ".join(str(text or "").split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
@@ -88,7 +119,7 @@ def file_areas(graph):
     """Each file's areas: only tasks link files to areas (a task touches files and is in an area)."""
     touched, areas = {}, {}
     for edge in graph.get("edges", {}).values():
-        src, dst, rel = edge.get("src", ""), edge.get("dst", ""), edge.get("rel")
+        src, dst, rel = as_text(edge.get("src")), as_text(edge.get("dst")), edge.get("rel")
         if rel == "touches" and dst.startswith("file:"):
             touched.setdefault(src, set()).add(dst)
         elif rel == "in_area" and dst.startswith("area:"):
@@ -106,7 +137,7 @@ def note_links(graph, by_file=None):
     by_file = file_areas(graph) if by_file is None else by_file
     links = {}
     for edge in graph.get("edges", {}).values():
-        src, dst = edge.get("src", ""), edge.get("dst", "")
+        src, dst = as_text(edge.get("src")), as_text(edge.get("dst"))
         if src.startswith("insight:") and edge.get("rel") in ("about", "applies_to"):
             row = links.setdefault(src, {"areas": set(), "files": set()})
             if dst.startswith("area:"):
@@ -122,13 +153,13 @@ def note_relations(graph, live_ids):
     first, and contradicting pairs. A contradiction is not a relation."""
     related, contradictions = {}, []
     for edge in graph.get("edges", {}).values():
-        left, right, rel = edge.get("src"), edge.get("dst"), edge.get("rel")
+        left, right, rel = as_text(edge.get("src")), as_text(edge.get("dst")), edge.get("rel")
         if left not in live_ids or right not in live_ids or left == right:
             continue
         if rel == "contradicts":
-            contradictions.append((min(left, right), max(left, right), float(edge.get("confidence") or 1)))
+            contradictions.append((min(left, right), max(left, right), as_number(edge.get("confidence"), 1.0)))
         elif rel in RELATED_RELATIONS:
-            weight = float(edge.get("confidence") or 1)
+            weight = as_number(edge.get("confidence"), 1.0)
             related.setdefault(left, {})[right] = max(weight, related.get(left, {}).get(right, 0))
             related.setdefault(right, {})[left] = max(weight, related.get(right, {}).get(left, 0))
     # Dreaming can infer both similar_to and contradicts for one pair; a contradiction wins.
@@ -142,17 +173,17 @@ def note_relations(graph, live_ids):
 
 def note_row(node, links, related=None):
     linked = links.get(node["id"], {"areas": set(), "files": set()})
-    return {"id": node["id"], "kind": node.get("kind") or "fact",
+    return {"id": node["id"], "kind": as_text(node.get("kind")) or "fact",
             "text": clip(node.get("summary") or node.get("label")),
-            "verdict": node.get("verdict") or "", "score": round(float(node.get("score") or 0), 2),
-            "pinned": bool(node.get("pinned")), "source": node.get("source") or "agent",
+            "verdict": as_text(node.get("verdict")), "score": round(as_number(node.get("score")), 2),
+            "pinned": bool(node.get("pinned")), "source": as_text(node.get("source")) or "agent",
             # Space-separated, so every row is flat and TOON writes the notes as one table.
             "areas": " ".join(sorted(linked["areas"])), "files": " ".join(sorted(linked["files"])[:5]),
             "related": (related or {}).get(node["id"], "")}
 
 
 def rank(node):
-    return (not node.get("pinned"), -float(node.get("score") or 0), node["id"])
+    return (not node.get("pinned"), -as_number(node.get("score")), node["id"])
 
 
 def removal_reason(graph, node_id):
@@ -199,26 +230,27 @@ def session_changes(graph, previous, rows, built_at, run_id):
 
 def area_pages(nodes, rows, by_file):
     """One page per area (note ids, files that touched it) and the index's area rows."""
-    areas = sorted((node for node in nodes.values() if node["type"] == "area"), key=lambda node: node["label"])
+    areas = sorted((node for node in nodes.values() if node["type"] == "area"), key=lambda node: (as_text(node.get("label")), node["id"]))
     files = [node for node in nodes.values() if node["type"] == "file" and not node.get("archived")]
     result, summaries, taken = {}, [], set()
     for area in areas:
-        name = area["label"]
+        name = as_text(area.get("label")) or area["id"][5:]
         # Area names are free text, so two can share a slug ("UI" and "ui"): number the later ones.
         page_name, number = f"areas/{slug(name)}", 1
         while page_name in taken:
             number += 1
             page_name = f"areas/{slug(name)}-{number}"
         taken.add(page_name)
-        stats = area.get("stats") or {}
+        stats = as_dict(area.get("stats"))
         in_notes = [row for row in rows if name in row["areas"].split()]
         in_area = sorted((node for node in files if name in by_file.get(node["id"], ())),
-                         key=lambda node: (-(node.get("stats") or {}).get("attempts", 0), node["id"]))
-        area_files = [{"path": node["label"], "attempts": (node.get("stats") or {}).get("attempts", 0),
-                       "success": (node.get("stats") or {}).get("success")} for node in in_area[:FILES_PER_AREA]]
+                         key=lambda node: (-as_count(as_dict(node.get("stats")).get("attempts")), node["id"]))
+        area_files = [{"path": as_text(node.get("label")) or node["id"][5:],
+                       "attempts": as_count(as_dict(node.get("stats")).get("attempts")),
+                       "success": ratio(as_dict(node.get("stats")).get("success"))} for node in in_area[:FILES_PER_AREA]]
         summary = {"name": name, "page": page_name, "attempts": stats.get("attempts", 0),
                    "done": stats.get("done", 0), "rejected": stats.get("rejected", 0),
-                   "success": stats.get("success"), "notes": len(in_notes)}
+                   "success": ratio(stats.get("success")), "notes": len(in_notes)}
         summaries.append(summary)
         # Note ids only: the rows live once, on the knowledge page, so the TOON document stays small.
         result[summary["page"]] = {"title": f"Area: {name}", **summary, "total": len(in_notes),
@@ -231,6 +263,8 @@ def gap_text(row):
     """A knowledge gap as a sentence: a file whose tasks keep failing with nothing recorded."""
     if isinstance(row, str):
         return row
+    if not isinstance(row, dict):
+        return str(row)
     if row.get("file"):
         return (f"{row['file']}: {row.get('done', 0)}/{row.get('attempts', 0)} attempts verified, "
                 "nothing recorded about why")
@@ -242,8 +276,8 @@ def dreams_page(graph, contradicting):
     notes that contradict each other."""
     nodes = graph["nodes"]
     dream = graph.get("dream") or {}
-    latest = (dream.get("history") or [{}])[-1]
-    inferred = latest.get("inferred") or {}
+    latest = as_dict((as_list(dream.get("history")) or [{}])[-1])
+    inferred = as_dict(latest.get("inferred"))
     text = lambda key: clip(nodes[key].get("summary") or nodes[key].get("label"))  # noqa: E731
     return {"title": "Dreams", "at": latest.get("at") or "", "tick": latest.get("tick", graph.get("tick", 0)),
             "inferred": {"new": inferred.get("new", 0), "kept": inferred.get("kept", 0),
@@ -251,8 +285,8 @@ def dreams_page(graph, contradicting):
             "archived": latest.get("archived", 0), "forgotten": latest.get("forgotten", 0),
             "proven": latest.get("proven", 0), "contested": latest.get("contested", 0),
             # A proposal names its member notes; show their words, which is what a person merges.
-            "proposals": [{"id": row.get("id", ""), "members": len(row.get("members") or []),
-                           "text": clip(" / ".join(text(member) for member in row.get("members") or []
+            "proposals": [{"id": as_text(row.get("id")), "members": len(as_list(row.get("members"))),
+                           "text": clip(" / ".join(text(member) for member in as_list(row.get("members"))
                                                    if member in nodes) or row.get("text") or "")}
                           for row in (dream.get("proposals") or [])[:ROWS_PER_CHANGE]],
             "contradictions": [{"a": left, "a_text": text(left), "b": right, "b_text": text(right),
@@ -270,13 +304,14 @@ def sessions_page(graph):
             recorded[node["run_id"]] = recorded.get(node["run_id"], 0) + 1
     runs = sorted((row for row in graph.get("runs") or [] if isinstance(row, dict) and row.get("run_id")),
                   key=lambda row: (str(row.get("ingested_at") or row.get("first_ingested_at") or ""),
-                                   row.get("seq", 0)), reverse=True)
+                                   as_number(row.get("seq"))), reverse=True)
     return {"title": "Sessions", "runs": [
         # Built only after the current session finished, so a run with no outcome crashed or
         # was interrupted; it is never live.
         {"run_id": str(row["run_id"]), "outcome": str(row.get("outcome") or "ended without an outcome"),
-         "tasks": row.get("tasks", 0), "done": row.get("done", 0), "rejected": row.get("rejected", 0),
-         "blocked": row.get("blocked", 0), "notes": recorded.get(row["run_id"], 0),
+         "tasks": as_count(row.get("tasks")), "done": as_count(row.get("done")),
+         "rejected": as_count(row.get("rejected")), "blocked": as_count(row.get("blocked")),
+         "notes": recorded.get(row["run_id"], 0),
          "at": str(row.get("ingested_at") or "")} for row in runs[:SESSION_ROWS]]}
 
 
@@ -297,11 +332,12 @@ def topics_page(graph, rows, links):
     found = (graph.get("communities") or {}).get("groups") or []
     topics = []
     for group in found[:TOPIC_ROWS]:
-        members = [member[5:] for member in group.get("members") or [] if str(member).startswith("file:")]
+        members = [member[5:] for member in as_list(group.get("members")) if as_text(member).startswith("file:")]
         inside = set(members)
         notes = [row["id"] for row in rows if links.get(row["id"], {}).get("files", set()) & inside]
         topics.append({"id": str(group.get("id") or ""), "label": str(group.get("label") or ""),
-                       "size": group.get("size", len(members)), "cohesion": group.get("cohesion", 0),
+                       "size": as_count(group.get("size", len(members))),
+                       "cohesion": round(as_number(group.get("cohesion")), 3),
                        "files": " ".join(members[:FILES_PER_AREA]), "total": len(notes),
                        "knowledge": notes[:AREA_NOTES]})
     return {"title": "Topics", "total": len(found), "groups": topics}

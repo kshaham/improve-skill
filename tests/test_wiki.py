@@ -506,6 +506,37 @@ class RealDreamRecordTests(unittest.TestCase):
         changes = wiki.render(pages)["changes"]
         self.assertIn('merged into "Cache the board snapshot for five seconds"', changes)
 
+class OddValueTests(unittest.TestCase):
+    """At run end a crash means no wiki for the session: odd field values must never raise."""
+
+    def test_odd_graph_values_never_crash_the_build(self):
+        import random
+        rng = random.Random(7)
+        odd = [None, "", 0, "3", -1, 1.5, float("nan"), [], {}, "<b>x</b>", 'a,b\n"c"', True]
+        fields = ["summary", "label", "kind", "score", "verdict", "pinned", "source", "run_id", "stats", "archived"]
+        for trial in range(400):
+            value = wiki_graph(areas=["ui", "docs"], notes={f"insight:{i}": f"Note {i}" for i in range(6)})
+            node = rng.choice(list(value["nodes"].values()))
+            node[rng.choice(fields)] = rng.choice(odd)
+            pick = rng.randrange(5)
+            if pick == 0:
+                value["runs"] = [{"run_id": rng.choice(odd + ["r"]), "outcome": rng.choice(odd), "tasks": rng.choice(odd)}]
+            elif pick == 1:
+                value["communities"] = {"groups": [{"id": rng.choice(odd), "label": rng.choice(odd),
+                                                    "members": rng.choice([None, ["file:a", 3], "x"]),
+                                                    "size": rng.choice(odd), "cohesion": rng.choice(odd)}]}
+            elif pick == 2:
+                value["dream"] = {"history": [rng.choice([{}, {"inferred": None}, {"tick": "x"}])],
+                                  "proposals": [{"members": rng.choice([None, ["insight:1", "nope"]])}],
+                                  "gaps": [rng.choice(odd + [{"file": "a.py"}])]}
+            elif pick == 3:
+                value["edges"]["odd"] = {"src": rng.choice(odd), "rel": "about", "dst": rng.choice(odd + ["area:ui"])}
+            with self.subTest(trial=trial):
+                pages, _ = wiki.pages(value, None, "t1", "run-1")
+                wiki.render(pages)
+                text = improve_toon.dumps({"pages": pages})
+                self.assertEqual(improve_toon.loads(text), json.loads(json.dumps({"pages": pages})))
+
 def wiki_graph(areas=(), notes=None):
     """A minimal in-memory graph with the fields the wiki reads."""
     nodes, edges = {}, {}
