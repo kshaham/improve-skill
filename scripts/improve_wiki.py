@@ -291,6 +291,11 @@ def pages(graph, previous, built_at, run_id):
 
 # ---------------------------------------------------------------- Markdown
 
+def plural(count, word, many=None):
+    """`1 note`, `2 notes`; `many` for irregular plurals."""
+    return f"{count} {word if count == 1 else (many or word + 's')}"
+
+
 def md(text):
     """Note text in Markdown: no raw HTML, no accidental emphasis or links."""
     text = str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -332,17 +337,17 @@ def markdown(name, page, rows=None):
         counts = page["counts"]
         lines += [f"Built {page['built_at']} at the end of session `{page['run_id']}`, graph revision "
                   f"{page['revision']}, dream tick {page['tick']}. Rebuilt only when a session finishes.", "",
-                  f"{counts['notes']} live notes ({counts['proven']} proven, {counts['contested']} contested, "
-                  f"{counts['archived']} archived), {counts['areas']} areas, {counts['files']} files.", "",
+                  f"{plural(counts['notes'], 'live note')} ({counts['proven']} proven, {counts['contested']} contested, "
+                  f"{counts['archived']} archived), {plural(counts['areas'], 'area')}, {plural(counts['files'], 'file')}.", "",
                   "Pages: [Knowledge](knowledge.md) · [Changes](changes.md) · [Dreams](dreams.md) · "
                   "[Sessions](sessions.md)", "",
                   "## Key knowledge", ""]
         lines += [f"- **{row['kind']}**: {md(row['text'])}" for row in page["key"]] or ["- None recorded yet."]
         lines += ["", "## Areas", ""]
-        lines += [f"- [{md(row['name'])}]({row['page']}.md): {row['notes']} notes, {row['done']}/{row['attempts']} "
-                  f"attempts verified" for row in page["areas"]] or ["- None yet."]
+        lines += [f"- [{md(row['name'])}]({row['page']}.md): {plural(row['notes'], 'note')}, {row['done']}/"
+                  f"{plural(row['attempts'], 'attempt')} verified" for row in page["areas"]] or ["- None yet."]
         lines += ["", "## Files that resist change", ""]
-        lines += [f"- `{row['file']}`: {row['done']}/{row['attempts']} attempts verified"
+        lines += [f"- `{row['file']}`: {row['done']}/{plural(row['attempts'], 'attempt')} verified"
                   for row in page.get("hotspots", [])] or ["- None: no file keeps failing."]
         last = page["last_session"]
         lines += ["", "## Last session", "",
@@ -367,7 +372,7 @@ def markdown(name, page, rows=None):
     elif name == "sessions":
         lines += ["Each recorded improve session, newest first: what it attempted and the knowledge it recorded.", ""]
         lines += [f"- `{row['run_id']}` ({md(row['outcome'])}): {row['done']}/{row['tasks']} done, "
-                  f"{row['rejected']} rejected, {row['blocked']} blocked; {row['notes']} notes recorded"
+                  f"{row['rejected']} rejected, {row['blocked']} blocked; {plural(row['notes'], 'note')} recorded"
                   for row in page["runs"]] or ["- No session recorded yet."]
     elif name == "dreams":
         inferred = page["inferred"]
@@ -376,21 +381,21 @@ def markdown(name, page, rows=None):
                   f"- Knowledge archived {page['archived']}, forgotten {page['forgotten']}",
                   f"- Verdicts: {page['proven']} proven, {page['contested']} contested", "",
                   "## Consolidation proposals", ""]
-        lines += [f"- `{row['id']}` ({row['members']} notes): {md(row['text'])}" for row in page["proposals"]] or ["- None."]
+        lines += [f"- `{row['id']}` ({plural(row['members'], 'note')}): {md(row['text'])}" for row in page["proposals"]] or ["- None."]
         lines += ["", "## Contradictions", "", "Notes that say opposite things; decide which holds and rate the other.", ""]
         lines += [f"- {md(row['a_text'])} (`{row['a']}`) **contradicts** {md(row['b_text'])} (`{row['b']}`)"
                   for row in page.get("contradictions", [])] or ["- None."]
         lines += ["", "## Knowledge gaps", ""] + ([f"- {md(row)}" for row in page["gaps"]] or ["- None."])
     else:
         success = page.get("success")
-        lines += [f"{page['done']}/{page['attempts']} attempts verified"
+        lines += [f"{page['done']}/{plural(page['attempts'], 'attempt')} verified"
                   + (f" (success {success:.2f})" if isinstance(success, (int, float)) else "") + ".", "",
                   "[Back to the index](../index.md)", "", "## Knowledge", ""]
         lines += capped_line(len(page["knowledge"]), page.get("total"))
         lines += [note_line(rows[key]) for key in page["knowledge"] if key in (rows or {})] or [
             "- None recorded for this area."]
         lines += ["", "## Files", ""]
-        lines += [f"- `{row['path']}`: {row['attempts']} attempts" for row in page["files"]] or ["- None recorded."]
+        lines += [f"- `{row['path']}`: {plural(row['attempts'], 'attempt')}" for row in page["files"]] or ["- None recorded."]
     return "\n".join(lines).rstrip() + "\n"
 
 

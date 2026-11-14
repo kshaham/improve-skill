@@ -361,6 +361,18 @@ class CappedPageTests(unittest.TestCase):
         pages, _ = wiki.pages(wiki_graph(areas=["ui"], notes={"insight:a": "One small note for the wiki"}), None, "t", "r")
         self.assertNotIn("Showing the strongest", "".join(wiki.render(pages).values()))
 
+class WordingTests(unittest.TestCase):
+    def test_counts_use_singular_and_plural(self):
+        value = wiki_graph(areas=["ui"], notes={"insight:a": "One note for the wiki"})
+        value["runs"] = [{"run_id": "run-1", "outcome": "completed", "tasks": 1, "done": 1}]
+        value["nodes"]["insight:a"]["run_id"] = "run-1"
+        value["nodes"]["area:ui"]["stats"] = {"attempts": 1, "done": 1, "rejected": 0, "blocked": 0, "success": 1}
+        text = "".join(wiki.render(wiki.pages(value, None, "t1", "run-1")[0]).values())
+        for wrong in ("1 notes", "1 live notes", "1 areas", "1/1 attempts"):
+            self.assertNotIn(wrong, text)
+        for right in ("1 note recorded", "1 live note", "1 area", "1/1 attempt verified"):
+            self.assertIn(right, text)
+
 def wiki_graph(areas=(), notes=None):
     """A minimal in-memory graph with the fields the wiki reads."""
     nodes, edges = {}, {}

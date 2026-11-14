@@ -10,6 +10,8 @@ const WIKI_FIXED_PAGES = [
   ["dreams", "Dreams"],
   ["sessions", "Sessions"],
 ];
+// `1 note`, `2 notes`.
+const wikiPlural = (count, word) => `${countText(count)} ${count === 1 ? word : word + "s"}`;
 let wikiFilter = "",
   wikiShown = 0,
   wikiTotal = 0;
@@ -203,7 +205,7 @@ function wikiPageContent(name, page, pages) {
     const summary = element(
       "p",
       "",
-      `${countText(counts.notes || 0)} live notes (${counts.proven || 0} proven, ${counts.contested || 0} contested, ${counts.archived || 0} archived) across ${counts.areas || 0} areas and ${countText(counts.files || 0)} files.`,
+      `${wikiPlural(counts.notes || 0, "live note")} (${counts.proven || 0} proven, ${counts.contested || 0} contested, ${counts.archived || 0} archived) across ${wikiPlural(counts.areas || 0, "area")} and ${wikiPlural(counts.files || 0, "file")}.`,
     );
     const last = page.last_session || {};
     const areas = element("ul", "wiki-areas");
@@ -212,7 +214,7 @@ function wikiPageContent(name, page, pages) {
       const button = element("button", "link-button", row.name);
       button.type = "button";
       button.addEventListener("click", () => openWikiPage(row.page));
-      item.append(button, element("small", "", `${row.notes} notes · ${row.done}/${row.attempts} verified`));
+      item.append(button, element("small", "", `${wikiPlural(row.notes, "note")} · ${row.done}/${row.attempts} verified`));
       areas.append(item);
     }
     return [
@@ -264,7 +266,7 @@ function wikiPageContent(name, page, pages) {
       const item = element("li", row.outcome === "completed" ? "change-added" : row.outcome.startsWith("halted") ? "change-verdict" : "");
       item.append(
         element("strong", "", `${row.run_id} · ${row.outcome}`),
-        element("span", "wiki-text", `${row.done}/${row.tasks} done, ${row.rejected} rejected, ${row.blocked} blocked · ${row.notes} notes recorded`),
+        element("span", "wiki-text", `${row.done}/${row.tasks} done, ${row.rejected} rejected, ${row.blocked} blocked · ${wikiPlural(row.notes, "note")} recorded`),
       );
       list.append(item);
     }
@@ -279,7 +281,7 @@ function wikiPageContent(name, page, pages) {
     const proposals = element("ul", "wiki-changes");
     for (const row of page.proposals || []) {
       const item = element("li");
-      item.append(element("strong", "", `${row.members} notes`), element("span", "wiki-text", row.text || row.id));
+      item.append(element("strong", "", wikiPlural(row.members, "note")), element("span", "wiki-text", row.text || row.id));
       proposals.append(item);
     }
     return [
@@ -294,7 +296,7 @@ function wikiPageContent(name, page, pages) {
   // An area page carries note ids; the rows live once, on the knowledge page.
   const rows = new Map(wikiAllNotes(pages).map((row) => [row.id, row]));
   const files = element("ul", "wiki-files");
-  for (const row of page.files || []) files.append(element("li", "", `${row.path} · ${row.attempts} attempts`));
+  for (const row of page.files || []) files.append(element("li", "", `${row.path} · ${wikiPlural(row.attempts, "attempt")}`));
   return [
     heading,
     element("p", "", `${page.done || 0}/${page.attempts || 0} attempts verified${typeof page.success === "number" ? ` · success ${Math.round(page.success * 100)}%` : ""}`),

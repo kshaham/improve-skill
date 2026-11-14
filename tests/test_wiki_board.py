@@ -126,6 +126,12 @@ class WikiCappedViewTests(unittest.TestCase):
         self.assertIn("...(knowledge.more || [])", script)
         self.assertIn("const rows = new Map(wikiAllNotes(pages).map((row) => [row.id, row]));", script)
 
+class WikiWordingTests(unittest.TestCase):
+    def test_board_counts_use_singular_and_plural(self):
+        script = (ASSETS / "wiki.js").read_text()
+        self.assertIn('const wikiPlural = (count, word) => `${countText(count)} ${count === 1 ? word : word + "s"}`;', script)
+        self.assertNotRegex(script, r"\$\{row\.notes\} notes")
+
 class WikiStyleTests(unittest.TestCase):
     def rule(self, css, selector):
         start = css.index("\n" + selector + " {")
