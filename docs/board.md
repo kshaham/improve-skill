@@ -48,7 +48,9 @@ The board includes:
   scores), or **Recently created** (newest first), with a count from **Top 25** to **Top 500**;
   a focused neighbourhood always shows up to 220 nodes. Node size shows importance: knowledge
   is ranked among knowledge and every other node among the rest, so most nodes stay small and
-  the most important few are drawn large; sizes and labels stay readable as you zoom. Search it, filter by node type, drag
+  the most important few are drawn large; sizes and labels stay readable as you zoom. **Key
+  knowledge** (the top tenth of notes, at most eight) glows gold and is labelled first. A label
+  that would cover another label or a large node waits until you hover or select its node. Search it, filter by node type, drag
   nodes, zoom, and select a node to see its links, success rate, when it was created, and
   evidence. Focus a node to show its neighborhood, or open a task node in the task
   dialog. Curate knowledge with **Pin** (shown every cycle), **Useful**, **Wrong**,
