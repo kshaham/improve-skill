@@ -11,7 +11,6 @@ healthy.
 ```text
 Claude Code:  /improve 4h
 Codex:        $improve 90m ~/Code/api
-Over days:    /improve-max 3d ~/Code/api --target 5x
 ```
 
 [Get started](#get-started-in-five-minutes) · [What you get](#what-you-get) ·
@@ -39,7 +38,7 @@ You need **Git and Python 3.9+** on macOS or Linux. Background runs also need th
 assistant's authenticated CLI (`claude` or `codex`). The board needs nothing else: no npm,
 no account, no network.
 
-Clone once and link both skills into each assistant you use:
+Clone once and link the skill into each assistant you use:
 
 ```sh
 improve_checkout="$HOME/Code/improve-skill"
@@ -47,15 +46,11 @@ git clone https://github.com/kshaham/improve-skill.git "$improve_checkout"
 
 for improve_skills_dir in "$HOME/.claude/skills" "$HOME/.agents/skills"; do
   mkdir -p "$improve_skills_dir"
-  for improve_name in improve improve-max; do
-    improve_target="$improve_checkout"
-    if [ "$improve_name" = improve-max ]; then improve_target="$improve_checkout/max"; fi
-    if [ -e "$improve_skills_dir/$improve_name" ] || [ -L "$improve_skills_dir/$improve_name" ]; then
-      printf 'Keeping existing installation: %s\n' "$improve_skills_dir/$improve_name"
-    else
-      ln -s "$improve_target" "$improve_skills_dir/$improve_name"
-    fi
-  done
+  if [ -e "$improve_skills_dir/improve" ] || [ -L "$improve_skills_dir/improve" ]; then
+    printf 'Keeping existing installation: %s\n' "$improve_skills_dir/improve"
+  else
+    ln -s "$improve_checkout" "$improve_skills_dir/improve"
+  fi
 done
 ```
 
@@ -101,8 +96,7 @@ git log --oneline "$baseline_commit..improve/$date"
 ## The board
 
 The board is a local web app served from `127.0.0.1`. It reads the run's ledgers directly,
-stays available after the run ends, and includes `improve-max` experiments and archived
-runs.
+stays available after the run ends, and includes archived runs.
 
 ![Local board showing active documentation tasks, working columns, and run controls](docs/screenshots/board.png)
 
@@ -198,9 +192,9 @@ deadline whatever happens along the way:
   cycle is stopped by the wall-clock deadline when the machine wakes, and small clock steps are
   tolerated.
 
-By default a run ends only at its deadline, on your stop, at an improve-max target with
-`--stop-at-target`, when a cycle's uncommitted changes cannot be saved, when the final
-report pass modifies repository work, or when breakers are exhausted after the deadline.
+By default a run ends only at its deadline, on your stop, when a cycle's uncommitted changes
+cannot be saved, when the final report pass modifies repository work, or when breakers are
+exhausted after the deadline.
 Opting out of resilience (`IMPROVE_PARK=0`, `IMPROVE_QUARANTINE=0`,
 `IMPROVE_MAX_WORKER_HALTS=0`, `IMPROVE_MAX_RECOVERIES=0`) turns the matching waits into halts.
 The [runner guide](docs/running.md#staying-productive-through-failures) lists every case and
@@ -226,19 +220,10 @@ the target repository. See the [workflow guide](docs/workflow.md).
 
 ## Improve-max
 
-[`improve-max`](max/SKILL.md) is the courageous variant for multi-day performance bets:
-rewriting a subsystem, replacing a framework, changing a data layout or wire format. It
-adds characterization corpora, time-boxed spikes that must prove the gain before a bet is
-placed, strangler-style landing, and kill criteria, while sharing the intake, state, and
-board.
-
-```text
-Claude Code: /improve-max 3d ~/Code/api --target 5x --kinds design,data
-Codex:       $improve-max 3d ~/Code/api --target 5x --kinds design,data
-```
-
-Targets are measured goals, not promises; read the [bet protocol](max/references/bets.md)
-and [characterization guide](max/references/characterization.md) first.
+`improve-max` is the courageous variant for multi-day performance bets: rewriting a
+subsystem, replacing a framework, changing a data layout or wire format. It is a separate
+premium package and is not part of this repository. It installs beside this skill and shares
+its intake, state, daemon, and board.
 
 ## Documentation
 

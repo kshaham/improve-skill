@@ -93,7 +93,7 @@ list of one mode per launch.
 | `tests/test_control.py`, `tests/test_learning.py` | Board request helper (including withdraw refused after a receipt) and the learning store (malformed rows, locked concurrent writes) |
 | `tests/test_board.py`, `tests/test_board_hardening.py`, `tests/test_board_graph_signals.py`, `tests/test_board_js.py` | The board server and front end: ETags (heartbeat excluded; liveness via `/api/health`), quarantine refs listed only when supervisor-named and shell-quoted, LRU ledger cache, JSON errors and bounded parameters, cross-site refusal, the new graph signals (code changed, contradicted by, resolved, tiers, gaps, questions), and the drafts store run under node |
 | `tests/test_graph.py` | The graph engine end to end: ingest, refine, citations, ratings, and the CLI round trip |
-| `tests/test_instructions.py` | Every helper command quoted in SKILL.md, max/, references/, docs/, README, and the cycle prompt parses with that helper's parser; every documented `IMPROVE_*` setting exists; the skill and runtime versions agree; improve-max branch names can be created; the CI workflow keeps macOS, both Pythons, lint, timeouts, and the order check |
+| `tests/test_instructions.py` | Every helper command quoted in SKILL.md, references/, docs/, README, the cycle prompt, and max/ when the improve-max package is installed parses with that helper's parser; every documented `IMPROVE_*` setting exists; the skill and runtime versions agree; improve-max branch names can be created; the CI workflow keeps macOS, both Pythons, lint, timeouts, and the order check |
 
 `python3 tests/lint.py` checks every Python file against Python 3.9's grammar and for unused
 imports and unused locals (CI runs it with `node --check` on the board scripts).

@@ -13,7 +13,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
-from support import budget  # noqa: E402
+from support import MAX_INSTALLED, budget, requires_max  # noqa: E402
 sys.path.insert(0, str(ROOT / "scripts"))
 spec = importlib.util.spec_from_file_location("runtime", ROOT / "scripts/improve_runtime.py")
 runtime = importlib.util.module_from_spec(spec)
@@ -662,6 +662,7 @@ class DaemonTests(unittest.TestCase):
         self.assertFalse((self.state / 'launches.jsonl').exists())
         self.assertEqual((self.state / 'supervisor.json').read_bytes(), old)
 
+    @requires_max
     def test_failed_cycle_cannot_claim_target_success(self):
         result = self.invoke('failed_target', '--skill', 'improve-max', '--args=--stop-at-target')
         self.assertEqual(result.returncode, 1, result.stderr)
@@ -786,6 +787,14 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(launch["engine"], "codex")
             self.assertIn("FINALIZATION ONLY", launch["prompt"])
 
+    @unittest.skipIf(MAX_INSTALLED, "improve-max is installed")
+    def test_improve_max_without_its_package_is_refused_before_any_launch(self):
+        result = self.invoke("early", "--skill", "improve-max")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("improve-max is not installed", result.stderr)
+        self.assertFalse((self.state / "launches.jsonl").exists())
+
+    @requires_max
     def test_codex_max_uses_max_prompt_and_target_rules(self):
         result = self.invoke("target", "--engine", "codex", "--skill", "improve-max", "--args=--stop-at-target")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -933,6 +942,7 @@ class DaemonTests(unittest.TestCase):
         self.assertIn("IMPROVE_CYCLE_TIMEOUT", result.stderr)
         self.assertFalse(self.state.exists())
 
+    @requires_max
     def test_target_stop_requires_explicit_flag(self):
         result = self.invoke("target", "--skill", "improve-max", "--args=--stop-at-target")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -986,6 +996,7 @@ class DaemonTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(len(self.launches()), 4)
 
+    @requires_max
     def test_experiment_evidence_keeps_max_running_across_cycles(self):
         result = self.invoke("bet_progress", "--skill", "improve-max")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1562,6 +1573,7 @@ class LongRunResilienceTests(ResilienceTests):
         self.assertIn("run_id", results["pending"]["out"])
         self.assertIn("warm cache", self.launches()[1]["prompt"])
 
+    @requires_max
     def test_false_success_claim_from_a_failed_exit_is_rejected_not_fatal(self):
         result = self.invoke("early", "--skill", "improve-max", "--args=--stop-at-target", script=["failed_target", "stop"])
         self.assertEqual(result.returncode, 0, result.stderr)
