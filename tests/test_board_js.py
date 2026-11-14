@@ -103,5 +103,17 @@ class BoardScriptTests(unittest.TestCase):
         self.assertIn("const point = { x: Number(raw.x.toFixed(1)), y: Number(raw.y.toFixed(1)) };", position)
         self.assertIn('line.setAttribute("x1", a.x.toFixed(1));', position)
 
+    def test_crowded_graph_labels_wait_for_hover_or_selection(self):
+        result = self.node(HARNESS / "graph_label_check.mjs", ASSETS / "graph-layout.js", ASSETS / "graph.js")
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        self.assertIn("graph label checks passed", result.stdout)
+        source = (ASSETS / "graph.js").read_text()
+        self.assertIn("crowdGraphLabels(placed);", source[source.index("function positionGraph()"):])
+        css = (ASSETS / "board.css").read_text()
+        self.assertIn(
+            ".graph-node.labelled.label-crowded:not(:hover):not(:focus-visible):not(.selected):not(.linked) text {\n  display: none;",
+            css,
+        )
+
 if __name__ == "__main__":
     unittest.main()

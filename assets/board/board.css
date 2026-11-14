@@ -2859,6 +2859,10 @@ button.danger {
 .graph-node:focus-visible text {
   display: inline;
 }
+/* A label that would cover another label or dot, or leave the canvas, waits for hover or selection. */
+.graph-node.labelled.label-crowded:not(:hover):not(:focus-visible):not(.selected):not(.linked) text {
+  display: none;
+}
 .graph-node.selected circle,
 .graph-node:focus-visible circle {
   stroke: var(--edge-highlight);

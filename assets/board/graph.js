@@ -62,7 +62,7 @@ let graphData = null,
   graphTypes = new Set(GRAPH_DEFAULT_TYPES);
 const graphLayout = new GraphLayout(),
   graphViewport = { scale: 1, x: 0, y: 0, fit: 1 },
-  graphElements = { nodes: new Map(), hits: new Map(), edges: [], ranks: new Map(), sizedAt: null };
+  graphElements = { nodes: new Map(), hits: new Map(), edges: [], ranks: new Map(), sizedAt: null, radii: new Map(), labelled: [], labelWidths: new Map() };
 
 // Node size is in screen pixels, from the node's importance rank among those shown. Most nodes stay
 // small so hundreds of them do not merge; the most important few are drawn large. A view with
@@ -75,7 +75,8 @@ const NODE_RADIUS_MIN = 2.5,
   GRAPH_FIT_MARGIN = 24,
   GRAPH_LEGEND_ROOM = 32,
   GRAPH_FIT_MIN = 0.05,
-  GRAPH_HIT_RADIUS = 8;
+  GRAPH_HIT_RADIUS = 8,
+  GRAPH_LABEL_BLOCKING_RADIUS = 5;
 
 function graphPercentiles(nodes) {
   // Knowledge is ranked among knowledge, so the most valuable notes are drawn large even beside
@@ -122,6 +123,60 @@ function graphHitRadius(radius) {
   return Math.max(radius, GRAPH_HIT_RADIUS);
 }
 
+// Labels of the labelled set, most important first: one that would overlap a label already shown,
+// cover another prominent node, or leave the canvas is hidden until hovered, focused, or selected.
+// The smallest dots are ignored: every label in a dense core crosses one, and its halo keeps both
+// readable.
+function graphCrowdedLabels(labels, dots, bounds) {
+  const hidden = new Set(),
+    shown = [];
+  const overlaps = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+  for (const label of labels) {
+    const box = {
+      left: label.x,
+      right: label.x + label.width,
+      top: label.y - label.height / 2,
+      bottom: label.y + label.height / 2,
+    };
+    const outside = box.left < 0 || box.top < 0 || box.right > bounds.width || box.bottom > bounds.height;
+    const covers = dots.some(
+      (dot) =>
+        dot.id !== label.id &&
+        dot.r >= GRAPH_LABEL_BLOCKING_RADIUS &&
+        dot.x + dot.r > box.left &&
+        dot.x - dot.r < box.right &&
+        dot.y + dot.r > box.top &&
+        dot.y - dot.r < box.bottom,
+    );
+    if (outside || covers || shown.some((other) => overlaps(box, other))) hidden.add(label.id);
+    else shown.push(box);
+  }
+  return hidden;
+}
+
+function graphLabelWidth(id, group) {
+  if (graphElements.labelWidths.has(id)) return graphElements.labelWidths.get(id);
+  const text = group.querySelector("text");
+  const measured = text.getComputedTextLength?.() || 0;
+  // A hidden canvas measures 0: estimate from the 11px font and measure again next time.
+  if (measured > 0) graphElements.labelWidths.set(id, measured);
+  return measured || text.textContent.length * 6.2;
+}
+
+function crowdGraphLabels(placed) {
+  const canvas = $("graph-canvas");
+  const dots = [...placed].map(([id, point]) => ({ id, x: point.x, y: point.y, r: graphElements.radii.get(id) || 4 }));
+  const labels = graphElements.labelled
+    .filter((id) => placed.has(id))
+    .map((id) => {
+      const point = placed.get(id),
+        radius = graphElements.radii.get(id) || 4;
+      return { id, x: point.x + radius + 4, y: point.y, width: graphLabelWidth(id, graphElements.nodes.get(id)), height: 14 };
+    });
+  const hidden = graphCrowdedLabels(labels, dots, { width: canvas.clientWidth || 800, height: canvas.clientHeight || 520 });
+  for (const id of graphElements.labelled) graphElements.nodes.get(id)?.classList.toggle("label-crowded", hidden.has(id));
+}
+
 function sizeGraphNodes() {
   const ratio = graphViewport.scale / graphViewport.fit;
   if (graphElements.sizedAt === ratio) return;
@@ -129,6 +184,7 @@ function sizeGraphNodes() {
   for (const [id, group] of graphElements.nodes) {
     const radius = graphNodeRadius(graphElements.ranks.get(id) ?? 0, ratio, graphElements.nodes.size);
     const circle = group.querySelector("circle");
+    graphElements.radii.set(id, radius);
     circle.setAttribute("r", radius.toFixed(1));
     circle.style.setProperty("--node-r", radius.toFixed(1) + "px");
     group.querySelector("text").setAttribute("x", (radius + 4).toFixed(1));
@@ -345,6 +401,8 @@ function drawGraph() {
   graphElements.hits = new Map();
   graphElements.nodes = new Map();
   graphElements.ranks = graphPercentiles(nodes);
+  graphElements.labelled = [...labelled];
+  graphElements.labelWidths = new Map();
   graphElements.sizedAt = null;
   graphElements.edges = graphData.edges.map((edge) => {
     const line = svg("line", {
@@ -417,17 +475,21 @@ function positionGraph() {
   // edges meet node centres exactly.
   const scale = Number(graphViewport.scale.toFixed(3)),
     x = Number(graphViewport.x.toFixed(1)),
-    y = Number(graphViewport.y.toFixed(1));
+    y = Number(graphViewport.y.toFixed(1)),
+    placed = new Map();
   viewport.setAttribute("transform", `translate(${x} ${y}) scale(${scale})`);
   for (const [id, group] of graphElements.nodes) {
     const raw = graphLayout.points.get(id);
     if (!raw) continue;
     const point = { x: Number(raw.x.toFixed(1)), y: Number(raw.y.toFixed(1)) };
-    const place = `translate(${(point.x * scale + x).toFixed(1)} ${(point.y * scale + y).toFixed(1)})`;
+    const screen = { x: (point.x * scale + x), y: (point.y * scale + y) };
+    const place = `translate(${screen.x.toFixed(1)} ${screen.y.toFixed(1)})`;
     group.setAttribute("transform", place);
     graphElements.hits.get(id)?.setAttribute("transform", place);
+    placed.set(id, screen);
   }
   sizeGraphNodes();
+  crowdGraphLabels(placed);
   for (const { edge, line } of graphElements.edges) {
     const a = graphLayout.points.get(edge.src),
       b = graphLayout.points.get(edge.dst);
