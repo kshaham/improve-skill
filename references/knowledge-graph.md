@@ -231,9 +231,11 @@ or more with cohesion under 0.05) is split.
 
 `.improve/wiki/` is a readable digest of the graph, rebuilt **only when a session finishes**:
 by the supervisor's run-end dream, or by a foreground run's `G sync --dream` after the final
-report. Under the supervisor, `supervisor.json` decides whether the session has finished; an
-early outcome an agent writes to `run.json` does not count. During a run the graph stays the
-source of truth: no cycle reads the wiki and nothing rebuilds it.
+report and `improve_ledger.py finish --outcome completed`. Under the supervisor,
+`supervisor.json` decides whether the session has finished; an early outcome an agent writes to
+`run.json` does not count. With no run files at all, no session has finished. During a run the
+graph stays the source of truth: no cycle reads the wiki and nothing rebuilds it. The daemon
+logs each rebuild, and journals one that failed or was skipped.
 
 | File | Holds |
 | --- | --- |
@@ -249,8 +251,10 @@ source of truth: no cycle reads the wiki and nothing rebuilds it.
 
 It grows and cleans itself up with the graph: new knowledge appears, knowledge the graph
 archives, merges, or forgets leaves the pages and is listed in the change log with the reason
-(the graph's history still holds it), and pages for areas that no longer exist are deleted. A
-rebuild in the same session replaces that session's entry; `--new-run` keeps the wiki.
+(the graph's history still holds it). Pages the build did not write, and temp files a crashed
+write left, are deleted. A rebuild in the same session replaces that session's entry;
+`--new-run` keeps the wiki. The wiki folder, its `areas` folder, and `.improve` must not be
+symlinks: the build, the board, and the CLI refuse them.
 
 ```sh
 G wiki                    # the index page as TOON (cheapest for an agent)
@@ -258,7 +262,7 @@ G wiki knowledge          # any page: knowledge, changes, dreams, areas/NAME
 G wiki knowledge --budget 2000  # the strongest notes, across kinds, that fit 2,000 tokens
 G wiki pages              # the page list (sessions, and one page per area)
 G wiki changes --markdown # the Markdown file instead
-G wiki build              # rebuild by hand; refused (exit 2) while a run is live
+G wiki build              # rebuild by hand; refused (exit 2) until a session has finished
 ```
 
 No wiki yet exits `5`. A wiki problem never fails a sync or a run. The board shows it under
