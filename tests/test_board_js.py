@@ -55,5 +55,24 @@ class BoardScriptTests(unittest.TestCase):
         # The node_missing handler uses the tested helper with the live order and search text.
         self.assertIn('graphStatus(graphFallbackStatus(graphOrder(), $("graph-query").value.trim()));', source)
 
+    def test_graph_nodes_are_sized_by_importance_in_screen_pixels(self):
+        result = self.node(HARNESS / "graph_size_check.mjs", ASSETS / "graph-layout.js", ASSETS / "graph.js")
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        self.assertIn("graph size checks passed", result.stdout)
+        source = (ASSETS / "graph.js").read_text()
+        # Nodes sit outside the zoomed viewport, so the zoom does not shrink them to dots.
+        self.assertIn("canvas.replaceChildren(viewport, nodeLayer);", source)
+        # Edges stay in the zoomed group but keep their screen width.
+        self.assertIn('"vector-effect": "non-scaling-stroke"', source)
+        self.assertIn('"stroke-width": graphEdgeWidth(edge.weight).toFixed(2)', source)
+        self.assertIn("(point.x * scale + x)", source)
+        self.assertIn("sizeGraphNodes();", source[source.index("function positionGraph()"):])
+        # The fit reserves screen room for labels (at most 30% of a phone canvas) and the legend,
+        # and zooming out can always reach a fit below the usual 0.15 floor.
+        fit = source[source.index("function fitGraph()"):source.index("function zoomGraph(")]
+        self.assertIn("Math.min(GRAPH_LABEL_ROOM, width * 0.3)", fit)
+        self.assertIn("- GRAPH_LEGEND_ROOM", fit)
+        self.assertIn("Math.max(Math.min(0.15, graphViewport.fit),", source)
+
 if __name__ == "__main__":
     unittest.main()

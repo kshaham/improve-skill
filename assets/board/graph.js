@@ -61,8 +61,71 @@ let graphData = null,
   questionsKey = "",
   graphTypes = new Set(GRAPH_DEFAULT_TYPES);
 const graphLayout = new GraphLayout(),
-  graphViewport = { scale: 1, x: 0, y: 0 },
-  graphElements = { nodes: new Map(), edges: [] };
+  graphViewport = { scale: 1, x: 0, y: 0, fit: 1 },
+  graphElements = { nodes: new Map(), edges: [], ranks: new Map(), sizedAt: null };
+
+// Node size is in screen pixels, from the node's importance rank among those shown. Most nodes stay
+// small so hundreds of them do not merge; the most important few are drawn large. A view with
+// fewer nodes draws everything a little larger, and zooming changes sizes gently
+// within bounds instead of scaling them with the layout.
+const NODE_RADIUS_MIN = 2.5,
+  NODE_RADIUS_SPAN = 11.5,
+  NODE_RADIUS_FLOOR = 1.5,
+  GRAPH_LABEL_ROOM = 200,
+  GRAPH_FIT_MARGIN = 24,
+  GRAPH_LEGEND_ROOM = 32,
+  GRAPH_FIT_MIN = 0.05;
+
+function graphPercentiles(nodes) {
+  // Knowledge is ranked among knowledge, so the most valuable notes are drawn large even beside
+  // files that score higher; every other node is ranked among the rest.
+  const ranks = new Map();
+  rankGroup(nodes.filter((node) => node.type === "insight"), ranks);
+  rankGroup(nodes.filter((node) => node.type !== "insight"), ranks);
+  return ranks;
+}
+
+function rankGroup(nodes, ranks) {
+  const key = (node) => [node.pinned ? 1 : 0, Number(node.score) || 0];
+  const ranked = [...nodes].sort((a, b) => {
+    const [pinA, scoreA] = key(a),
+      [pinB, scoreB] = key(b);
+    return pinB - pinA || scoreB - scoreA || String(a.id).localeCompare(String(b.id));
+  });
+  if (ranked.length === 1) ranks.set(ranked[0].id, 1);
+  if (ranked.length < 2) return;
+  const last = ranked.length - 1;
+  // Equal importance draws at an equal size: a tie takes the middle rank of its group, so a graph
+  // whose scores are all equal draws every node at a middle size.
+  for (let start = 0; start < ranked.length; ) {
+    const group = key(ranked[start]).join(":");
+    let end = start;
+    while (end + 1 < ranked.length && key(ranked[end + 1]).join(":") === group) end++;
+    for (let index = start; index <= end; index++) ranks.set(ranked[index].id, 1 - (start + end) / 2 / last);
+    start = end + 1;
+  }
+}
+
+function graphNodeRadius(percentile, zoomRatio, nodeCount) {
+  const sparse = Math.min(1.6, Math.max(1, Math.sqrt(GRAPH_LIMIT / Math.max(1, nodeCount)))),
+    zoom = Math.min(1.8, Math.max(0.6, Math.sqrt(zoomRatio)));
+  return Math.max(NODE_RADIUS_FLOOR, (NODE_RADIUS_MIN + NODE_RADIUS_SPAN * percentile ** 3) * sparse * zoom);
+}
+
+function graphEdgeWidth(weight) {
+  return Math.min(2.4, 0.7 + 0.35 * (Number.isFinite(weight) ? Math.max(0, weight) : 1));
+}
+
+function sizeGraphNodes() {
+  const ratio = graphViewport.scale / graphViewport.fit;
+  if (graphElements.sizedAt === ratio) return;
+  graphElements.sizedAt = ratio;
+  for (const [id, group] of graphElements.nodes) {
+    const radius = graphNodeRadius(graphElements.ranks.get(id) ?? 0, ratio, graphElements.nodes.size);
+    group.querySelector("circle").setAttribute("r", radius.toFixed(1));
+    group.querySelector("text").setAttribute("x", (radius + 4).toFixed(1));
+  }
+}
 
 function graphColor(type) {
   return GRAPH_TYPES.find((row) => row[0] === type)?.[2] || "#747987";
@@ -265,10 +328,14 @@ function drawGraph() {
     edgeLayer = svg("g", { class: "graph-edges" }),
     nodeLayer = svg("g", { class: "graph-nodes" });
   graphElements.nodes = new Map();
+  graphElements.ranks = graphPercentiles(nodes);
+  graphElements.sizedAt = null;
   graphElements.edges = graphData.edges.map((edge) => {
     const line = svg("line", {
       class: "graph-edge" + graphClass("rel-", edge.rel, GRAPH_RELATIONS) + (edge.inferred ? " inferred" : ""),
-      "stroke-width": String(Math.min(4, 0.8 + 0.5 * (edge.weight || 1))),
+      // Screen pixels at any zoom, and always narrower than the smallest node.
+      "stroke-width": graphEdgeWidth(edge.weight).toFixed(2),
+      "vector-effect": "non-scaling-stroke",
     });
     line.dataset.src = edge.src;
     line.dataset.dst = edge.dst;
@@ -289,11 +356,11 @@ function drawGraph() {
       "aria-label": `${graphTypeLabel(node)}: ${node.label}`,
     });
     group.dataset.id = node.id;
-    const radius = 4 + 9 * Math.min(1.2, node.score || 0.2) + (node.type === "insight" ? 2 : 0);
-    const circle = svg("circle", { r: radius.toFixed(1), fill: graphColor(node.type) });
+    // Sized by sizeGraphNodes in screen pixels.
+    const circle = svg("circle", { r: "4", fill: graphColor(node.type) });
     if (node.type === "task" && STATUS_COLORS[node.status])
       circle.style.setProperty("--status", STATUS_COLORS[node.status]);
-    const label = svg("text", { x: (radius + 4).toFixed(1), y: "4" });
+    const label = svg("text", { x: "8", y: "4" });
     label.textContent = shortLabel(node.label);
     const title = svg("title");
     title.textContent = `${graphTypeLabel(node)}: ${node.label}`;
@@ -301,8 +368,10 @@ function drawGraph() {
     nodeLayer.append(group);
     graphElements.nodes.set(node.id, group);
   }
-  viewport.append(edgeLayer, nodeLayer);
-  canvas.replaceChildren(viewport);
+  // Edges are drawn in layout units inside the zoomed viewport; nodes sit above them in screen
+  // coordinates, so their size, outline and 11px label do not scale with the zoom.
+  viewport.append(edgeLayer);
+  canvas.replaceChildren(viewport, nodeLayer);
   renderLegend();
   markSelection();
   if (graphFitPending) fitGraph();
@@ -328,10 +397,13 @@ function positionGraph() {
     "transform",
     `translate(${graphViewport.x.toFixed(1)} ${graphViewport.y.toFixed(1)}) scale(${graphViewport.scale.toFixed(3)})`,
   );
+  const { scale, x, y } = graphViewport;
   for (const [id, group] of graphElements.nodes) {
     const point = graphLayout.points.get(id);
-    if (point) group.setAttribute("transform", `translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})`);
+    if (point)
+      group.setAttribute("transform", `translate(${(point.x * scale + x).toFixed(1)} ${(point.y * scale + y).toFixed(1)})`);
   }
+  sizeGraphNodes();
   for (const { edge, line } of graphElements.edges) {
     const a = graphLayout.points.get(edge.src),
       b = graphLayout.points.get(edge.dst);
@@ -367,12 +439,18 @@ function fitGraph() {
     height = canvas.clientHeight || 520;
   graphFitPending = !bounds || !canvas.clientWidth;
   if (!bounds) return;
-  // Labels extend to the right of each node; leave room for them.
-  const spanX = Math.max(80, bounds.maxX - bounds.minX + 260),
-    spanY = Math.max(80, bounds.maxY - bounds.minY + 60);
-  graphViewport.scale = Math.max(0.2, Math.min(2.2, Math.min(width / spanX, height / spanY)));
-  graphViewport.x = width / 2 - ((bounds.minX + bounds.maxX) / 2 + 70) * graphViewport.scale;
-  graphViewport.y = height / 2 - ((bounds.minY + bounds.maxY) / 2) * graphViewport.scale;
+  // Nodes and labels keep their screen size, so their room is in screen pixels: a margin for the
+  // largest nodes all round, room for labels to the right, and the legend along the bottom.
+  const spanX = Math.max(1, bounds.maxX - bounds.minX),
+    spanY = Math.max(1, bounds.maxY - bounds.minY),
+    labelRoom = Math.min(GRAPH_LABEL_ROOM, width * 0.3),
+    usableWidth = Math.max(80, width - labelRoom - 2 * GRAPH_FIT_MARGIN),
+    usableHeight = Math.max(80, height - 2 * GRAPH_FIT_MARGIN - GRAPH_LEGEND_ROOM);
+  // Nodes keep their screen size, so a wide layout may be fitted well below the old 0.2 floor.
+  const scale = Math.max(GRAPH_FIT_MIN, Math.min(2.2, Math.min(usableWidth / spanX, usableHeight / spanY)));
+  graphViewport.scale = graphViewport.fit = scale;
+  graphViewport.x = GRAPH_FIT_MARGIN + (usableWidth - spanX * scale) / 2 - bounds.minX * scale;
+  graphViewport.y = GRAPH_FIT_MARGIN + (usableHeight - spanY * scale) / 2 - bounds.minY * scale;
   positionGraph();
 }
 
@@ -380,7 +458,8 @@ function zoomGraph(factor, centerX, centerY) {
   const canvas = $("graph-canvas");
   centerX ??= canvas.clientWidth / 2;
   centerY ??= canvas.clientHeight / 2;
-  const scale = Math.max(0.15, Math.min(4, graphViewport.scale * factor));
+  // Zooming out may always reach the fitted view, even when it is below 0.15.
+  const scale = Math.max(Math.min(0.15, graphViewport.fit), Math.min(4, graphViewport.scale * factor));
   graphViewport.x = centerX - ((centerX - graphViewport.x) * scale) / graphViewport.scale;
   graphViewport.y = centerY - ((centerY - graphViewport.y) * scale) / graphViewport.scale;
   graphViewport.scale = scale;

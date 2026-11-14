@@ -46,7 +46,9 @@ The board includes:
   canvas in both themes. **Show** picks which nodes fill the view: **Balanced mix** (a share of
   each type, then the strongest), **Most important** (pinned knowledge first, then the highest
   scores), or **Recently created** (newest first), with a count from **Top 25** to **Top 500**;
-  a focused neighbourhood always shows up to 220 nodes. Search it, filter by node type, drag
+  a focused neighbourhood always shows up to 220 nodes. Node size shows importance: knowledge
+  is ranked among knowledge and every other node among the rest, so most nodes stay small and
+  the most important few are drawn large; sizes and labels stay readable as you zoom. Search it, filter by node type, drag
   nodes, zoom, and select a node to see its links, success rate, when it was created, and
   evidence. Focus a node to show its neighborhood, or open a task node in the task
   dialog. Curate knowledge with **Pin** (shown every cycle), **Useful**, **Wrong**,
