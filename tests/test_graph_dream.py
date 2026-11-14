@@ -3,7 +3,6 @@ verdicts, consolidation, and a 72-hour run graded against a known ground truth.
 
 IMPROVE_GRAPH_DREAM_SOAK_CYCLES (default 432: 72 hours of 10-minute cycles) scales the soak.
 """
-import json
 import os
 from pathlib import Path
 import subprocess
@@ -659,8 +658,8 @@ class SeventyTwoHourDreamTests(unittest.TestCase):
             graph.restore_node(session, old_junk[0], "audit")
         self.assertIn(old_junk[0], load(world.repo)["nodes"])
         timings.sort()
-        self.assertLess(timings[int(len(timings) * 0.95)], 1.0, "95th percentile cycle sync")
-        self.assertLess(max(dream_times), 5.0, "slowest dream")
+        self.assertLess(timings[int(len(timings) * 0.95)], budget(1.0), "95th percentile cycle sync")
+        self.assertLess(max(dream_times), budget(5.0), "slowest dream")
 
 
 if __name__ == "__main__":

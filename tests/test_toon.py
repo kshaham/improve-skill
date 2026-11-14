@@ -4,7 +4,6 @@ format exists for."""
 import datetime
 import decimal
 import json
-import math
 from pathlib import Path
 import random
 import subprocess
@@ -15,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
 import support  # noqa: E402,F401
+from support import budget  # noqa: E402
 import improve_toon as toon  # noqa: E402
 
 FIXTURES = ROOT / "tests" / "fixtures" / "toon"
@@ -168,6 +168,13 @@ class NormalizationTests(unittest.TestCase):
             value = {"n": value}
         with self.assertRaises(toon.ToonError):
             toon.dumps(value)
+        nearly = {}
+        for _ in range(toon.MAX_DEPTH - 1):
+            nearly = {"n": nearly}
+        try:
+            toon.dumps(nearly)
+        except toon.ToonError:
+            pass  # A small stack may refuse it, but only with the documented error, never RecursionError.
 
 
 class ViewHelperTests(unittest.TestCase):
@@ -184,8 +191,11 @@ class ViewHelperTests(unittest.TestCase):
         value = {"short": "ok", "long": "x" * 50, "rows": [{"t": "y" * 50}], "n": 7}
         cut = toon.truncate(value, 10)
         self.assertEqual(cut["short"], "ok")
-        self.assertEqual(cut["long"], "x" * 7 + "...")
-        self.assertEqual(cut["rows"][0]["t"], "y" * 7 + "...")
+        self.assertEqual(cut["long"], "x" * 4 + "\u2026[+46]", "the marker says how much was cut")
+        self.assertEqual(cut["rows"][0]["t"], "y" * 4 + "\u2026[+46]")
+        self.assertEqual(len(cut["long"]), 10)
+        self.assertEqual(toon.truncate("z" * 50, 10, marker="...")[-3:], "...", "an explicit marker is kept")
+        self.assertEqual(toon.truncate("text that ends in...", 100), "text that ends in...", "real text is untouched")
         self.assertEqual(cut["n"], 7)
         self.assertIs(toon.truncate(value, 0), value)
 
@@ -193,7 +203,7 @@ class ViewHelperTests(unittest.TestCase):
 class CliTests(unittest.TestCase):
     def run_cli(self, *args, stdin):
         return subprocess.run([sys.executable, str(ROOT / "scripts/improve_toon.py"), *args], input=stdin,
-                              capture_output=True, text=True, timeout=30)
+                              capture_output=True, text=True, timeout=budget(30))
 
     def test_encode_and_decode_through_stdin(self):
         encoded = self.run_cli("encode", stdin=json.dumps({"items": [{"id": 1, "n": "a"}, {"id": 2, "n": "b"}]}))

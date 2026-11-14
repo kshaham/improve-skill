@@ -53,6 +53,20 @@ def check_controls(page, repo, tasks, write_tasks, artifacts):
     page.locator(".request-item summary").first.click()
     assert page.locator(".request-item img").count() == 0
 
+    # Cancelling an empty Withdraw form leaves no draft and keeps every other draft readable.
+    page.locator("#new-task").click()
+    page.locator("#request-task-title").fill("Draft that must survive")
+    page.locator('[data-close="request-dialog"]').first.click()
+    drafts_before = page.evaluate("Object.keys(savedDrafts()).length")
+    page.evaluate('openRequest("withdraw", null, null, null, {id: "00000000-0000-4000-8000-000000000000", type: "guidance"})')
+    page.locator('[data-close="request-dialog"]').first.click()
+    assert page.evaluate("Object.keys(savedDrafts()).length") == drafts_before
+    assert page.evaluate("draftReadError") is False
+    page.locator("#resume-draft").click()
+    expect(page.locator("#request-task-title")).to_have_value("Draft that must survive")
+    page.locator("#discard-draft").click()
+    expect(page.locator("#request-dialog")).not_to_be_visible()
+
     # A changed run rejects stale drafts; no silent delivery into the replacement run.
     page.locator("#new-task").click()
     page.locator("#request-task-title").fill("Keep this unsent draft")

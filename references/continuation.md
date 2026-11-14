@@ -47,7 +47,8 @@ the current item and return, without sleeping inside a child. See [board-control
 
 ## Checkpoint a useful cycle
 
-Atomically update `run.json` after each item or completed discovery pass:
+Atomically update `run.json` after each item or completed discovery pass, with
+`improve_ledger.py run-set` (`--json-field` for objects) rather than an editor:
 
 ```json
 {
@@ -61,7 +62,7 @@ Atomically update `run.json` after each item or completed discovery pass:
 ```
 
 `next_action` names a concrete scope and question, not “continue improving.” Save one row
-per completed scan in `.improve/discovery.jsonl`: timestamp, generation, tier, lane, focus
+per completed scan in `.improve/discovery.jsonl` (`improve_ledger.py discovery-add --json '{...}'`): timestamp, generation, tier, lane, focus
 priority, paths, hypothesis, relevant commit, findings accepted/rejected, and next scope.
 An empty result records what was inspected and why it supplied no candidate. A failed or
 cancelled scan records that status and **does not** count as a dry result.

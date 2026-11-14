@@ -1,7 +1,7 @@
 """The SQLite knowledge-graph store: partial sessions, minimal writes, search index, history,
 migration, damage recovery, isolation, fairness, and disk reclamation. No agents are launched."""
+import contextlib
 import json
-import os
 from pathlib import Path
 import random
 import shutil
@@ -16,7 +16,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from support import fts5_available  # noqa: E402
-from graph_support import World, check_invariants, environment, load, make_repo, restore_environment, write_ledger, write_run  # noqa: E402
+from graph_support import budget, World, check_invariants, environment, load, make_repo, restore_environment, write_ledger, write_run  # noqa: E402
 import improve_graph as graph  # noqa: E402
 import improve_graph_store as store_module  # noqa: E402
 from improve_graph_store import Store  # noqa: E402
@@ -173,7 +173,7 @@ class WriteTests(unittest.TestCase):
     def test_partial_session_cannot_overwrite_unloaded_rows(self):
         existing = next(key for key, node in load(self.repo)["nodes"].items() if node["type"] == "file")
         before = load(self.repo)
-        with self.assertRaises(RuntimeError), graph.locked(self.repo, partial=True) as value:
+        with self.assertRaises(store_module.GraphConflict), graph.locked(self.repo, partial=True) as value:
             graph.upsert(value, existing, "file", "clobbered")
         self.assertEqual(load(self.repo), before, "the refused session wrote nothing")
 
@@ -287,7 +287,8 @@ class LegacyAndDamageTests(unittest.TestCase):
                 path = graph.graph_path(self.repo)
                 with graph.locked(self.repo):  # Fold the WAL in so the damage hits real data.
                     pass
-                sqlite3.connect(str(path)).execute("PRAGMA wal_checkpoint(TRUNCATE)").close()
+                with contextlib.closing(sqlite3.connect(str(path))) as connection:
+                    connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 damage(path)
                 self.assertEqual(load(self.repo)["nodes"], {}, "readers never repair")
                 graph.sync(self.repo)
@@ -324,7 +325,7 @@ class LegacyAndDamageTests(unittest.TestCase):
         graph.sync(self.repo)
         self.assertFalse(store_module.is_damage(sqlite3.OperationalError("database is locked")))
         self.assertTrue(store_module.is_damage(sqlite3.DatabaseError("file is not a database")))
-        self.assertTrue(store_module.is_damage(sqlite3.OperationalError("no such table: node")))
+        self.assertFalse(store_module.is_damage(sqlite3.OperationalError("no such table: node")))
 
 
 class ConcurrencyTests(unittest.TestCase):
@@ -359,7 +360,7 @@ class ConcurrencyTests(unittest.TestCase):
                 graph.load_search(part, "written reader")
                 self.assertEqual(graph.search(part, "written reader"), [], "uncommitted work is invisible")
             self.assertEqual(load(self.repo)["revision"], before)
-            self.assertLess(time.perf_counter() - started, 1.0, "reads do not wait for the writer")
+            self.assertLess(time.perf_counter() - started, budget(1.0), "reads do not wait for the writer")
         finally:
             release.set()
             thread.join(10)
@@ -395,7 +396,7 @@ class ConcurrencyTests(unittest.TestCase):
             for thread in threads:
                 thread.join(30)
         # Writers take turns: without the queue, SQLite's busy-retry let waits reach seconds here.
-        self.assertLess(max(waits), 0.5, f"a write waited {max(waits):.2f}s behind busy writers")
+        self.assertLess(max(waits), budget(0.5), f"a write waited {max(waits):.2f}s behind busy writers")
         self.assertEqual(sum(node.get("summary", "").startswith("Patient") for node in load(self.repo)["nodes"].values()), 20)
 
 
@@ -421,7 +422,8 @@ class HistoryAndDiskTests(unittest.TestCase):
         self.assertEqual(result["total"], 50)
         self.assertEqual([row["id"] for row in result["rows"]], list(reversed(ids))[:50], "newest first, oldest dropped")
         self.assertTrue(all(row["reason"] == f"cleanup of {row['id']}" for row in result["rows"]))
-        raw = sqlite3.connect(str(graph.graph_path(self.repo))).execute("SELECT typeof(body) FROM history LIMIT 1").fetchone()
+        with contextlib.closing(sqlite3.connect(str(graph.graph_path(self.repo)))) as connection:
+            raw = connection.execute("SELECT typeof(body) FROM history LIMIT 1").fetchone()
         self.assertEqual(raw[0], "blob")
 
     def test_history_filters(self):
@@ -462,7 +464,8 @@ class HistoryAndDiskTests(unittest.TestCase):
         connection.close()
         with graph.locked(self.repo) as value:
             graph.refine(value, self.repo)
-        self.assertEqual(sqlite3.connect(str(path)).execute("PRAGMA auto_vacuum").fetchone()[0], 2)
+        with contextlib.closing(sqlite3.connect(str(path))) as connection:
+            self.assertEqual(connection.execute("PRAGMA auto_vacuum").fetchone()[0], 2)
 
 
 if __name__ == "__main__":

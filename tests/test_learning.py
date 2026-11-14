@@ -4,12 +4,13 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
-import support  # noqa: E402,F401  (git isolation)
+from support import budget  # noqa: E402  (importing support also isolates git)
 
 import improve_learning as learning  # noqa: E402
 import improve_resilience as resilience  # noqa: E402
@@ -74,6 +75,45 @@ class LearningTests(unittest.TestCase):
         learning.add_lesson(self.repo, "Recovered stores keep working.")
         self.assertEqual(len(learning.load(path)["lessons"]), 1)
 
+    def test_malformed_rows_are_skipped_instead_of_dropping_all_guidance(self):
+        learning.store_path(self.repo).write_text(json.dumps({
+            "lessons": [{"key": "k", "reinforced": 1}, "junk", {"text": 7},
+                        {"key": "use the serial runner for integration tests",
+                         "text": "Use the serial runner for integration tests.", "reinforced": "often"}],
+            "blockers": [{"key": "b", "count": "x"}, {"key": "c", "count": 3, "example": "Simulator offline"}, None],
+            "areas": {"ui": {"done": "3", "rejected": 1}, "docs": "broken"},
+            "runs": [None]}))
+        text = learning.guidance(self.repo)
+        self.assertIn("Use the serial runner", text)
+        self.assertIn("(3x) Simulator offline", text)
+        learning.add_lesson(self.repo, "Use the serial runner for integration tests.")
+        learning.record_run(self.repo, dict(run_id="r1"), [dict(id="a", area="ui", status="done")])
+        value = learning.load(learning.store_path(self.repo))
+        self.assertEqual(value["lessons"][0]["reinforced"], 2, "a malformed count restarts at its default")
+        self.assertEqual(value["areas"]["ui"]["done"], 4)
+        self.assertNotIn("docs", value["areas"])
+        self.assertTrue(learning.board_summary(self.repo)["lessons"])
+
+    def test_concurrent_lesson_writes_keep_every_lesson(self):
+        for scope in learning.SCOPES:
+            with self.subTest(scope=scope):
+                errors = []
+
+                def writer(worker):
+                    try:
+                        for index in range(8):
+                            learning.add_lesson(self.repo, f"Lesson {worker}-{index} about a distinct build quirk.", scope=scope)
+                    except Exception as exc:  # noqa: BLE001 - reported below
+                        errors.append(exc)
+                threads = [threading.Thread(target=writer, args=(worker,)) for worker in range(6)]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(budget(30))
+                self.assertEqual(errors, [])
+                lessons = learning.load(learning.store_path(self.repo, scope))["lessons"]
+                self.assertEqual(len(lessons), 48, "no read-modify-write lost another writer's lesson")
+
 
 class RecoveryHelperTests(unittest.TestCase):
     def setUp(self):
@@ -102,12 +142,56 @@ class RecoveryHelperTests(unittest.TestCase):
         self.assertIn("ready queue is empty", resilience.recovery_brief(self.state))
 
     def test_repair_ledgers_moves_only_bad_lines(self):
-        (self.state / "backlog.jsonl").write_text('{"id":"a"}\n{bad\n[1]\n{"id":"b"}\n')
+        original = '{"id":"a"}\n{bad\n[1]\n{"id":"b"}\n'
+        (self.state / "backlog.jsonl").write_text(original)
         problems = resilience.repair_ledgers(self.state)
         self.assertEqual(len(problems), 1)
         self.assertEqual([row["id"] for row in resilience.read_rows(self.state / "backlog.jsonl")], ["a", "b"])
         self.assertEqual((self.state / "backlog.jsonl.damaged").read_text(), "{bad\n[1]\n")
+        self.assertEqual((self.state / "backlog.jsonl.bak").read_text(), original, "the rewritten bytes are kept")
         self.assertEqual(resilience.repair_ledgers(self.state), [])
+
+    def test_repair_ledgers_waits_for_the_ledger_lock(self):
+        (self.state / "backlog.jsonl").write_bytes(b'{"id":"a"}\n\xff\xfe{"id":"b"}\n')
+        finished = threading.Event()
+        with resilience.ledger_lock(self.state):
+            thread = threading.Thread(target=lambda: (resilience.repair_ledgers(self.state), finished.set()))
+            thread.start()
+            self.assertFalse(finished.wait(0.3), "repair must not rewrite a ledger while a writer holds the lock")
+            self.assertIn(b"\xff", (self.state / "backlog.jsonl").read_bytes())
+        thread.join(budget(10))
+        self.assertTrue(finished.is_set())
+        self.assertNotIn(b"\xff", (self.state / "backlog.jsonl").read_bytes())
+        self.assertIn(b"\xff", (self.state / "backlog.jsonl.bak").read_bytes(), "undecodable bytes survive in the backup")
+
+    def test_repair_is_deferred_when_the_lock_stays_busy(self):
+        (self.state / "backlog.jsonl").write_text('{bad\n')
+        original = resilience.REPAIR_LOCK_WAIT
+        resilience.REPAIR_LOCK_WAIT = 0.2
+        try:
+            with resilience.ledger_lock(self.state):
+                problems = resilience.repair_ledgers(self.state)
+        finally:
+            resilience.REPAIR_LOCK_WAIT = original
+        self.assertEqual(problems, ["ledger.lock stayed busy; ledger repair deferred to the next cycle"])
+        self.assertEqual((self.state / "backlog.jsonl").read_text(), "{bad\n")
+
+    def test_malformed_block_count_does_not_stop_blocking(self):
+        (self.state / "backlog.jsonl").write_text(json.dumps({"id": "t", "status": "in_progress", "block_count": "twice"}) + "\n")
+        (self.state / "run.json").write_text(json.dumps({"active_item": {"id": "t"}}))
+        self.assertEqual(resilience.block_active_item(self.state, "Gate hung"), "t")
+        task = resilience.merged_tasks(self.state)["t"]
+        self.assertEqual((task["status"], task["block_count"]), ("blocked", 1))
+
+    def test_unauthorized_target_outcome_is_cleared(self):
+        for skill, args, expected in (("improve", "", None), ("improve-max", "", None),
+                                      ("improve-max", "--target 5x --stop-at-target", "target reached")):
+            with self.subTest(skill=skill, args=args):
+                run = {"outcome": "Target Reached"}
+                resilience.repair_run(run, skill, args)
+                self.assertEqual(run["outcome"], expected)
+        legacy = {"outcome": "target reached"}
+        self.assertEqual(resilience.repair_run(legacy), [], "without the skill, the outcome is only normalized")
 
 
 if __name__ == "__main__":

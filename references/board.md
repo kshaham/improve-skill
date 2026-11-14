@@ -104,7 +104,15 @@ while the last snapshot is under 30 seconds old and then close with the reason u
 refresh succeeds. Failed polls back off (3, 6, 12, 24, then 30 seconds), pause while the
 browser reports itself offline, and resume on reconnection. The countdown and the health
 ages advance from the server's clock plus the time since the snapshot, so a phone with a
-skewed clock still shows the right deadline. Partial/malformed ledger rows generate
+skewed clock still shows the right deadline. The snapshot's ETag covers everything the board
+renders except the moving clock and liveness (`heartbeat_at` and the heartbeat and cycle
+ages): a supervisor that only refreshed its heartbeat, as the pause loop does every five
+seconds, yields 304. The browser reads liveness from `/api/health` (`control_id`,
+`heartbeat_at`, `heartbeat_age_seconds`, `cycle_started_at`, `cycle_age_seconds`,
+`daemon_running`, `snapshot_age_seconds`) every five seconds, fifteen while hidden, and uses
+whichever report is newest. Parsed ledgers are cached by inode, mtime, and size; the cache
+holds six files per run directory (at least 64, at most 4,096) with least-recently-used
+eviction, so an unchanged **All runs** poll re-parses nothing however many runs are archived. Partial/malformed ledger rows generate
 warnings while valid rows remain visible.
 Non-finite measurements (`NaN`, infinities, or overflowing numbers) are invalid records;
 they produce warnings rather than breaking the browser's entire task response.
@@ -161,7 +169,10 @@ with amber/red thresholds (75% and 100% of the cycle limit; the heartbeat is red
 the limit), supervisor counters, and a timeline of the last 24 cycles. **Journal**,
 **Daemon log**, and **Quarantine** open text views of `journal.md` (per run, last 1 MiB),
 the current run's `daemon.log` tail (at most 2,000 lines, 256 KiB, refreshed every five
-seconds while open), and `refs/improve/quarantine/*` with a restore command per ref.
+seconds while open), and `refs/improve/quarantine/*` with a restore command per ref. Only
+refs matching the supervisor's naming (`refs/improve/quarantine/<YYYY-MM-DDTHH-MM-SSZ>[-label]`
+with a label of letters, digits, `.`, `_`, `-`) are listed, with the ref shell-quoted in the
+command; others are counted as `hidden` and never echoed.
 **Notify me** enables browser notifications, each fired once per event: run outcome set,
 phase becomes `account-limit` or `parked`, three consecutive failures, deadline reached, a
 task entering Blocked, or a request receiving a response. The same events fill the panel's
@@ -195,7 +206,8 @@ A replacement run has a new
 identity, so forms opened before it started are rejected with their drafts intact.
 Requests have stable IDs for safe retry after a lost response. The board shows their
 pending/applied/declined responses in a separate tab. `operator.lock` serializes submissions
-and acknowledgments, worker request reads, and report reads against new-run archival; the
+and acknowledgments, worker request reads, and report reads against new-run archival (a
+report read waits at most two seconds for the lock, then answers 503 with code `busy`); the
 polled board snapshot reads without it, because ledgers are replaced atomically and a
 half-archived state only produces warnings. The lock stays in place across runs. Archived
 pending requests do not become current work; a new submission always goes to the current run.
@@ -205,7 +217,19 @@ board assets, ledger fields, user requests/responses, and the bounded saved fina
 Three read-only operational endpoints follow the same Host and origin rules: `/api/journal`
 (a run's `journal.md`, last 1 MiB), `/api/log` (the current run's `daemon.log` only, at most
 2,000 lines and 256 KiB), and `/api/quarantine` (ref names, commits, dates, and subjects of
-`refs/improve/quarantine/*`). None follows symlinks. The server does not serve arbitrary
+`refs/improve/quarantine/*`). None follows symlinks. Every `/api/*` read refuses a request
+whose `Sec-Fetch-Site` is `cross-site` or `same-site` (403, code `cross_site`), so another
+site cannot read board state or hold the operator lock through `/api/report`; links that
+open the board page itself still work. Graph reads take bounded whole-number parameters
+(more than nine digits, or anything that is not a whole number, is a JSON 400), and an
+unexpected fault in any graph read or write, request, or operational view answers JSON 500
+with code `internal` instead of dropping the connection. Graph reads for the board:
+`/api/graph` (the bounded view, including dream `gaps`), `/api/graph/node` (details with
+`code_changed` and each link's `tier`), `/api/graph/context` (the task dialog's knowledge,
+with the open task excluded inside the ranking, insight `code_changed`/`contradicted_by`,
+blocker `resolved`, `gates`, `code` dependents/imports/notes, and module `groups`),
+`/api/graph/history`, and `/api/graph/questions` (suggested questions with their `kind` and
+whether their `id` opens a node). The server does not serve arbitrary
 repository files, intake answers, other logs, or authorization state. Task, request,
 report, journal, and log content renders as text, never HTML. Browser mutations
 require an explicit same-origin request, a per-service browser capability, and a matching

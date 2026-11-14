@@ -19,8 +19,10 @@ import contextlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
+import time
 import zlib
 
 DB_NAME = "graph.db"
@@ -30,7 +32,12 @@ MAX_HISTORY = 20000
 BUSY_TIMEOUT_SECONDS = 60
 CHUNK = 500
 STRUCTURE = ("nodes", "edges")
-DAMAGE_WORDS = ("not a database", "malformed", "disk image", "corrupt", "no such table")
+# "no such table" is not here: a missing graph table is caught by `Store.open`, and anything else
+# missing (a newer or older optional table, a typo) is a bug to fix, not a store to discard.
+DAMAGE_WORDS = ("not a database", "malformed", "disk image", "corrupt")
+# Bumped whenever `indexer` output changes, so an index built by older code is rebuilt once.
+INDEX_VERSION = 2
+DAMAGED_KEEP = 3
 
 
 def canonical(value):
@@ -40,6 +47,10 @@ def canonical(value):
 
 class StoreDamaged(Exception):
     """The database file cannot be read as a knowledge graph."""
+
+
+class GraphConflict(ValueError):
+    """A partial session tried to write a node it never loaded; nothing was written."""
 
 
 def pack(value):
@@ -77,6 +88,10 @@ class GraphState(dict):
         self.store = None
         self.partial = False
         self.removed = {}
+        self.journal = []       # curated writes of this session, journaled after commit
+        self.replaying = False  # True while recovery re-applies journaled writes
+        self.drained = None     # the pending-writes file this session applied
+        self.newer = False      # read a graph written by a newer format
 
 
 def paths(state):
@@ -296,7 +311,10 @@ class Store:
 
     def fts_ready(self):
         row = self.con.execute("SELECT value FROM meta WHERE key='fts_ready'").fetchone()
-        return bool(row and json.loads(row[0]))
+        if not (row and json.loads(row[0])):
+            return False
+        version = self.con.execute("SELECT value FROM meta WHERE key='fts_version'").fetchone()
+        return bool(version and json.loads(version[0]) == INDEX_VERSION)
 
     # ------------------------------------------------------------ writes
 
@@ -320,7 +338,7 @@ class Store:
             created = [node_id for node_id in changed_nodes if node_id not in original["nodes"]]
             clash = self.existing(created)
             if clash:
-                raise RuntimeError(f"partial session would overwrite unloaded nodes: {sorted(clash)[:3]}")
+                raise GraphConflict(f"partial session would overwrite unloaded nodes: {sorted(clash)[:3]}")
         meta = {key: value for key, value in graph.items() if key not in STRUCTURE and not key.startswith("_")}
         changed_meta = {}
         for key, value in meta.items():
@@ -382,6 +400,8 @@ class Store:
         self.con.executemany("INSERT INTO node_fts(id, words) VALUES (?,?)", rows)
         self.con.execute("INSERT INTO meta(key, value) VALUES ('fts_ready', 'true') "
                          "ON CONFLICT(key) DO UPDATE SET value='true'")
+        self.con.execute("INSERT INTO meta(key, value) VALUES ('fts_version', ?) "
+                         "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(INDEX_VERSION),))
 
     # ------------------------------------------------------------ history
 
@@ -437,8 +457,11 @@ class Store:
             clauses.append(f"type IN ({','.join('?' * len(types))})")
             params.extend(types)
         if query:
-            clauses.append("(lower(label) LIKE ? OR lower(reason) LIKE ? OR lower(node_id) LIKE ?)")
-            params.extend([f"%{query.lower()}%"] * 3)
+            # `%`, `_`, and `\` in the words are literal, not wildcards.
+            pattern = "%" + re.sub(r"([%_\\])", r"\\\1", query.lower()) + "%"
+            clauses.append("(lower(label) LIKE ? ESCAPE '\\' OR lower(reason) LIKE ? ESCAPE '\\' "
+                           "OR lower(node_id) LIKE ? ESCAPE '\\')")
+            params.extend([pattern] * 3)
         if node_id:
             clauses.append("node_id = ?")
             params.append(node_id)
@@ -509,9 +532,23 @@ class Store:
 
 
 def set_aside(db_path):
-    """Move a damaged database (and its WAL files) out of the way; returns the new path."""
+    """Move a damaged database (and its WAL files) out of the way; returns the new path.
+    The newest is `graph.damaged.db`; earlier incidents are kept as `graph.damaged.<stamp>.db`
+    (the newest few), so a second incident does not erase the evidence of the first."""
     db_path = Path(db_path)
     damaged = db_path.with_name("graph.damaged.db")
+    if damaged.exists():
+        moment = time.time_ns()
+        older = db_path.with_name(f"graph.damaged.{time.strftime('%Y%m%dT%H%M%S', time.gmtime(moment / 1e9))}"
+                                  f"-{moment % 1_000_000_000:09d}.db")
+        for suffix in ("", "-wal", "-shm"):
+            source = Path(str(damaged) + suffix)
+            if source.exists():
+                os.replace(source, Path(str(older) + suffix))
+        kept = sorted(db_path.parent.glob("graph.damaged.*.db"))
+        for stale in kept[:max(0, len(kept) - DAMAGED_KEEP)]:
+            for suffix in ("", "-wal", "-shm"):
+                Path(str(stale) + suffix).unlink(missing_ok=True)
     for suffix in ("", "-wal", "-shm"):
         source = Path(str(db_path) + suffix)
         if source.exists():
@@ -520,25 +557,36 @@ def set_aside(db_path):
 
 
 def restore_backup(db_path, backup_path):
-    """Copy a readable backup into place; False when there is none."""
+    """Copy a readable backup into place; False when there is none.
+
+    The copy is verified, not the original: the checkpoint is a WAL-mode database, and a
+    read-only open of one fails on older SQLite builds when no `-shm` file exists, which used
+    to turn a good checkpoint into a rebuild from nothing. Checking the copy also proves the
+    exact file that is installed."""
     backup_path = Path(backup_path)
     if not backup_path.is_file() or backup_path.is_symlink():
         return False
+    temporary = Path(db_path).with_name("graph.restoring.db")
+    for suffix in ("", "-wal", "-shm"):
+        Path(str(temporary) + suffix).unlink(missing_ok=True)
+    shutil.copyfile(backup_path, temporary)
     try:
-        probe = sqlite3.connect(f"file:{backup_path}?mode=ro", uri=True)
+        probe = sqlite3.connect(str(temporary))
         try:
             ok = probe.execute("PRAGMA quick_check").fetchone()[0] == "ok"
             tables = {row[0] for row in probe.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            probe.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
         finally:
             probe.close()
     except sqlite3.DatabaseError:
-        return False
+        ok, tables = False, set()
     if not ok or not {"node", "edge", "meta", "history"} <= tables:
+        for suffix in ("", "-wal", "-shm"):
+            Path(str(temporary) + suffix).unlink(missing_ok=True)
         return False
-    temporary = Path(db_path).with_name("graph.restoring.db")
-    shutil.copyfile(backup_path, temporary)
     # A write-ahead log left by the old database would be replayed onto the restored one.
     for suffix in ("-wal", "-shm"):
         Path(str(db_path) + suffix).unlink(missing_ok=True)
+        Path(str(temporary) + suffix).unlink(missing_ok=True)
     os.replace(temporary, db_path)
     return True

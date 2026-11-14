@@ -97,11 +97,23 @@ Elapsed wall time within the pending wait, including downtime, counts once towar
 budget. Stopping checkpoints a partial wait for recovery. Pre-1.7 state has no wait-start
 checkpoint, so it preserves the retry time but can only newly account the remaining wait.
 Waits respond promptly to `--stop`; a running cycle settles first. A
-portable process-group timeout bounds wedged work. Dirty trees and recorded halts stop
-relaunches. At expiry one bounded finalization cycle runs even if the last wait crossed the
-deadline. Work in progress may overrun only within `IMPROVE_FINISH_GRACE` (120 seconds by default);
+portable process-group timeout bounds wedged work. Recorded halts stop relaunches; a first
+launch refuses a dirty tree (a relaunch of a live run quarantines it instead, see
+[Staying productive through failures](#staying-productive-through-failures)). At expiry one
+bounded finalization cycle runs even if the last wait crossed the deadline. Work in progress
+may overrun only within `IMPROVE_FINISH_GRACE` (120 seconds by default);
 the earlier cycle timeout still applies. The original deadline is never extended. A stop
-request applies the same cleanup bound, preventing a wedged one-hour cycle from delaying it. The daemon cannot execute while the machine is asleep or powered off.
+request applies the same cleanup bound, preventing a wedged one-hour cycle from delaying it.
+The daemon cannot execute while the machine is asleep or powered off; the cutoff is checked
+against the wall clock too, so a cycle that was running when a laptop went to sleep is stopped
+as soon as it wakes past the deadline plus the grace.
+
+A usage limit is recognized from the end of a cycle's output (the last 4 KiB, where the agent's
+closing message and the CLI's error land), so a test or tool that prints `429 Too Many Requests`
+earlier in the cycle does not start a limit wait. During finalization a limit is retried whatever
+the exit code, unless the report was already written. The report's retry time is saved as
+`final_retry_at`, which may lie past the deadline; a daemon killed during that wait finalizes
+when it is relaunched, with `--finalize`, or by `--supervise`.
 
 ### Resume, replace, or finalize
 
@@ -112,7 +124,8 @@ To resume an unfinished clean run, repeat its command; the recorded deadline win
 "$improve_daemon" --engine codex --repo "$improve_repo" --for 4h --new-run --intake /path/to/new-intake.json
 ```
 
-After resolving a halt, resume the same run without extending its deadline:
+A relaunch of a live run does not need `--for`. After resolving a halt, resume the same run
+without extending its deadline:
 
 ```sh
 "$improve_daemon" --repo "$improve_repo" --resume
@@ -122,7 +135,8 @@ Recovery requires a clean tree and resolution of any recorded `active_item`. Rep
 original `--skill` and `--args` for an improve-max run. A resume after the original deadline
 performs finalization only; it does not grant extra work time.
 
-To regenerate a pending final report without opening another improvement cycle:
+To regenerate a pending final report without opening another improvement cycle (this also
+finishes a live run past its deadline whose daemon died before the report was written):
 
 ```sh
 "$improve_daemon" --repo "$improve_repo" --finalize
@@ -137,7 +151,11 @@ a final report. A nonzero worker exit cannot claim completion or target success.
 report cannot clear `summary_pending` for a later halt or stop.
 
 `--new-run` archives the previous state under `.improve/history/`. It does not discard code or
-reset branches. Status and dry-run do not create state or launch a paid agent.
+reset branches. An agent the old run's daemon left running is stopped first, so two agents never
+share the tree. The cross-run memory (`learning.json`, the knowledge graph) and `corpus/` (the
+improve-max characterization inputs that committed replay tests read) stay in place. Status and
+dry-run do not create state or launch a paid agent; `--dry-run` reports a dirty tree and what a
+launch would do about it.
 
 ## Command reference and troubleshooting
 
@@ -154,7 +172,7 @@ reset branches. Status and dry-run do not create state or launch a paid agent.
 | `--new-run`                        | Archive old state; requires a new duration and completed intake                                                                         |
 | `--resume`                         | Continue a recovered halt/stop with the original deadline and saved settings                                                            |
 | `--finalize`                       | Retry an ended run's pending report, without new improvement work                                                                       |
-| `--status [--json]` / `--stop`     | Inspect state (including `crashed` and quarantine refs) or request a bounded stop; no CLI launch                                        |
+| `--status [--json]` / `--stop`     | Inspect state (including `crashed` and quarantine refs) or request a bounded stop; no CLI launch. With the daemon down, `--stop` records the stop for a live run and the next launch ends it |
 | `--supervise`                      | Watchdog: relaunch the daemon after a crash until the run ends; see below                                                               |
 | `--dry-run` / `--version`          | Preview the command without launching, or print the runner version                                                                      |
 
@@ -171,7 +189,7 @@ the final narrative report was generated. These differ from the clock's `0`/`10`
 | Host detection is missing or ambiguous  | Pass `--engine codex` or `--engine claude` for a new run; use `--engine auto` to keep a saved run's provider                    |
 | Selected CLI missing                    | Put that CLI on PATH and authenticate it; the daemon never switches providers automatically                                     |
 | Permission errors                       | Check the selected CLI's configuration and saved sandbox against the authorized scope; retries never broaden access             |
-| Dirty tree or unresolved `active_item`  | Inspect the recorded item and diff, verify/commit/revert only owned work, then `--resume`; do not reset unrelated edits         |
+| Dirty tree or unresolved `active_item`  | A first launch, `--new-run`, `--resume`, and `--finalize` refuse a dirty tree. Inspect the recorded item and diff, verify/commit/revert only owned work, then retry; do not reset unrelated edits |
 | `phase: account-limit` after a restart  | Check `retry_at`; the daemon deliberately waits for the saved retry time                                                        |
 | `phase: parked`                         | Every breaker was exhausted; read `last_error` and `journal.md`, fix the environment if you can, and let the run retry at `park_until` |
 | `--status` says `crashed`               | The daemon died mid-cycle; relaunch the same command (it resumes), or use `--supervise` so this happens automatically          |
@@ -221,6 +239,17 @@ A finalization failure records `summary_pending: true`, never invented verificat
 | `launcher.log`                          | Optional `nohup` output, kept out of the work tree                                                     |
 | `daemon.lock`                           | OS-held exclusive lock; file presence alone does not mean running                                      |
 | `board.json`, `board.lock`, `board.log` | Local board identity/URL/private stop token, exclusive lock, and startup log; retained across new runs |
+| `operator.json`, `board-receipts.json`, `pause.json`, `operator.lock` | Board requests, the skill's answers to them, the pause flag, and the lock that serializes them |
+| `stop.request`                          | A pending stop; a relaunch of a live run keeps it and ends the run                                     |
+| `ledger.lock`                           | Serializes every writer of `backlog.jsonl` (the ledger helper, the supervisor, ledger repair)          |
+| `<ledger>.bak`, `<ledger>.damaged`      | A repaired ledger's previous bytes, and the invalid lines repair moved out of it                       |
+| `learning.json`, `learning.lock`        | Per-repository lessons and success rates, and the lock their writers take; kept across new runs       |
+| `graph.db`, `graph.backup.db`, `graph.lock` | The knowledge graph and code layer (SQLite), its last refine/dream checkpoint, and the writer lock; kept across new runs |
+| `graph-writes.jsonl`                    | Curated graph writes since the last checkpoint, replayed after a recovery                              |
+| `graph-pending.jsonl`, `*.draining`     | Agent graph writes queued while another process held the graph, and a queue being applied              |
+| `graph-reads.jsonl`, `graph-reads.history.jsonl` | Knowledge that queries returned (keeps read advice alive) and the last two hours of it          |
+| `graph.recovering`, `graph.damaged*.db` | Present only while a recovery replay is pending; set-aside damaged stores (the newest three)           |
+| `corpus/`                               | Improve-max recorder scratch and development-data snapshots; kept across new runs                      |
 | `history/`                              | Explicitly archived previous run state                                                                 |
 
 The primary session owns atomic state updates. See [references/ledger.md](../references/ledger.md).
@@ -236,24 +265,44 @@ git diff "$improve_baseline..$improve_branch"
 
 ## Staying productive through failures
 
-The daemon works around problems instead of stopping. A run ends only at its deadline, on
-a user stop, or when a dirty tree cannot be saved:
+The daemon works around problems instead of stopping. In the default configuration a run
+ends in one of these ways only:
+
+- its **deadline** passes (`completed`, after the final report);
+- you **stop** it (`--stop`, the board, SIGTERM/SIGINT, or `--stop` while it is down);
+- improve-max with `--stop-at-target` reports **`target reached`**;
+- a cycle leaves **uncommitted changes that cannot be saved** to a quarantine ref;
+- the **finalization cycle modified repository work** (a commit or an edit during the
+  report-only pass), which ends it as `halted` with the report pending;
+- a breaker is exhausted **after the deadline**, when parking would only spin.
+
+Turning resilience off adds more: `IMPROVE_PARK=0` halts where the run would park,
+`IMPROVE_QUARANTINE=0` halts on a dirty tree, `IMPROVE_MAX_WORKER_HALTS=0` honors the first
+worker halt, and `IMPROVE_MAX_RECOVERIES=0` (strict mode) also halts on a state error. A crash
+is never an outcome: the run stays live and a relaunch resumes it.
 
 - **A task fails or a tool is unavailable:** the task is marked Blocked with the reason, and
   the next cycle is told to choose different work. Worker halts beyond
-  `IMPROVE_MAX_WORKER_HALTS` park the run (below) instead of ending it.
+  `IMPROVE_MAX_WORKER_HALTS` park the run (below) instead of ending it. A worker halt left in
+  `run.json` when the daemon died is handled the same way on relaunch.
 - **A cycle leaves uncommitted edits or new files:** they are saved to a private ref such as
   `refs/improve/quarantine/2026-11-06T22-43-05Z-cycle-4`, the tree is reset, and the task is
   blocked for review. Recover them with `git checkout <ref> -- .`; list them with
   `git for-each-ref refs/improve/quarantine` or `--status`. Changes you make yourself before
-  a run still halt it at launch.
+  a first launch (or `--new-run`, `--resume`, `--finalize`) still stop it at launch; a relaunch
+  of a live run quarantines what it finds (`-between` refs), because those edits belong to the
+  cycle that was running when the daemon died.
 - **A cycle leaves only build artifacts** (`build/`, `dist/`, `__pycache__/`, `*.o`,
   `DerivedData/`, coverage files, and the patterns in `run.json.artifact_paths`): they are
-  saved and cleaned the same way, but the task is not blamed and the cycle is not a failure.
-  The next prompt asks the agent to ignore them on the run branch.
+  removed with `git clean` of exactly those paths and listed in `journal.md` and
+  `supervisor.json` (`last_artifacts`, first 50 paths, and `last_artifacts_total`). They are
+  never committed, so `.git` does not grow by a build tree per cycle; the task is not blamed and
+  the cycle is not a failure. The next prompt asks the agent to ignore them on the run branch.
 - **The agent writes a malformed field:** an unrecognized `outcome`, a float
-  `last_report_hour`, or a string `cycle` is repaired in place and journaled. The agent is
-  corrected; the run continues.
+  `last_report_hour`, a string `cycle`, or `target reached` in a run not allowed to stop at its
+  target is repaired in place and journaled (a repeated repair at most once every ten minutes).
+  This happens before every cycle, not just after one, so a field damaged between cycles cannot
+  stop the loop. The agent is corrected; the run continues.
 - **A CLI crash, exit code, or usage limit:** never blocks the task in flight. A usage-limit
   message is recognized on any exit code and starts the bounded limit wait.
 - **Repeated empty or failed cycles:** after `IMPROVE_MAX_FAILURES` the supervisor blocks the
@@ -264,21 +313,26 @@ a user stop, or when a dirty tree cannot be saved:
   it waits `IMPROVE_PARK_WAIT` (doubling to `IMPROVE_PARK_WAIT_CAP`, never past the
   deadline), resets the exhausted counters, and tries again. `IMPROVE_PARK=0` restores the
   terminal halt. A parked run shows `phase: parked` and `park_until`.
-- **An internal supervisor error:** journaled with its traceback, counted, and the loop
-  continues; `IMPROVE_MAX_CRASHES` consecutive errors park the run.
+- **An internal supervisor error:** journaled with its traceback (a repeated one once), counted,
+  and the loop continues; `IMPROVE_MAX_CRASHES` consecutive errors park the run. A stop
+  request is checked before anything else, so a persistent error never makes a run unstoppable.
 - **The daemon process dies** (crash, kill, reboot): `supervisor.json` keeps `phase:
   working`, and `--status` reports `crashed`. Relaunch with the same command (or run under
   `--supervise`, a watchdog that relaunches automatically with backoff) to resume with the
   original deadline. On restart a still-running agent from the dead daemon (`child_pid`) is
-  stopped first and its edits are quarantined.
+  stopped first and its edits are quarantined, even though the tree is dirty.
 - **Damaged ledgers:** invalid lines move to `<ledger>.damaged`, bytes that are not UTF-8
-  are replaced, and an unreadable `run.json` is restored from its pre-cycle copy.
+  are replaced, and the previous bytes of a rewritten ledger are kept as `<ledger>.bak`. The
+  repair takes `ledger.lock` like every other ledger writer and writes durably. An unreadable
+  `run.json` is restored from the last intact copy (or moved aside to `run.damaged.json`).
 - **Empty queue:** each prompt names a fresh discovery lane, preferring board focus areas.
   After `IMPROVE_IDLE_AFTER` consecutive discovery-only cycles the gap between cycles
   doubles up to `IMPROVE_IDLE_GAP_CAP`, so a dry stretch does not launch a model every
   few seconds; a commit or a new backlog row resets it.
 - **Low disk space:** below `IMPROVE_MIN_FREE_MB` the daemon parks instead of launching an
-  agent onto a full disk (the first long run of this skill was lost to `ENOSPC`).
+  agent onto a full disk (the first long run of this skill was lost to `ENOSPC`). A disk that
+  fills during a cycle (`ENOSPC`, a full quota, or SQLite's "database or disk is full") parks
+  the run too; the bookkeeping writes on that path are best effort.
 - **Logs:** `daemon.log` rotates at `IMPROVE_LOG_MAX_BYTES` (three generations kept).
 
 Every cycle is recorded in `supervisor.json.cycle_history` (start, duration, exit code,
@@ -293,8 +347,12 @@ nohup "$improve_daemon" --engine codex --repo "$improve_repo" --for 72h \
 
 `--supervise` relaunches the daemon whenever it exits without a recorded outcome, with a
 backoff from `IMPROVE_RELAUNCH_WAIT` to `IMPROVE_RELAUNCH_WAIT_CAP` and at most
-`IMPROVE_MAX_RELAUNCHES` relaunches. It drops `--new-run` and `--intake` after the first
-launch so a relaunch resumes rather than restarts. For a reboot-proof setup, run that
+`IMPROVE_MAX_RELAUNCHES` relaunches (then it exits `1` and the run stays live for a manual
+relaunch). It drops `--new-run`, `--intake`, `--resume`, and `--finalize` after the first
+launch so a relaunch resumes rather than restarts; `--resume --supervise` therefore keeps its
+crash protection. A stop (SIGTERM/SIGINT to the watchdog, or `--stop`) during the backoff is
+noticed at once: the watchdog launches the daemon one last time to record `stopped by user`
+without starting a cycle. For a reboot-proof setup, run that
 command from a launchd agent (`KeepAlive` with `SuccessfulExit false`) or a systemd user
 service (`Restart=on-failure`); the saved deadline is honored on every relaunch.
 
@@ -316,7 +374,9 @@ python3 scripts/improve_learning.py --repo "$improve_repo" lesson --area coverag
 `.improve/graph.db` (SQLite, standard library) links runs, tasks, files, areas, gates,
 blockers, and recorded knowledge. The daemon syncs it after every cycle, refines it every 30
 minutes, dreams every three hours, and dreams again when the run ends. Sync follows ledger
-edits. Refinement merges duplicates, rescores, flags deleted files, and bounds the size.
+edits and refreshes the code layer (incremental; a few milliseconds when nothing changed).
+Refinement follows `git mv` renames, merges duplicates, rescores, flags deleted files, and
+bounds the size.
 Dreaming infers links the evidence supports (each with a confidence, rule, and evidence),
 archives knowledge that was never validated, forgets what stayed archived, and proposes
 consolidations; it measures time in dreams, so cleanup works within one long run. Every
@@ -337,8 +397,16 @@ python3 scripts/improve_graph.py --repo "$improve_repo" restore insight:1c4aec93
 ```
 
 Other commands: `search`, `node`, `path`, `hotspots`, `link`, `unlink`, `rate`, `refine`,
-`dream`, `proposals`, `consolidate`, `stats`. Exit `2` is invalid input; exit `3` means
-another process holds the graph and the command can be retried.
+`dream`, `proposals`, `consolidate`, `stats`, and the code and analysis commands `impact`
+(also `impact --changed [REV]` for the working tree's diff), `tests-for` (the tests that reach
+a file, symbol, or the diff, with a command that runs just them), `cycles`,
+`code index|symbols|find|search|stats`, `communities`, `questions`, `report`, `export`, `diff`.
+The code layer reads Python with `ast` (scope-aware; calls are never guessed), JavaScript and
+TypeScript imports and calls (tsconfig paths, workspaces, barrels), and Go, Java, Kotlin, Ruby,
+and C/C++ imports; anything else is reported as not indexed. See the
+[knowledge-graph reference](../references/knowledge-graph.md#code-layer). Exit `2` is invalid input; exit `3` means another process holds the graph and a
+whole-graph write can be retried (agent notes, links, ratings, and rejections are queued
+instead and exit `0`); exit `4` is an ambiguous name and `5` a name that matches nothing.
 
 ## Token-efficient helper output
 
@@ -346,11 +414,19 @@ Everything a helper prints for the agent is TOON (Token-Oriented Object Notation
 specification 4.4, MIT), implemented in `scripts/improve_toon.py` with the standard library
 and verified against the official conformance fixtures. A list of records becomes one
 header line that declares the count and the columns, then one delimited row per record,
-so the same data costs 35-70% fewer tokens than JSON. The agent reads the backlog through
+so the same data costs fewer tokens than JSON. Measured on a synced and dreamed graph
+(40 tasks, 8 notes, `--full`), graph answers are 19-49% smaller than *compact* JSON
+(`search` 0.72 of its size, `node` 0.81, `context --toon` 0.68, `hotspots` 0.51), and 45-70%
+smaller than the indented JSON they replaced; the ledger's ranked `queue` view is about 72%
+smaller than reading the raw backlog, mostly because it is a narrower view. Every array of
+records is printed in its shortest form (tabular, tabular with `parent.child` columns, or a
+list), so TOON output is never longer than leaving the rows alone. The agent reads the backlog through
 `scripts/improve_ledger.py` (`queue`, `tasks`, `show`, `counts`, `discovery`, `run`) and
-writes it with `set` and `add`; the files on disk stay JSON and JSONL for the board, the
-supervisor, and your own tools. `--format json` on any helper, or `IMPROVE_FORMAT=json`,
-restores JSON output. `python3 scripts/improve_toon.py encode|decode` converts on stdin. See
+writes it with `set`, `add`, `run-set`, and `discovery-add`; the files on disk stay JSON and
+JSONL for the board, the supervisor, and your own tools. Long text cells end in `…[+N]` (N
+characters cut; `--full` shows them), and ids, paths, and SHAs are never cut. `--format json`
+on the graph, ledger, control, or learning helper (before or after the command), or
+`IMPROVE_FORMAT=json`, restores JSON output; the clock and the board helper take `--json`. `python3 scripts/improve_toon.py encode|decode` converts on stdin. See
 [the knowledge-graph reference](../references/knowledge-graph.md). The board's
 **Knowledge** tab shows and curates the same graph.
 
@@ -365,9 +441,9 @@ restores JSON output. `python3 scripts/improve_toon.py encode|decode` converts o
 | `IMPROVE_CYCLE_GAP`         | `2`                      | Seconds between daemon cycles; capped at deadline                                    |
 | `IMPROVE_TOO_FAST`          | `25`                     | Diagnostic threshold; speed alone never fails a checkpointed cycle                   |
 | `IMPROVE_MAX_FAILURES`      | `3`                      | Consecutive failed or uncheckpointed cycles before a recovery                        |
-| `IMPROVE_MAX_RECOVERIES`    | `6`                      | Recoveries in a row (no successful cycle between) before halt; `0` restores strict halting |
+| `IMPROVE_MAX_RECOVERIES`    | `6`                      | Recoveries in a row (no successful cycle between) before the run parks (halts with `IMPROVE_PARK=0`); `0` restores strict halting |
 | `IMPROVE_RECOVERY_COOLDOWN` | `60`                     | First pause after a recovery; doubles each time, capped by `IMPROVE_RECOVERY_COOLDOWN_CAP` (`900`) |
-| `IMPROVE_MAX_WORKER_HALTS`  | `2`                      | Worker halts converted to blocked tasks before one is honored                        |
+| `IMPROVE_MAX_WORKER_HALTS`  | `2`                      | Worker halts converted to blocked tasks before the run parks (halts in strict mode or with `IMPROVE_PARK=0`); `0` honors the first halt |
 | `IMPROVE_QUARANTINE`        | `1`                      | Save a cycle's uncommitted edits to `refs/improve/quarantine/*` and continue; `0` halts instead |
 | `IMPROVE_PARK`              | `1`                      | Park (wait and retry) when breakers are exhausted; `0` halts instead                  |
 | `IMPROVE_PARK_WAIT`         | `900`                    | First parked wait; doubles each time, capped by `IMPROVE_PARK_WAIT_CAP` (`3600`)      |
@@ -376,8 +452,9 @@ restores JSON output. `python3 scripts/improve_toon.py encode|decode` converts o
 | `IMPROVE_LOG_MAX_BYTES`     | `52428800`               | Rotate `daemon.log` past this size (three generations)                                |
 | `IMPROVE_MIN_FREE_MB`       | `200`                    | Park instead of launching a cycle when the repository's disk has less free space; `0` disables |
 | `IMPROVE_RELAUNCH_WAIT`     | `5`                      | `--supervise` relaunch backoff start; cap `IMPROVE_RELAUNCH_WAIT_CAP` (`300`), limit `IMPROVE_MAX_RELAUNCHES` (`50`) |
-| `IMPROVE_GRAPH_LOCK_WAIT`   | `30`                     | Seconds a graph writer waits for `graph.lock` before exiting `3` (retry later)        |
-| `IMPROVE_LEARNING_HOME`     | `~/.config/improve`      | Location of cross-project lessons (`learning.json`)                                  |
+| `IMPROVE_GRAPH_LOCK_WAIT`   | `30`                     | Seconds a graph writer waits for `graph.lock`; then agent notes, links, ratings, and rejections are queued and other writes exit `3` (retry later) |
+| `IMPROVE_CODE_INDEX_SECONDS` | `20`                    | Time budget for refreshing the code layer (symbols, imports, calls) at each refinement; `0` disables it |
+| `IMPROVE_LEARNING_HOME`     | `~/.config/improve`      | Location of cross-project lessons (`learning.json`, written under `learning.lock`)   |
 | `IMPROVE_GRAPH_REFINE_MINUTES` | `30`                  | Refine the knowledge graph during a run at most this often; `0` refines only at run end |
 | `IMPROVE_GRAPH_DREAM_MINUTES` | `180`                  | Dream on the knowledge graph during a run at most this often; `0` dreams only at run end |
 | `IMPROVE_LIMIT_WAIT`        | `900`                    | First account-limit wait                                                             |
@@ -385,4 +462,4 @@ restores JSON output. `python3 scripts/improve_toon.py encode|decode` converts o
 | `IMPROVE_LIMIT_WAIT_BUDGET` | `14400` or a third of the run | Total account-limit wait budget, including downtime inside a pending wait; exhaustion parks the run |
 | `IMPROVE_MODEL`             | unset                    | Initial optional model; `--model` overrides; recovery keeps the saved selection      |
 | `IMPROVE_BOARD_PORT`        | `8765`                   | The board's preferred port when none is given; an occupied port falls back to a free one |
-| `IMPROVE_FORMAT`            | `toon`                   | Output format of the graph, control, learning, and ledger helpers the agent reads: `toon` (Token-Oriented Object Notation, fewer tokens) or `json` |
+| `IMPROVE_FORMAT`            | `toon`                   | Output format of the graph, control, learning, and ledger helpers the agent reads: `toon` (Token-Oriented Object Notation, fewer tokens) or `json`; case-insensitive, an unknown value warns and means `toon` |

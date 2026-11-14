@@ -28,9 +28,9 @@ across runs), refines, and then, deterministically:
 
 import time
 
-from improve_graph import (DREAM_RELATIONS, FINISHED, MERGE_SIMILARITY, PROTECTED_SOURCES, GraphError, add_insight,
-                           clean, due, edge_key, fetch_types, hotspots, merge_into, refine, remove_nodes, resolve,
-                           short_hash, stamp, tokens)
+from improve_graph import (DREAM_RELATIONS, MERGE_SIMILARITY, NEGATION, PROTECTED_SOURCES, GraphError,
+                           add_insight, clean, due, edge_key, fetch_types, hotspots, merge_into, opposed, refine,
+                           remove_nodes, resolve, short_hash, stamp, tokens)
 
 DORMANT_TICKS = 8
 FORGET_TICKS = 8
@@ -50,13 +50,21 @@ GEN2_DISCOUNT = 0.8
 GEN2_MIN = 0.45
 AREA_MIN_FILES = 3
 AREA_SHARE = 0.6
-MAX_EVIDENCE = 200
+MAX_EVIDENCE = 1500  # The task bound: every live outcome is kept, so pruning never loses one.
+MAX_RETAINED_TASKS = 500
 MAX_CITERS = 8
 MAX_DREAM_LOG = 30
 MAX_DROPPED = 200
 MAX_PROPOSALS = 8
 CLUSTER_MAX = 6
-UNDIRECTED = ("co_cited", "similar_to")
+UNDIRECTED = ("co_cited", "similar_to", "contradicts")
+CONTRADICT_MIN = 0.5
+VERDICT_HALF_LIFE_RUNS = 8
+MAX_REJECTED = 2000
+MAX_DIFF_EXAMPLES = 10
+# Bumped when inference rules change, so the first dream after an upgrade re-derives links
+# from evidence instead of keeping them by hysteresis.
+RULES_VERSION = 2
 
 
 def outcome(status):
@@ -81,15 +89,29 @@ class Evidence:
 
 
 def tally(live, previous, pruned):
-    """Counts for a link: live evidence plus what earlier dreams saw on tasks since pruned."""
-    retained = dict((previous or {}).get("evidence", {}).get("retained") or {"done": 0, "failed": 0})
-    for task_id, result in ((previous or {}).get("evidence", {}).get("tasks") or {}).items():
-        if task_id not in live and task_id in pruned:
-            retained[result] = retained.get(result, 0) + 1
-    done = sum(result == "done" for result in live.values()) + retained.get("done", 0)
-    failed = sum(result == "failed" for result in live.values()) + retained.get("failed", 0)
+    """Counts for a link: live evidence plus what earlier dreams saw on tasks since pruned.
+
+    `retained_tasks` remembers which pruned tasks the retained counts came from, so a task
+    that is restored (live again) is taken back out of them instead of being counted twice."""
+    before = (previous or {}).get("evidence", {}) or {}
+    retained = {"done": 0, "failed": 0, **(before.get("retained") or {})}
+    retained_tasks = dict(before.get("retained_tasks") or {})
+    for task_id in [task_id for task_id in retained_tasks if task_id in live]:
+        result = retained_tasks.pop(task_id)
+        retained[result] = max(0, int(retained.get(result, 0)) - 1)
+    for task_id, result in (before.get("tasks") or {}).items():
+        if task_id not in live and task_id in pruned and task_id not in retained_tasks:
+            retained[result] = int(retained.get(result, 0)) + 1
+            retained_tasks[task_id] = result
+    if len(retained_tasks) > MAX_RETAINED_TASKS:
+        retained_tasks = dict(list(retained_tasks.items())[-MAX_RETAINED_TASKS:])
+    done = sum(result == "done" for result in live.values()) + int(retained.get("done", 0))
+    failed = sum(result == "failed" for result in live.values()) + int(retained.get("failed", 0))
     tasks = dict(sorted(live.items())[:MAX_EVIDENCE])
-    return done, failed, {"tasks": tasks, "retained": retained}
+    evidence = {"tasks": tasks, "retained": retained}
+    if retained_tasks:
+        evidence["retained_tasks"] = retained_tasks
+    return done, failed, evidence
 
 
 def task_rule(rel, rule, candidates, previous, pruned, rejected, asserted, association=None,
@@ -279,6 +301,32 @@ def infer(graph, report):
                                                          "shared_subject": common_subject},
                              support={"jaccard": round(jaccard, 3)})
 
+    # Opposite advice: the same wording with the polarity reversed ("always X" / "never X").
+    # Neither note is wrong by itself; the pair is a question for the agent or the user.
+    plain = {node_id: frozenset(word for word in words[node_id] if not NEGATION.fullmatch(word)) for node_id in insights}
+    for (left, right), count in shared_counts.items():
+        key = edge_key(left, "contradicts", right)
+        a, b = plain[left], plain[right]
+        overlap = len(a & b) / len(a | b) if a and b else 0
+        if overlap < CONTRADICT_MIN or key in rejected:
+            continue
+        left_text = nodes[left].get("summary") or nodes[left].get("label", "")
+        right_text = nodes[right].get("summary") or nodes[right].get("label", "")
+        if not opposed(left_text, right_text):
+            continue
+        accepted[key] = dict(src=left, rel="contradicts", dst=right, rule="opposite-wording", generation=1,
+                             confidence=round(min(0.95, overlap), 3),
+                             evidence={"words": sorted(a & b)[:8]}, support={"overlap": round(overlap, 3)})
+
+    if graph["dream"].get("rules_version") != RULES_VERSION:
+        # New rules: judge every link as new (no hysteresis from links the old rules made).
+        report["rules_changed"] = True
+        for key in list(accepted):
+            spec = accepted[key]
+            support = spec.get("support") or {}
+            done, failed = support.get("done"), support.get("failed")
+            if isinstance(done, int) and isinstance(failed, int) and done < CREATE_RATIO * failed:
+                del accepted[key]
     apply_inferred(graph, accepted, previous, contradicted, report)
 
 
@@ -354,8 +402,13 @@ def forget(graph, report):
         elif kind == "gate" and not protected and not int(node.get("uses", 0)) and idle >= GATE_TICKS:
             doomed.append(node_id)
             reasons[node_id] = f"no task used this gate for {idle} dreams"
+    # One pass over the edges per reason, not per node: forgetting a thousand nodes on a large
+    # graph stays linear.
+    by_reason = {}
     for node_id in doomed:
-        remove_nodes(graph, [node_id], reason=reasons[node_id], op="forgotten")
+        by_reason.setdefault(reasons[node_id], []).append(node_id)
+    for reason, group in sorted(by_reason.items()):
+        remove_nodes(graph, group, reason=reason, op="forgotten")
     report.update(archived=dormant, forgotten=len(doomed),
                   forgotten_by_type={kind: sum(1 for node_id in doomed if node_id.startswith(kind + ":"))
                                      for kind in ("insight", "file", "gate")})
@@ -364,11 +417,16 @@ def forget(graph, report):
 def assess(graph, report):
     nodes, edges = graph["nodes"], graph["edges"]
     proven = contested = 0
+    current = len(graph["runs"])
+    citations = {}
+    for edge in edges.values():
+        if edge["rel"] == "used_in" and nodes.get(edge["dst"], {}).get("type") == "task":
+            citations.setdefault(edge["src"], []).append(nodes[edge["dst"]])
     for node in nodes.values():
         if node["type"] != "insight":
             continue
         done, failed = int(node.get("cited_done", 0)), int(node.get("cited_failed", 0))
-        ratio = done / (done + failed) if done + failed else 0
+        ratio = recency_ratio(citations.get(node["id"], []), node.get("cite_base") or {}, current)
         verdict = ("proven" if done >= 3 and ratio >= 0.8 else
                    "contested" if done + failed >= 4 and 0.35 <= ratio <= 0.65 else None)
         if verdict:
@@ -385,6 +443,30 @@ def assess(graph, report):
     report.update(proven=proven, contested=contested, gaps=len(graph["dream"]["gaps"]))
 
 
+def recency_ratio(tasks, folded, current):
+    """Share of the evidence that supports the knowledge, each outcome weighted by
+    0.5 ** (runs since / VERDICT_HALF_LIFE_RUNS) (Graphify's reflect decay), so three old
+    successes do not outweigh two recent failures. Outcomes folded from pruned tasks count at
+    the weight of the oldest evidence still live (or two half-lives when none is)."""
+    support = against = 0.0
+    weights = []
+    for task in tasks:
+        outcome_value = outcome(task.get("status"))
+        if not outcome_value:
+            continue
+        age = max(0, current - int(task.get("last_seq", current) or 0))
+        weight = 0.5 ** (age / VERDICT_HALF_LIFE_RUNS)
+        weights.append(weight)
+        if outcome_value == "done":
+            support += weight
+        else:
+            against += weight
+    floor = min(weights) if weights else 0.25
+    support += floor * int(folded.get("done", 0) or 0)
+    against += floor * int(folded.get("failed", 0) or 0)
+    return support / (support + against) if support + against else 0.0
+
+
 def propose(graph, report):
     """Groups of overlapping agent knowledge an agent could rewrite as one stronger note."""
     nodes, tick = graph["nodes"], int(graph["tick"])
@@ -393,27 +475,32 @@ def propose(graph, report):
     adjacent = {}
     strength = {}
     for edge in graph["edges"].values():
-        if edge["rel"] in UNDIRECTED and edge.get("inferred") and float(edge.get("confidence", 0)) >= 0.6 \
-                and edge["src"] in eligible and edge["dst"] in eligible:
+        if edge["rel"] in UNDIRECTED and edge["rel"] != "contradicts" and edge.get("inferred") \
+                and float(edge.get("confidence", 0)) >= 0.6 and edge["src"] in eligible and edge["dst"] in eligible:
             adjacent.setdefault(edge["src"], set()).add(edge["dst"])
             adjacent.setdefault(edge["dst"], set()).add(edge["src"])
             for end in (edge["src"], edge["dst"]):
                 strength[end] = strength.get(end, 0) + float(edge["confidence"])
+    # Cliques, not connected components: in a chain A~B~C~D the ends need not be related, so
+    # every member of a proposal must be linked to every other (grown from the strongest edge).
+    pairs = sorted(((float(edge["confidence"]), edge["src"], edge["dst"]) for edge in graph["edges"].values()
+                    if edge["rel"] in UNDIRECTED and edge["rel"] != "contradicts" and edge.get("inferred")
+                    and float(edge.get("confidence", 0)) >= 0.6 and edge["src"] in eligible and edge["dst"] in eligible),
+                   key=lambda item: (-item[0], item[1], item[2]))
     seen, clusters = set(), []
-    for start in sorted(adjacent):
-        if start in seen:
+    for _, left, right in pairs:
+        if left in seen or right in seen:
             continue
-        component, frontier = set(), [start]
-        while frontier:
-            current = frontier.pop()
-            if current in component:
-                continue
-            component.add(current)
-            frontier.extend(adjacent.get(current, ()))
-        seen |= component
-        members = sorted(component, key=lambda node_id: (-strength.get(node_id, 0), node_id))[:CLUSTER_MAX]
-        if len(members) >= 2:
-            clusters.append(sorted(members))
+        members = {left, right}
+        candidates = sorted((adjacent.get(left, set()) & adjacent.get(right, set())) - seen,
+                            key=lambda node_id: (-strength.get(node_id, 0), node_id))
+        for candidate in candidates:
+            if len(members) >= CLUSTER_MAX:
+                break
+            if members <= adjacent.get(candidate, set()):
+                members.add(candidate)
+        seen |= members
+        clusters.append(sorted(members))
     previous = {row["id"]: row for row in graph["dream"]["proposals"]}
     proposals = []
     for members in clusters:
@@ -437,6 +524,24 @@ def repair(graph, report):
         elif graph["aliases"][alias] != target:
             graph["aliases"][alias] = target  # Collapse chains so lookups stay one step.
             repaired += 1
+    # A rejection names its ends by id; after a merge or rename it must follow them, or the
+    # link it rejected would be inferred again under the new id.
+    rejected = graph["dream"]["rejected"]
+    for key in list(rejected):
+        src, rel, dst = key.split("|", 2) if key.count("|") >= 2 else (None, None, None)
+        if src is None:
+            del rejected[key]
+            repaired += 1
+            continue
+        src, rel, dst = normalize_link(resolve(graph, src), rel, resolve(graph, dst))
+        fresh = edge_key(src, rel, dst)
+        if fresh != key:
+            rejected.setdefault(fresh, rejected[key])
+            del rejected[key]
+            repaired += 1
+    if len(rejected) > MAX_REJECTED:
+        for key, _ in sorted(rejected.items(), key=lambda item: (str(item[1].get("at", "")), item[0]))[:len(rejected) - MAX_REJECTED]:
+            del rejected[key]
     store = getattr(graph, "store", None)
     if store is not None and not getattr(graph, "partial", False):
         repaired += store.integrity()
@@ -446,6 +551,8 @@ def repair(graph, report):
 def dream(graph, repo=None):
     """One dream. Deterministic given the saved facts; safe to run at any time."""
     started = time.perf_counter()
+    before_nodes = set(graph["nodes"])
+    before_links = {key for key, edge in graph["edges"].items() if edge.get("inferred")}
     graph["tick"] = int(graph.get("tick", 0)) + 1
     report = {"at": stamp(), "tick": graph["tick"]}
     report["refine"] = {key: value for key, value in refine(graph, repo).items() if key not in ("at",)}
@@ -454,6 +561,14 @@ def dream(graph, repo=None):
     forget(graph, report)
     assess(graph, report)
     propose(graph, report)
+    graph["dream"]["rules_version"] = RULES_VERSION
+    try:
+        from improve_analysis import refresh_communities
+        report["communities"] = refresh_communities(graph)
+    except Exception as exc:  # noqa: BLE001 - grouping is a view; a failure must not lose the dream.
+        report["communities_error"] = f"{type(exc).__name__}: {exc}"
+    after_links = {key for key, edge in graph["edges"].items() if edge.get("inferred")}
+    report["diff"] = diff_summary(before_nodes, set(graph["nodes"]), before_links, after_links)
     report["nodes"], report["edges"] = len(graph["nodes"]), len(graph["edges"])
     report["inferred_total"] = sum(1 for edge in graph["edges"].values() if edge.get("inferred"))
     report["seconds"] = round(time.perf_counter() - started, 3)
@@ -462,6 +577,20 @@ def dream(graph, repo=None):
     del history[:-MAX_DREAM_LOG]
     graph["dream"].update(last_at=report["at"], last_tick=graph["tick"])
     return report
+
+
+def diff_summary(nodes_before, nodes_after, links_before, links_after):
+    """What one dream changed (Graphify's graph_diff): counts and a few examples of each."""
+    def sample(values):
+        return sorted(values)[:MAX_DIFF_EXAMPLES]
+    added, removed = nodes_after - nodes_before, nodes_before - nodes_after
+    new_links, lost_links = links_after - links_before, links_before - links_after
+    summary = (f"{len(added)} node(s) added, {len(removed)} removed; {len(new_links)} inferred link(s) added, "
+               f"{len(lost_links)} removed")
+    return {"summary": summary, "nodes_added": len(added), "nodes_removed": len(removed),
+            "links_added": len(new_links), "links_removed": len(lost_links),
+            "examples": {"nodes_added": sample(added), "nodes_removed": sample(removed),
+                         "links_added": sample(new_links), "links_removed": sample(lost_links)}}
 
 
 # ---------------------------------------------------------------- agent and user actions

@@ -14,74 +14,131 @@ function draftKey(descriptor = requestDraft, context = draftContext) {
   ]);
 }
 
+// Every request type the form can carry. A type missing here used to make the whole store
+// unreadable, after which no draft could be saved again (retry ids lost with them).
+const DRAFT_TYPES = [
+  "task",
+  "guidance",
+  "priority",
+  "decision",
+  "note",
+  "retry",
+  "withdraw",
+];
+const DRAFT_LIMIT = 50,
+  DRAFT_STORE_VERSION = 1,
+  DRAFT_STORE_BYTES = 2 * 1024 * 1024;
+
+function validRetry(row) {
+  const retry = row.retry;
+  if (retry == null) return true;
+  if (typeof retry !== "object" || typeof retry.id !== "string") return false;
+  const keys = row.descriptor.task_keys;
+  if (keys === undefined) return true;
+  return (
+    Array.isArray(retry.ids) &&
+    retry.ids.length === keys.length &&
+    retry.ids.every((id) => typeof id === "string")
+  );
+}
+
+// One saved row; an invalid row is dropped on its own instead of failing every draft.
+function validDraft(key, row) {
+  const descriptor = row?.descriptor;
+  if (!descriptor || typeof descriptor !== "object") return false;
+  if (!DRAFT_TYPES.includes(descriptor.type)) return false;
+  if (descriptor.run_id != null && typeof descriptor.run_id !== "string") return false;
+  if (descriptor.task_keys !== undefined) {
+    const keys = descriptor.task_keys;
+    if (
+      descriptor.type !== "priority" ||
+      !Array.isArray(keys) ||
+      keys.length < 1 ||
+      keys.length > DRAFT_LIMIT ||
+      !keys.every((item) => typeof item === "string" && item.length <= 500) ||
+      new Set(keys).size !== keys.length
+    )
+      return false;
+  }
+  if (descriptor.type === "retry" && typeof descriptor.task_key !== "string") return false;
+  if (descriptor.type === "withdraw" && typeof descriptor.target_id !== "string") return false;
+  if (!row.context || typeof row.context !== "object") return false;
+  const fields = row.fields;
+  if (
+    !fields ||
+    !["title", "text", "area", "priority"].every((field) => typeof fields[field] === "string") ||
+    fields.title.length > 200 ||
+    fields.text.length > 8000
+  )
+    return false;
+  return validRetry(row) && key === draftKey(descriptor, row.context);
+}
+
 function savedDrafts() {
   if (!draftWorkspace) return {};
   draftReadError = false;
+  let raw = null;
   try {
-    const raw = localStorage.getItem(draftWorkspace);
-    if (!raw) return {};
-    if (raw.length > 2 * 1024 * 1024) throw new Error("Draft storage is full");
-    const value = JSON.parse(raw);
-    if (
-      !value ||
-      value.version !== 1 ||
-      !value.items ||
-      typeof value.items !== "object" ||
-      Array.isArray(value.items)
-    )
-      throw new Error("Saved drafts could not be read");
-    for (const [key, row] of Object.entries(value.items)) {
-      if (
-        !row?.descriptor ||
-        !["task", "guidance", "priority", "decision", "note"].includes(
-          row.descriptor.type,
-        ) ||
-        (row.descriptor.task_keys !== undefined &&
-          (row.descriptor.type !== "priority" ||
-            !Array.isArray(row.descriptor.task_keys) ||
-            row.descriptor.task_keys.length < 1 ||
-            row.descriptor.task_keys.length > 50 ||
-            !row.descriptor.task_keys.every(
-              (key) => typeof key === "string" && key.length <= 500,
-            ) ||
-            new Set(row.descriptor.task_keys).size !==
-              row.descriptor.task_keys.length ||
-            (row.retry &&
-              (!Array.isArray(row.retry.ids) ||
-                row.retry.ids.length !== row.descriptor.task_keys.length ||
-                !row.retry.ids.every((id) => typeof id === "string"))))) ||
-        !row.context ||
-        typeof row.context !== "object" ||
-        !row.fields ||
-        !["title", "text", "area", "priority"].every(
-          (field) => typeof row.fields[field] === "string",
-        ) ||
-        row.fields.title.length > 200 ||
-        row.fields.text.length > 8000 ||
-        key !== draftKey(row.descriptor, row.context)
-      )
-        throw new Error("Saved drafts could not be read");
-    }
-    return value.items;
+    raw = localStorage.getItem(draftWorkspace);
   } catch (error) {
     draftReadError = true;
     draftStorageError = error.message;
     return {};
   }
+  if (!raw) return {};
+  let value = null;
+  try {
+    // Fifty drafts at their size limits stay far below this; a larger value is not ours.
+    if (raw.length <= DRAFT_STORE_BYTES) value = JSON.parse(raw);
+  } catch (error) {
+    // Unreadable as a whole: nothing in it can be recovered, so it is replaced below.
+    void error;
+  }
+  if (value && Number.isInteger(value.version) && value.version > DRAFT_STORE_VERSION) {
+    // Written by a newer board; never overwrite it with this older format.
+    draftReadError = true;
+    draftStorageError = "Drafts were saved by a newer board version";
+    return {};
+  }
+  const items = {};
+  let dropped = 0;
+  if (value && value.items && typeof value.items === "object" && !Array.isArray(value.items))
+    for (const [key, row] of Object.entries(value.items)) {
+      if (validDraft(key, row)) items[key] = row;
+      else dropped += 1;
+    }
+  else dropped += 1;
+  // Rewrite without the bad rows, so one bad row never blocks saving the others.
+  if (dropped) storeDrafts(items);
+  return items;
 }
 
 function storeDrafts(items) {
   if (!draftWorkspace || draftReadError) return;
   try {
-    if (Object.keys(items).length > 50)
+    if (Object.keys(items).length > DRAFT_LIMIT)
       throw new Error(
         "Fifty drafts are already saved. Submit or discard an older draft first",
       );
-    localStorage.setItem(draftWorkspace, JSON.stringify({ version: 1, items }));
+    localStorage.setItem(
+      draftWorkspace,
+      JSON.stringify({ version: DRAFT_STORE_VERSION, items }),
+    );
     draftStorageError = "";
   } catch (error) {
     draftStorageError = error.message;
   }
+}
+
+// Nothing typed: closing or cancelling the form leaves no draft behind, for every type.
+// A priority request's content is its chosen level, so it is empty only while unchanged.
+function draftIsEmpty(descriptor, context, fields) {
+  if (fields.title.trim() || fields.text.trim()) return false;
+  if (descriptor.type !== "priority") return true;
+  return (
+    typeof context?.initial_priority === "string" &&
+    fields.priority === context.initial_priority
+  );
 }
 
 function prepareDrafts() {
@@ -121,11 +178,7 @@ function saveDraft() {
     priority: $("request-priority").value,
   };
   const items = savedDrafts();
-  if (
-    !fields.title &&
-    !fields.text &&
-    ["task", "guidance", "note"].includes(requestDraft.type)
-  ) {
+  if (draftIsEmpty(requestDraft, draftContext, fields)) {
     delete items[draftKey()];
     storeDrafts(items);
     prepareDrafts();

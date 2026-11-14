@@ -52,11 +52,22 @@ The board includes:
   pass. **Dream now** infers links, archives and forgets unused knowledge, and proposes
   consolidations; the dream log lists each dream. Inferred links are dashed and show their
   confidence; hover for the evidence, and **Not related** removes one so it is never inferred
-  again. **Recently forgotten** lists removed nodes with the reason; **Restore** brings one
-  back with its links. Task details include **What the knowledge graph knows here**: earlier
-  attempts on the same files, knowledge to apply, blockers, and files usually changed
-  together. The graph is kept across runs in `.improve/graph.db`. Knowledge export
-  downloads the nodes and links currently shown.
+  again. Each link in a node's details names its tier: **recorded** (written by an agent or
+  by you), **observed** (from ledgers, git history, or code), or **inferred** (by dreaming).
+  Knowledge whose files changed since it was recorded is marked **Code changed since
+  recorded** with the files to re-verify; contradicting knowledge is linked in red.
+  **Recently forgotten** lists removed nodes with the reason; **Restore** brings one back
+  with its links. **Knowledge gaps** lists files whose tasks keep failing with nothing
+  recorded about why, and **Questions worth asking** lists what the graph suggests a person
+  check: contested or contradicted knowledge, knowledge whose code changed, gaps, files that
+  bridge separate groups, and loosely connected groups. Task details include **What the
+  knowledge graph knows here**: earlier attempts on the same files (the open task itself is
+  left out), knowledge to apply with **Code changed**, **Contradicted**, **Contested**, or
+  **Proven** badges, blockers (a blocker that later verified work got past is marked
+  **Resolved**), the gates that verified work there with their cost, files usually changed
+  together, the code that depends on these files (tests marked), their imports and code
+  notes, and the module group they belong to. The graph is kept across runs in
+  `.improve/graph.db`. Knowledge export downloads the nodes and links currently shown.
 - **Run overview:** compare task totals by area, see high-priority queued work, pending
   requests, and how many completed tasks have recorded verification. Browse twenty saved
   activity events at a time, filter task/request events, and open the associated details.
@@ -79,7 +90,10 @@ The board includes:
   hourly `journal.md` (also for archived runs), the last 400 lines of the current run's
   `daemon.log` (refreshing every five seconds while open), and the list of quarantined
   snapshots the supervisor saved as `refs/improve/quarantine/*`, each with the
-  `git checkout <ref> -- .` command that restores it. All render as plain text.
+  `git checkout <ref> -- .` command that restores it. Only refs named the way the supervisor
+  names them (`<UTC time>-cycle-N...`) are listed, and the ref in the command is shell-quoted,
+  so a hostile ref name can never become a command you paste; the view counts any other refs
+  under that namespace. All render as plain text.
 - **Notifications:** **Notify me** asks the browser for notification permission and then
   alerts you once per event when the run halts, stops, or completes, parks or waits for an
   account limit, reaches its deadline, fails three cycles in a row, blocks a task, or
@@ -202,7 +216,10 @@ Nothing is sent to the skill until you confirm it.
 ## Drafts and links
 
 Drafts are stored in this browser for the board's local origin and repository, with a
-maximum of fifty request contexts. A different browser profile or port has separate
+maximum of fifty request contexts. Every request type has drafts, including Retry and
+Withdraw. Closing or cancelling a form with nothing typed (for a priority change: with the
+level unchanged) leaves no draft. A saved draft the board cannot read is dropped on its own;
+the others stay readable and new drafts are still saved. A different browser profile or port has separate
 storage. If browser storage is blocked, the form explains that it cannot survive a reload;
 you can still submit it. Lost-response retry IDs survive with the draft, preventing duplicate
 requests after reloading. A service restart refreshes the control capability once; other
@@ -231,7 +248,11 @@ report-only retry is running. It uses the supervisor's confirmed outcome, so a w
 premature completion cannot make an active supervised run look finished. Checkpoint times
 show the latest saved observations, not a guarantee that an agent is still making progress;
 the heartbeat and cycle ages next to them are the staleness measure, and they keep counting
-in the browser between refreshes. The cycle limit comes from the supervisor; when an older
+in the browser between refreshes. Liveness is read from the small `/api/health` endpoint every
+five seconds (fifteen while the tab is hidden), not from the task snapshot: the supervisor
+rewrites its heartbeat every five seconds even while paused, and the snapshot's change tag
+ignores it, so an unchanged paused run answers "not modified" instead of resending every
+task. The cycle limit comes from the supervisor; when an older
 daemon has not recorded one, the panel assumes one hour and says so.
 
 Malformed records and non-finite benchmark values such as `NaN` produce warnings while

@@ -1,13 +1,19 @@
 """Board interactions with a large knowledge graph: every endpoint, parameter abuse,
-concurrent and retried curation, cache freshness, and reads during live daemon writes."""
+concurrent and retried curation, cache freshness, and reads during live daemon writes.
+
+The large fixture is built once per module and never served. Tests see copies of it: a test
+that writes gets its own copy, so curation in one test cannot change what another one reads,
+whatever order they run in."""
 from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import random
+import shutil
 import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 import uuid
 from urllib.error import HTTPError
@@ -23,63 +29,122 @@ import improve_graph as graph  # noqa: E402
 OPENER = build_opener(ProxyHandler({}))
 
 
+_TEMPLATE = None
+
+
+def template():
+    """10 archived runs of 300 tasks over 1,500 files, a live run, and 300 notes, built once."""
+    global _TEMPLATE
+    if _TEMPLATE is not None:
+        return _TEMPLATE
+    temp = tempfile.TemporaryDirectory(prefix="improve graph server template ")
+    root = Path(temp.name).resolve()
+    previous = environment(root / "home")
+    try:
+        files = [f"app/p{index // 60}/m{index}.ts" for index in range(1500)]
+        repo = make_repo(root / "repo", files).resolve()
+        rand = random.Random(9)
+        for run in range(10):
+            archive(repo, f"2026-08-{run:02d}", f"r{run}", [
+                dict(id=f"t{index}", title=f"Task {index} run {run}", area=rand.choice(LongSession.AREAS),
+                     status=rand.choice(("done", "rejected", "blocked")), blocked_reason=f"Runner {index % 9} offline",
+                     paths=rand.sample(files[:700], rand.randint(1, 4)), verification="ts.fast ok")
+                for index in range(300)], gates={"ts.fast": 30})
+        state = repo / ".improve"
+        write_run(state, "live")
+        rows = [dict(id=f"L{index}", title=f"Live {index}", area="ui", status="ready", file=files[index])
+                for index in range(30)]
+        write_ledger(state, rows)
+        graph.sync(repo, refine_after=True)
+        with graph.locked(repo) as value:
+            notes = [graph.add_insight(value, f"Package {index} build needs cache key c{index} and flag v{index % 5}",
+                                       "pitfall", about=[files[index]], repo=repo)["id"] for index in range(300)]
+            graph.refine(value, repo)
+    except BaseException:
+        restore_environment(previous)
+        temp.cleanup()
+        raise
+    restore_environment(previous)
+    _TEMPLATE = SimpleNamespace(temp=temp, root=root, files=tuple(files), rows=tuple(rows), notes=tuple(notes))
+    return _TEMPLATE
+
+
+def tearDownModule():
+    if _TEMPLATE is not None:
+        _TEMPLATE.temp.cleanup()
+
+
+class Workspace:
+    """A private copy of the template (repository and learning home) with its own board."""
+
+    def __init__(self, fixture):
+        self.temp = tempfile.TemporaryDirectory(prefix="improve graph server ")
+        root = Path(self.temp.name).resolve() / "copy"
+        shutil.copytree(fixture.root, root, symlinks=True)
+        self.previous = environment(root / "home")
+        self.repo = root / "repo"
+        self.state = self.repo / ".improve"
+        try:
+            self.url = board.start_board(self.repo, 0)["url"]
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        try:
+            board.stop_board(self.repo)
+        finally:
+            restore_environment(self.previous)
+            self.temp.cleanup()
+
+
 class LargeBoardGraph(unittest.TestCase):
-    """10 archived runs of 300 tasks over 1,500 files, a live run, and 300 notes."""
+    """Each test gets its own copy of the large graph; a read-only class sets SHARED so its
+    tests share one copy."""
+
+    SHARED = False
 
     @classmethod
     def setUpClass(cls):
-        cls.temp = tempfile.TemporaryDirectory(prefix="improve graph server ")
-        cls.previous = environment(Path(cls.temp.name) / "home")
-        cls.files = [f"app/p{index // 60}/m{index}.ts" for index in range(1500)]
-        cls.repo = make_repo(Path(cls.temp.name) / "repo", cls.files).resolve()
-        rand = random.Random(9)
-        for run in range(10):
-            archive(cls.repo, f"2026-08-{run:02d}", f"r{run}", [
-                dict(id=f"t{index}", title=f"Task {index} run {run}", area=rand.choice(LongSession.AREAS),
-                     status=rand.choice(("done", "rejected", "blocked")), blocked_reason=f"Runner {index % 9} offline",
-                     paths=rand.sample(cls.files[:700], rand.randint(1, 4)), verification="ts.fast ok")
-                for index in range(300)], gates={"ts.fast": 30})
-        cls.state = cls.repo / ".improve"
-        write_run(cls.state, "live")
-        cls.rows = [dict(id=f"L{index}", title=f"Live {index}", area="ui", status="ready", file=cls.files[index])
-                    for index in range(30)]
-        write_ledger(cls.state, cls.rows)
-        graph.sync(cls.repo, refine_after=True)
-        with graph.locked(cls.repo) as value:
-            cls.notes = [graph.add_insight(value, f"Package {index} build needs cache key c{index} and flag v{index % 5}",
-                                           "pitfall", about=[cls.files[index]], repo=cls.repo)["id"] for index in range(300)]
-            graph.refine(value, cls.repo)
-        cls.url = board.start_board(cls.repo, 0)["url"]
+        fixture = template()
+        cls.files, cls.rows, cls.notes = list(fixture.files), fixture.rows, list(fixture.notes)
+        cls.shared_workspace = Workspace(fixture) if cls.SHARED else None
 
     @classmethod
     def tearDownClass(cls):
-        board.stop_board(cls.repo)
-        restore_environment(cls.previous)
-        cls.temp.cleanup()
+        if cls.shared_workspace is not None:
+            cls.shared_workspace.close()
+
+    def setUp(self):
+        self.workspace = self.shared_workspace or Workspace(template())
+        if self.workspace is not self.shared_workspace:
+            self.addCleanup(self.workspace.close)
+        self.repo, self.state, self.url = self.workspace.repo, self.workspace.state, self.workspace.url
 
     def get(self, path, **params):
         query = ("?" + urlencode(params, doseq=True)) if params else ""
         started = time.perf_counter()
-        with OPENER.open(Request(self.url + path + query), timeout=10) as response:
+        with OPENER.open(Request(self.url + path + query), timeout=budget(10)) as response:
             body = response.read()
         return json.loads(body), time.perf_counter() - started, len(body)
 
     def error(self, path, data=None, headers=None):
         with self.assertRaises(HTTPError) as caught:
             OPENER.open(Request(self.url + path, data=data, headers=headers or {},
-                                method="POST" if data is not None else "GET"), timeout=10)
+                                method="POST" if data is not None else "GET"), timeout=budget(10))
         body = json.loads(caught.exception.read())
         caught.exception.close()
         return caught.exception.code, body.get("error", "")
 
     def token(self):
-        with OPENER.open(Request(self.url + "/api/session", headers={"X-Improve-Client": "board"}), timeout=10) as response:
+        with OPENER.open(Request(self.url + "/api/session", headers={"X-Improve-Client": "board"}),
+                         timeout=budget(10)) as response:
             return json.load(response)["token"]
 
     def post(self, data, token=None):
         request = Request(self.url + "/api/graph", data=json.dumps(data).encode(), method="POST", headers={
             "Content-Type": "application/json", "Origin": self.url, "X-Improve-Board-Token": token or self.token()})
-        with OPENER.open(request, timeout=30) as response:
+        with OPENER.open(request, timeout=budget(30)) as response:
             return json.load(response)
 
     def note(self, text, request_id=None, token=None, **extra):
@@ -88,6 +153,8 @@ class LargeBoardGraph(unittest.TestCase):
 
 
 class GraphReadEndpointTests(LargeBoardGraph):
+    SHARED = True  # Reads only: one copy for the class.
+
     def test_default_view_is_bounded_fast_and_small(self):
         view, seconds, size = self.get("/api/graph")
         self.assertLessEqual(len(view["nodes"]), 250)
@@ -149,6 +216,12 @@ class GraphReadEndpointTests(LargeBoardGraph):
                 self.assertEqual(self.get("/api/graph/context", area=area)[0]["past_tasks"], [])
         empty = self.get("/api/graph/context")[0]
         self.assertEqual((empty["seeds"], empty["insights"]), ([], []))
+
+    def test_suggested_questions_are_bounded_on_a_large_graph(self):
+        result, seconds, _ = self.get("/api/graph/questions")
+        self.assertLessEqual(len(result["questions"]), board.QUESTION_LIMIT)
+        self.assertTrue(all(set(row) >= {"kind", "id", "question", "node"} for row in result["questions"]))
+        self.assertLess(seconds, budget(3.0))
 
     def test_board_snapshot_carries_a_cheap_summary(self):
         snapshot, seconds, _ = self.get("/api/board", run="all")
@@ -376,7 +449,7 @@ class LiveDaemonTests(LargeBoardGraph):
                 try:
                     path = ("/api/graph", "/api/graph/node?id=area:security", "/api/board",
                             "/api/graph/context?file=" + self.files[index], "/api/graph?q=daemon+task")[index % 5]
-                    with OPENER.open(Request(self.url + path), timeout=15) as response:
+                    with OPENER.open(Request(self.url + path), timeout=budget(15)) as response:
                         json.load(response)
                     reads[0] += 1
                 except Exception as exc:  # Any failed read is the finding; record it for the assertion.
@@ -395,7 +468,7 @@ class LiveDaemonTests(LargeBoardGraph):
         finally:
             stop.set()
             for thread in threads:
-                thread.join(timeout=60)
+                thread.join(timeout=budget(60))
         self.assertEqual(failures, [])
         self.assertGreater(reads[0], 20)
         value = load(self.repo)

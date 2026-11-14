@@ -21,15 +21,25 @@ IMPROVE_TEST_SLOW=1 python3 -B -m unittest discover -s tests -v   # also soak, s
 for improve_script in scripts/*.sh; do
   bash -n "$improve_script"
 done
+python3 tests/lint.py
+for improve_js in assets/board/*.js; do node --check "$improve_js"; done   # if node is installed
 ```
 
 The default run is the fast suite: unit, daemon, graph, board, and control tests. The
 48-hour and 72-hour soaks, the 6,000-task scale fixtures, and the CLI performance suite
 run only with `IMPROVE_TEST_SLOW=1`; set `IMPROVE_TEST_SPEED_FACTOR=2` (or more) on a slow
 or shared machine to scale every wall-clock ceiling. Tests isolate git from the host's
-global and system configuration (`tests/support.py`), skip FTS5-only checks when the
-interpreter's SQLite lacks FTS5, and never bind a fixed port. `.github/workflows/tests.yml`
-runs the fast suite on every push and the slow suites plus browser checks nightly.
+global and system configuration (`tests/support.py`), drop the host's `IMPROVE_*` settings
+(only `IMPROVE_TEST_*` knobs pass through) and point the cross-project learning store at a
+throwaway directory, skip FTS5-only checks when the interpreter's SQLite lacks FTS5, skip the
+JavaScript drafts check when `node` is missing, and never bind a fixed port. Every wall-clock
+ceiling and subprocess or HTTP timeout goes through `support.budget()`.
+
+`.github/workflows/tests.yml` runs, on every push: a lint job (shell syntax, `tests/lint.py`,
+`node --check` on the board scripts), and the fast suite with `-W error::ResourceWarning` on
+Ubuntu and macOS under Python 3.9 and 3.13. Nightly (and on demand) it runs the slow suites on
+the same four combinations, the reverse-order check, and the browser checks with a pinned
+Playwright, keeping screenshots when a browser check fails. Every job has a time limit.
 
 The regression suite uses temporary git repositories and fake Codex and Claude CLIs. It tests intake,
 deadlines, early completion, discovery continuity, restart, rate limits, lock ownership,
@@ -62,8 +72,33 @@ list of one mode per launch.
 | `tests/test_graph_dream.py` 72-hour run | A world with a known truth (modules, their knowledge, noise citations, blockers): 432 cycles, a dream every 18. At every dream it checks structure, every inferred link's rule, confidence, and evidence, precision of at least 0.95 for every rule with 10 or more links, and recall of at least 0.55; at the end, unused notes were forgotten within the run, valuable knowledge was never touched, and a forgotten note restores. Set `IMPROVE_GRAPH_DREAM_SOAK_CYCLES` to run longer |
 | `tests/test_toon.py` | The TOON encoder and decoder against all 564 official conformance fixtures (byte-exact encoding, decoded values and errors, strict and lenient options), round trips of every fixture and of randomized values with every delimiter, canonical numbers, quoting rules, host-type normalization, surrogate and UTF-8 refusal, the `uniform` and `truncate` view helpers, the stdin CLI, and the size reductions on representative ledger and query shapes |
 | `tests/test_ledger.py` | The ledger helper: ranking identical to the SKILL.md order, status/area/file/id filters, bounded and full views, counts, discovery and run views, JSON and delimiter modes, canonical `set` rewrites that merge duplicate rows and validate fields, `add`, damaged lines, and a repository without a ledger |
-| `tests/test_graph_policy.py` | Protected user and learning knowledge survives fade, contradiction, and caps; only corruption is damage (a constraint error rolls back without restoring a checkpoint); a held `graph.lock` fails fast with exit 3 while readers continue; lessons import once and return only when reinforced; whole-token gate attribution; supervisor blocks are not knowledge; stable co-change links; fresh graphs are not due until their interval; `history --offset`; `unlink`, `proposals`, `consolidate` |
+| `tests/test_graph_integrity.py` | What counts as the same knowledge (negation, opposite words, numbers, file names, non-Latin scripts), the user's or learning store's wording winning a merge, citation credit surviving merge and restore, restored pruned tasks counted once, rejected links following merges, path normalization, hex-word blocker keys, literal history queries, and a search index rebuilt after a tokenizer change |
+| `tests/test_graph_reliability.py` | Curated writes (agent and board) replayed from the journal after recovery from a checkpoint or a rebuild, writes queued while the graph is held and applied once, co-change weight kept through pruning and restore, renamed files keeping statistics, links, knowledge, and fingerprints, damaged-store rotation, the newer-format warning, and the dream diff |
+| `tests/test_graph_output.py` | TOON never longer than compact JSON on mixed rows, flattened columns, output switches before or after the command in all four helpers, `IMPROVE_FORMAT` normalization, width bounds that never cut ids or paths, token budgets that say what they left out, and a brief that keeps its short sections and flags changed code |
+| `tests/test_graph_analysis.py` | Context weighted by task outcome, resolved blockers, `--exclude`, code fingerprints set and cleared, retrieval keeping knowledge alive, paths that avoid hubs and name the weakest step, inferred contradictions, clique proposals, deterministic module groups with stable ids, surprises, bridges, questions, the Markdown report, GraphML/JSON export, and edge tiers |
+| `tests/test_code_graph.py` | The code layer: symbols, relative/absolute/script/JS imports, observed and inferred calls that never guess, code notes with secrets redacted, parse errors, the racily-clean stat check, re-resolution after edits, deletions, time budgets, extractor upgrades, impact with call sites, cycles without deferred imports, exit codes 4/5, and its use in `sync` and `context` |
+| `tests/test_ledger_safety.py` | Accumulating `--graph-ref`, damaged and id-less lines kept in place, concurrent ledger writers and the supervisor losing nothing under the ledger lock, ids and paths never cut, the advisory context hint, and `add` keeping damaged lines |
+| `tests/test_graph_policy.py` | Protected user and learning knowledge survives fade, contradiction, and caps; only corruption is damage (a constraint error rolls back without restoring a checkpoint); a held `graph.lock` queues agent writes and fails whole-graph writes fast with exit 3 while readers continue; lessons import once and return only when reinforced; whole-token gate attribution; supervisor blocks are not knowledge; stable co-change links; fresh graphs are not due until their interval; `history --offset`; `unlink`, `proposals`, `consolidate` |
 | `tests/test_graph_performance.py` | Real CLI processes on a steady-state graph (task cap reached, 4,000+ history rows): median wall time and peak memory for reads and writes, a file's `context` and `node` at least 20% faster than a whole-graph read and lighter in memory, daemon sync/refine/dream within a cycle gap, and a board poll that reuses an unchanged graph |
+
+| `tests/test_graph_regressions.py` | The 2026-11-12 review's graph findings: a note queued while a drain is open survives, a failed drain is retried and a crash after commit applies nothing twice, concurrent queue appends lose nothing; recovery replay commits before a failing first writer and keeps journal sequences unique, and a failed replay is retried; no path spelling (backslashes, `..`, absolute, drive letters, control characters, symlinks) leaves the repository; linear token budgets; undecodable argv bytes; ledger `run`/`run-set`/`discovery-add`, protected fields, focus-aware `queue`; restore through merge chains; content-word swaps; secret redaction in notes; age-ordered alias and lesson trimming; nested gate names; deterministic focus views; linear forgetting; recency-weighted verdicts; the lock helper's descriptor |
+| `tests/test_code_graph.py`, `tests/test_code_resolution.py`, `tests/test_code_features.py`, `tests/test_code_languages.py` | The code layer: symbols, imports from package roots, scoped binding (parameters, locals, builtins, third-party imports never guessed), star imports and `__all__`, re-exports, instance/inherited/`super()` calls, `uses` and `indirect` references, overrides in impact, every call site, the last good parse on a syntax error and the shrink guard, change-set impact, test selection with pytest fixtures, code search, coverage, JS/TS aliases and workspaces, Go/Java/Kotlin/Ruby/C imports, generated and vendored code, bounded cycles, code-only module groups and split oversized groups |
+
+### Supervisor, board, and instruction suites
+
+| Suite | What it proves |
+| --- | --- |
+| `tests/test_runtime.py` | The daemon end to end with a fake agent CLI (see above), in strict mode and again in the default resilient mode (`DefaultModeTests`) |
+| `tests/test_supervisor_recovery.py` | Long-run recovery: stop and outcome repair before reconcile, corrupt `run.json` repaired every iteration, dirty relaunch quarantined, disk full parks, final-report retry past the deadline, `--resume --supervise`, stop during watchdog backoff or while the daemon is down, worker halts park, wall-clock deadline after sleep, artifacts cleaned without commits, `--new-run` stopping the old agent, isolated brief parts, wrappers via symlinks and `CDPATH`, limit detection on the output tail, locked ledger repair |
+| `tests/test_control.py`, `tests/test_learning.py` | Board request helper (including withdraw refused after a receipt) and the learning store (malformed rows, locked concurrent writes) |
+| `tests/test_board.py`, `tests/test_board_hardening.py`, `tests/test_board_graph_signals.py`, `tests/test_board_js.py` | The board server and front end: ETags (heartbeat excluded; liveness via `/api/health`), quarantine refs listed only when supervisor-named and shell-quoted, LRU ledger cache, JSON errors and bounded parameters, cross-site refusal, the new graph signals (code changed, contradicted by, resolved, tiers, gaps, questions), and the drafts store run under node |
+| `tests/test_graph.py` | The graph engine end to end: ingest, refine, citations, ratings, and the CLI round trip |
+| `tests/test_instructions.py` | Every helper command quoted in SKILL.md, max/, references/, docs/, README, and the cycle prompt parses with that helper's parser; every documented `IMPROVE_*` setting exists; the skill and runtime versions agree; improve-max branch names can be created; the CI workflow keeps macOS, both Pythons, lint, timeouts, and the order check |
+
+`python3 tests/lint.py` checks every Python file against Python 3.9's grammar and for unused
+imports and unused locals (CI runs it with `node --check` on the board scripts).
+`python3 tests/reverse_order.py MODULE...` (from `tests/`) runs test methods in reverse order to
+catch tests that depend on a shared fixture's state; the nightly job runs it.
 
 Latency ceilings are deliberately generous; they catch quadratic regressions rather than
 measure machine speed. A large-graph browser check builds its own repository:

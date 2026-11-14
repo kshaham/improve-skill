@@ -65,6 +65,9 @@ def check_graph(page, repo, tasks, write_tasks, artifacts):
     page.locator("#graph-detail button", has_text="Pin").click()
     expect(page.locator("#graph-status")).to_have_text("Pinned; the skill sees it every cycle.")
     expect(page.locator("#graph-detail .pinned-chip")).to_be_visible()
+    expect(page.locator("#graph-detail .tier-tag.tier-recorded").first).to_be_visible()
+    expect(page.locator("#graph-gaps li").first).to_be_visible()
+    expect(page.locator("#graph-questions li").first).to_be_visible()
     assert graph.load(graph.graph_path(repo))["nodes"][insight]["pinned"] is True
     page.screenshot(path=str(artifacts / "graph-desktop.png"), full_page=True)
 
@@ -75,7 +78,9 @@ def check_graph(page, repo, tasks, write_tasks, artifacts):
     expect(page.locator("#graph-status")).to_contain_text("neighborhood")
     expect(page.locator(f'.graph-node[data-id="{pooled}"]')).to_have_count(1)
 
-    # Tasks open in the board's task dialog, which shows what the graph knows.
+    # Tasks open in the board's task dialog, which shows what the graph knows, including
+    # knowledge whose file changed after it was recorded.
+    (repo / "src/db.py").write_text("# fixture, edited after the note was recorded\n")
     page.locator(f'.graph-node[data-id="{pooled}"] circle').click(force=True)
     page.locator("#graph-detail button", has_text="Open task").click()
     expect(page.locator("#task-dialog")).to_be_visible()
@@ -83,6 +88,7 @@ def check_graph(page, repo, tasks, write_tasks, artifacts):
     expect(page.locator("#task-knowledge")).to_be_visible()
     expect(page.locator("#task-knowledge")).to_contain_text("Database tests flake")
     expect(page.locator("#task-knowledge")).to_contain_text("Retry database deadlocks")
+    expect(page.locator("#task-knowledge .knowledge-badge.changed").first).to_be_visible()
     page.locator("#task-knowledge button", has_text="Database tests flake").click()
     expect(page.locator("#task-dialog")).not_to_be_visible()
     expect(page.locator("#graph-detail h3")).to_contain_text("Database tests flake")

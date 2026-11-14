@@ -26,9 +26,10 @@ Over days:    /improve-max 3d ~/Code/api --target 5x
 | **Proof, not vibes** | Every change runs the repository's own gates, a mutation check that makes the test go red, and an adversarial counter-scenario. Unverified work is reverted and recorded as rejected, with the evidence. |
 | **It does not stop early** | An empty backlog triggers a deeper search. Setbacks block one task, never the run. The daemon repairs bad state, survives crashes, parks and retries when the environment misbehaves, and only the deadline ends the run normally. |
 | **A board you can steer from** | Columns, history, run health with live heartbeat and cycle ages, notifications, journal and log viewers, voice commands, phone layout, dark mode. Add tasks, change priorities, approve proposals, pause, resume, or stop. |
-| **Token-frugal tooling** | Every helper the agent calls answers in TOON (Token-Oriented Object Notation): one header, one row per record, 35-70% fewer tokens than JSON on the backlog, request, and graph views a long run reads thousands of times. Storage stays JSON. |
-| **Memory across runs** | A knowledge graph of files, tasks, gates, blockers, and recorded lessons that the skill queries before each task and maintains on its own, keeping a history so nothing is lost. |
-| **Safe by default** | Never touches `main`, never pushes, never weakens a test, never bumps a dependency, never reads secrets. Explicit authorization is remembered and honored within its scope. |
+| **Token-frugal tooling** | Every helper the agent calls answers in TOON (Token-Oriented Object Notation): one header, one row per record. Graph answers are 19-49% smaller than compact JSON and about half the indented JSON they replaced; the ranked backlog view is about 72% smaller than reading the raw ledger. Long answers take a token budget and say what they left out. Storage stays JSON. |
+| **Memory across runs** | A knowledge graph of files, tasks, gates, blockers, and recorded lessons that the skill queries before each task and maintains on its own, keeping a history and a write journal so nothing is lost, even when the store is damaged. It knows when the code behind a note has changed, when two notes contradict each other, which advice recent work confirmed, and follows renamed files. |
+| **Code awareness** | A standard-library code layer answers "what depends on this?" with the line that uses it, for one file, one function, or the whole uncommitted diff (`impact --changed`), and names the tests that reach the change so they run first (`tests-for`). Python is read with `ast` and Python's own scoping rules (instance, inherited, and `super()` calls; never a guess); JavaScript/TypeScript imports and calls, and Go, Java, Kotlin, Ruby, and C/C++ imports are read too. It also searches code by identifier words, lists import cycles, groups files into modules, and writes a Markdown or GraphML report. |
+| **Safe by default** | Never touches `main`, never pushes, never weakens a test, never bumps a dependency or installs tooling, never reads secrets, and strips anything that looks like a credential from what it records. Explicit authorization is remembered and honored within its scope. |
 
 ## Get started in five minutes
 
@@ -134,7 +135,9 @@ withdrawn. Drafts survive reloads; task links and views are bookmarkable.
 **Knowledge.** The Knowledge tab draws the cross-run graph: files, areas, tasks, gates,
 blockers, and recorded knowledge. Search it, pin or correct knowledge, add your own
 decisions and conventions (the skill treats them as constraints), and watch it dream:
-inferring links with evidence, forgetting what went unused, and restoring on request.
+inferring links with evidence, forgetting what went unused, and restoring on request. Notes
+whose code changed since, notes that contradict another, and blockers later work got past are
+marked; the tab lists failing files nobody has written about and the questions worth a look.
 
 **Phone and voice.** A phone layout with a bottom bar and swipeable columns, a dark theme
 that follows the system, and voice steering ("focus on security and skip docs", "new task:
@@ -181,19 +184,27 @@ deadline whatever happens along the way:
 - **One task fails:** it is marked blocked with the reason and the next cycle moves on.
 - **The agent writes a bad field, damages a ledger, or leaves uncommitted changes:** the
   state is repaired or restored, the changes are saved to a private quarantine ref, the
-  tree is reset, and the run continues. Build artifacts are cleaned without blaming a task.
+  tree is reset, and the run continues. Build artifacts are removed and listed, never
+  committed, and never blamed on a task.
 - **The CLI crashes or hits a usage limit:** no task is blamed; limits get bounded
   exponential backoff that survives restarts.
 - **Every breaker is exhausted:** the run parks, waits, resets, and tries again instead of
   halting while time remains.
 - **The daemon process dies:** `--status` says `crashed`, a relaunch resumes with the same
-  deadline, and `--supervise` does that for you. Any agent process left behind is stopped
-  and its edits are quarantined first.
-- **The disk fills up or the clock jumps:** the run parks or tolerates it rather than dying.
+  deadline even with the dead cycle's edits in the tree, and `--supervise` does that for you
+  (also after `--resume`). Any agent process left behind is stopped and its edits are
+  quarantined first. A `--stop` sent while the daemon is down is honored by the next launch.
+- **The disk fills up, the laptop sleeps, or the clock jumps:** a full disk parks the run, a
+  cycle is stopped by the wall-clock deadline when the machine wakes, and small clock steps are
+  tolerated.
 
-Only three things end a run: the deadline, your stop, or a dirty tree that cannot be saved.
-The [runner guide](docs/running.md) covers every option, environment variable, recovery
-command, and the state files.
+By default a run ends only at its deadline, on your stop, at an improve-max target with
+`--stop-at-target`, when a cycle's uncommitted changes cannot be saved, when the final
+report pass modifies repository work, or when breakers are exhausted after the deadline.
+Opting out of resilience (`IMPROVE_PARK=0`, `IMPROVE_QUARANTINE=0`,
+`IMPROVE_MAX_WORKER_HALTS=0`, `IMPROVE_MAX_RECOVERIES=0`) turns the matching waits into halts.
+The [runner guide](docs/running.md#staying-productive-through-failures) lists every case and
+covers every option, environment variable, recovery command, and the state files.
 
 ## How a run works
 
@@ -210,8 +221,8 @@ command, and the state files.
    from defects to coverage to structure to bounded refactors until the deadline.
 
 Hard boundaries by default: no edits to `main`, no pushes or pull requests, no deleted or
-weakened tests, no dependency or schema changes, no secret files, no edits outside the
-target repository. See the [workflow guide](docs/workflow.md).
+weakened tests, no dependency, tooling, or schema changes, no secret files, no edits outside
+the target repository. See the [workflow guide](docs/workflow.md).
 
 ## Improve-max
 
@@ -236,20 +247,23 @@ and [characterization guide](max/references/characterization.md) first.
 | [Workflow](docs/workflow.md) | Intake, focus, discovery lanes, evidence, and boundaries |
 | [Local board](docs/board.md) | Every view, request type, health signal, phone and voice use, service lifecycle |
 | [Runner and recovery](docs/running.md) | Background execution, all CLI options and environment variables, resilience, troubleshooting |
-| [Development](docs/development.md) | Fast and slow test suites, browser checks, CI |
+| [Development](docs/development.md) | Fast and slow test suites, browser checks, lint, CI on Linux and macOS with Python 3.9 and 3.13 |
 | [Skill instructions](SKILL.md) | The full agent execution contract |
 | [Request protocol](references/board-control.md) | How the skill applies and acknowledges board requests |
 | [State schema](references/ledger.md) | Durable run, task, and discovery records |
-| [Knowledge graph](references/knowledge-graph.md) | Graph contents, queries, dreaming, history, and restore |
-| [Architecture review and plan](docs/reviews/) | The 2026-11-08 code review and the remediation plan it produced |
+| [Knowledge graph](references/knowledge-graph.md) | Graph contents, queries, the code layer (impact, test selection, code search), dreaming, history, and restore |
+| [Reviews and plans](docs/reviews/) | The 2026-11-08 architecture review and remediation plan, the TOON plan, the 2026-11-10 graph review and plan, and the 2026-11-12 full-codebase review and implementation plan |
 
 ## Development
 
 ```sh
 python3 -B -m unittest discover -s tests -v                      # fast suite
 IMPROVE_TEST_SLOW=1 python3 -B -m unittest discover -s tests -v  # plus soak, scale, performance
+python3 tests/lint.py                                            # Python 3.9 grammar, unused imports and locals
 uv run --with playwright python tests/browser_board.py           # board checks in a real browser
 ```
+
+Tests never read your own `IMPROVE_*` settings or write to your real learning store.
 
 Tests use temporary repositories and fake assistant CLIs; nothing launches a paid model run.
 See the [development guide](docs/development.md).

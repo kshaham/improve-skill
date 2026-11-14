@@ -3161,3 +3161,69 @@ summary:focus-visible {
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
+/* Graph signals: contradictions, link tiers, stale or resolved knowledge, questions */
+.graph-edge.rel-contradicts {
+  stroke: var(--red);
+  stroke-dasharray: 6 2 1 2;
+}
+.graph-links.contradicts h4 {
+  color: var(--red);
+}
+.graph-chip.warn-chip {
+  --swatch: var(--amber);
+  border-color: var(--warn-line);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+.tier-tag {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.tier-tag.tier-recorded {
+  color: var(--purple);
+}
+.knowledge-badge {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10px;
+  line-height: 1.5;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 7px;
+  color: var(--ink-2);
+  vertical-align: top;
+  white-space: nowrap;
+}
+.knowledge-badge.link-button {
+  padding: 0 7px;
+}
+.knowledge-badge.changed,
+.knowledge-badge.contested {
+  border-color: var(--warn-line);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+.knowledge-badge.contradicted {
+  border-color: var(--red);
+  color: var(--red);
+}
+.knowledge-badge.proven,
+.knowledge-badge.resolved {
+  border-color: var(--green);
+  color: var(--green);
+}
+.task-knowledge li.resolved > .link-button {
+  color: var(--muted);
+}
+.question-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.question-kind {
+  flex: none;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}

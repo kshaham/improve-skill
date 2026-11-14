@@ -6,8 +6,10 @@ metadata:
   author: Kamal Shaham, drafted with Claude Code (Opus) in plan mode
   created: 2026-09-05
   origin: Designed to spec in the ~/Code/bonsai session (plan shimmying-roaming-goose.md); daemon added 2026-09-06 after the first 6h run hit ENOSPC
-  version: 1.15.0
+  version: 1.17.0
   changelog: |
+    1.17.0 (2026-11-12) - recovery and queued writes that never lose curated knowledge, path-escape and secret-redaction fixes, linear token budgets, a complete run view with run-set and discovery-add, focus-aware queue ranking, recency-weighted verdicts, a scope-aware code layer (instance, inherited, and super() calls, references, re-exports, package roots, more languages), change-set impact and test selection, code search and coverage, supervisor fixes for long unattended runs (stop and outcome repair, dirty relaunch, disk-full parking, final-report recovery), board fixes (drafts, new graph signals, pause polling), and CI on macOS and Python 3.9
+    1.16.0 (2026-11-10) - knowledge integrity (negation-, number-, and path-aware duplicates; the user's wording wins; proof survives merges; no double-counted evidence), a write journal replayed after recovery and queued writes while the graph is busy, renamed files keep their history, co-change survives pruning, code-change and contradiction flags, a standard-library code layer (impact, cycles, symbols), module groups, reports and export, token budgets, TOON never longer than JSON, output switches in any position, append-only graph_refs and loss-free ledger rewrites
     1.15.0 (2026-11-08) - the daemon survives bad agent writes, unexpected errors, crashes and stale children; parks instead of halting; limits recognized on any exit code; build artifacts are not task failures; cycle budget in every prompt; protected user knowledge, narrower damage recovery and a bounded graph lock; board liveness, notifications, journal/log/quarantine views; CI and a fast/slow test split
     1.14.0 (2026-10-04) - atomic bulk priority requests, task notes and request threads, run overview with recorded activity and exports, and progress checks that exclude operator bookkeeping
     1.13.0 (2026-10-04) - prioritized worklists, durable browser drafts, bookmarkable views and task links, follow-up requests, session reconnection, and explicit operator-priority ranking
@@ -121,7 +123,9 @@ save a proposal and continue eligible work instead of stopping for routine appro
 - **Never delete a test, weaken an assertion, or add a skip** to make something green. Test
   changes are additive. If a test genuinely encodes wrong behaviour, that is a backlog item
   for the human, not a fix.
-- **Never bump a dependency** - not Go modules, not SPM, not npm, not the toolchain.
+- **Never bump a dependency or install new tooling** - not Go modules, not SPM, not npm, not
+  the toolchain, and no new linter, formatter, or global tool: use what the repository already
+  has, unless the user's authorization names it.
 - **Never add a migration or change a schema.**
 - **Never rewrite a money-adjacent or once-only invariant.** Anything that pays out, charges,
   or stamps a row exactly once is read-only. Findings there go to the backlog with evidence.
@@ -155,13 +159,35 @@ at the start of **every** cycle through the ledger helper, not by reading the ra
     python3 <skill-directory>/scripts/improve_ledger.py --repo <repo> queue
     python3 <skill-directory>/scripts/improve_ledger.py --repo <repo> discovery --limit 5
 
-Every helper prints TOON (Token-Oriented Object Notation): `key: value` lines, and for a
-list of records one header `name[N]{field,field}:` followed by one comma-separated row per
-record, so a backlog costs a fraction of the tokens its JSON rows would. `show ID` prints
-one task in full; `set ID --status ... --commit ...` writes a canonical row. Pass
-`--format json` to any helper when you need JSON. Never carry loop state only in your
-context - assume you will be compacted mid-run. See `references/ledger.md` for the schema
-and the commands.
+`run` includes everything the steps below branch on (`preflight_complete`, `gates` and
+`gate_seconds`, `authorization`, `continuation`, focus); `run --full` prints the whole file.
+`queue` already applies the ranking in "Confirm and rank": critical in-scope security first,
+then `user_priority`, then board `prefer` areas, then focus priority, then severity x
+confidence x blast; items in `skip` areas stay queued but are left out (`skipped_areas` counts
+them; `--all-areas` shows them). Write state through the same helper:
+`run-set KEY=VALUE` (and `--json-field KEY=JSON`, in any order) for any run.json key, such as
+`focus`, `next_action`, or `discovery` (it refuses `started_at`, `deadline`, and `outcome`), `discovery-add --json '{...}'` for a discovery
+checkpoint, `set ID ...` for a task, and `add --json` for a new one.
+
+**TOON, the helpers' output format.** `key: value` lines; for a list of records one header
+`name[N]{field,field}:` followed by one comma-separated row per record; a field `f{a,b}`
+spreads a nested object over cells a,b; a column `stats.done` is the nested field;
+`name[N:]{f1,f2}:` is keyed (each row `key: f1,f2`); `name[N]: a,b` is a list; `key: []` is
+empty; `null` is no value; `- ` lines are list items; quoted strings use JSON escapes; a cell
+ending in `…[+N]` was shortened by N characters (`--full` shows it). The graph's `context`,
+`brief`, and `path` print plain text (`context --json` or `--toon` for structure). The ledger,
+graph, control, and learning helpers take `--format json` before or after the command; the
+clock (`improve-clock.sh --json`) and the board helper use `--json` instead. `show ID` prints
+one task in full. Never carry loop state only in your context - assume you will be compacted
+mid-run. See `references/ledger.md` for the schema and the commands.
+
+**Helper exit codes.** `0` is an answer. The graph's `4` (an ambiguous name; the candidates
+are printed) and `5` (nothing by that name) are answers too: pick a candidate or move on. `2`
+means the input or the state file was invalid: read the message, fix the argument or the
+row it names, and retry once; a helper that still fails is noted in the journal and worked
+around, never a reason to halt. `3` means another process holds the graph: a note, link,
+rating, or rejection is queued automatically (exit `0`, `queued: true`); anything else may be
+retried later. The clock's own exit codes are described in step 0.
 
 **Entry is resumption first.** Before asking the intake again, every invocation checks
 for `.improve/run.json` with no `outcome`. If there is one, this is the same run: keep the
@@ -249,7 +275,12 @@ like a complete story.
    treats them differently.
 5. **Establish a green baseline by running them.** If the repo is already red, stop and
    report. You cannot attribute a failure to your change if it was failing before you
-   started, and a loop that begins on red will thrash.
+   started, and a loop that begins on red will thrash. Under the daemon, if the full
+   baseline cannot finish inside one cycle's limit, run the fastest gate that covers the
+   code in scope as the baseline, record the slow gate with its measured or estimated time
+   in `gate_seconds` and the reason in `run.json` (`run-set --json-field`), and say in the
+   first report that the run's limit (`IMPROVE_CYCLE_TIMEOUT`) is shorter than the full
+   suite. Never let every cycle die re-running the same over-long baseline.
 6. Create `improve/<YYYY-MM-DD>` (append a numeric suffix if it already exists); record the
    baseline commit SHA. Never reset an existing branch.
 7. Complete `run.json` with the original timestamps, focus, gates, and continuation mode;
@@ -514,13 +545,18 @@ blocked, so:
 A graph or learning helper that fails (exit `2`, or `3` when another process holds the
 graph) is never a reason to block a task or halt: note it in the journal and continue.
 
+A board request that needs clarification cannot wait for a conversation under the daemon:
+there is none. Acknowledge it `declined` with the question in the note (`ack --status
+declined --note 'QUESTION'`), so the user sees the question on the board and can send a
+clearer request, instead of leaving it pending to be re-read every checkpoint.
+
 The skill learns across runs. `.improve/learning.json` keeps per-area verified-success
 rates, recurring blockers, and lessons; it survives `--new-run`. Each cycle prompt
 includes that guidance; use success rates only to break ties inside the user's focus.
 When you learn something non-obvious that would help a future run, record one sentence:
 
 ```sh
-python3 /path/to/improve/scripts/improve_learning.py --repo /absolute/repo lesson --area AREA --text 'LESSON'
+python3 <skill-directory>/scripts/improve_learning.py --repo /absolute/repo lesson --area AREA --text 'LESSON'
 ```
 
 Add `--scope global` only for lessons true of any project. Never record secrets or
@@ -537,8 +573,12 @@ ledgers. Follow [references/knowledge-graph.md](references/knowledge-graph.md):
   ```sh
   python3 <skill-directory>/scripts/improve_graph.py --repo /absolute/repo context --files PATH... --area AREA
   ```
-- Add the ids of insights you relied on to the task's `graph_refs`. Outcomes then credit or
-  discredit them.
+- Add the ids of insights you relied on to the task's `graph_refs`
+  (`improve_ledger.py set ID --graph-ref INSIGHT_ID`; each call adds one). Outcomes then credit
+  or discredit them.
+- Treat `code changed since: re-verify` and `contradicted by` flags in `context` as reasons to
+  check the knowledge before relying on it. Before a change with a wide reach, run
+  `impact PATH` to see which files import or call it (with the line), and include their gates.
 - Record non-obvious, file-specific knowledge with `note --kind pitfall|technique|convention|decision|fact
   --text '...' --about file:PATH area:AREA`. Use `rate ID wrong` on knowledge that proved false
   and `unlink SRC REL DST` on an inferred link that is wrong.
@@ -624,6 +664,9 @@ build a real coverage profile) can miss the deadline entirely. So:
 - `references/verification.md` - discovering and recording this repo's gates
 - `references/ledger.md` - `.improve/` schema and the ledger helper commands
 - `scripts/improve_ledger.py` - ranked queue, filtered task views, counts, and canonical writes, printed as TOON
+- `scripts/improve_graph.py` - the knowledge graph CLI (`context`, `note`, `impact`, `cycles`, `report`, ...); its
+  command line is `improve_graph_cli.py`, its code layer `improve_code.py`, its analysis `improve_analysis.py`,
+  and its write journal and queues `improve_graph_journal.py`
 - `references/report-format.md` - the hourly report
 
 ## Running continuously

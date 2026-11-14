@@ -1,4 +1,16 @@
 #!/usr/bin/env bash
 # 0 = running, 10 = deadline reached, 2 = invalid state.
 set -euo pipefail
-exec python3 "$(cd -- "$(dirname -- "$0")" && pwd)/improve_runtime.py" clock "$@"
+# Resolve the real script directory: through symlinks (an installed link to this file), with
+# CDPATH cleared so `cd` neither prints a path nor lands in a same-named directory elsewhere.
+script_path="${BASH_SOURCE[0]}"
+while [ -L "$script_path" ]; do
+  link_dir="$(CDPATH= cd -P -- "$(dirname -- "$script_path")" >/dev/null && pwd)"
+  script_path="$(readlink -- "$script_path")"
+  case "$script_path" in
+    /*) ;;
+    *) script_path="$link_dir/$script_path" ;;
+  esac
+done
+script_dir="$(CDPATH= cd -P -- "$(dirname -- "$script_path")" >/dev/null && pwd)"
+exec python3 "$script_dir/improve_runtime.py" clock "$@"

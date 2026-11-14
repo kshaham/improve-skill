@@ -1,7 +1,6 @@
 """Speed and resource budgets for the knowledge graph at long-run scale, measured on real
 processes. Ceilings are generous on purpose: they catch a design that degrades with size
 (a full load where a partial one belongs, a quadratic pass), not a slow machine."""
-import os
 from pathlib import Path
 import random
 import statistics
@@ -74,7 +73,7 @@ class LongRunScale(unittest.TestCase):
         for _ in range(runs):
             started = time.perf_counter()
             result = subprocess.run([sys.executable, "-c", MEASURE, SCRIPT, "--repo", str(self.repo), *args],
-                                    capture_output=True, text=True, timeout=60)
+                                    capture_output=True, text=True, timeout=budget(60))
             times.append((time.perf_counter() - started) * 1000)
             self.assertEqual(result.returncode, 0, result.stderr)
             peak = max(peak, int(result.stderr.rsplit("RSS", 1)[1]) / 2 ** 20)

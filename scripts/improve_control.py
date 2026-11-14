@@ -188,8 +188,9 @@ def text_field(data, field, limit, required=True):
     return value.strip()
 
 
-def prepare_request(data, tasks, value):
-    """Validate against an in-memory ledger before committing a whole submission."""
+def prepare_request(data, tasks, value, receipts=None):
+    """Validate against an in-memory ledger before committing a whole submission.
+    `receipts` are the skill's answers so far; an answered request can no longer be withdrawn."""
     try:
         request_id = str(uuid.UUID(data.get("id", "")))
     except (ValueError, TypeError, AttributeError) as exc:
@@ -252,6 +253,9 @@ def prepare_request(data, tasks, value):
             raise StateError("That request is not in the current run.")
         if any(row.get("type") == "withdraw" and row.get("target_id") == request["target_id"] for row in value["requests"]):
             raise StateError("That request was already withdrawn.")
+        if (receipts or {}).get(request["target_id"]):
+            raise StateError("The skill already answered that request, so it can no longer be withdrawn. "
+                             "Send a new request to change course.")
         request["task_title"] = target.get("title") or target.get("task_title") or target.get("type")
     request["created_at"] = stamp()
     value["requests"].append(request)
@@ -262,6 +266,7 @@ def queue_submission(repo, data, tasks, batch=False):
     """Save a submission atomically. Caller holds the lock shared with archival."""
     require_run(repo, data.get("run_id"))
     value = operator_state(repo)
+    receipts = local_json(state_path(repo) / "board-receipts.json")
     if batch:
         items = data.get("items")
         if not isinstance(items, list) or not 1 <= len(items) <= 50 or any(not isinstance(item, dict) for item in items):
@@ -272,7 +277,7 @@ def queue_submission(repo, data, tasks, batch=False):
         payloads = [data]
     result, seen, targets = [], set(), set()
     for payload in payloads:
-        request = prepare_request(payload, tasks, value)
+        request = prepare_request(payload, tasks, value, receipts)
         if request["id"] in seen or batch and request["task_key"] in targets:
             raise StateError("Each selected task and request id must be unique.")
         seen.add(request["id"])
@@ -313,15 +318,17 @@ def acknowledge(repo, request_id, status, note):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True)
-    parser.add_argument("--format", choices=("toon", "json"), default=os.environ.get("IMPROVE_FORMAT", "toon"),
-                        help="output format (default toon; IMPROVE_FORMAT overrides)")
+    toon.output_options(parser, delimiter=False, text=False)
+    shared = argparse.ArgumentParser(add_help=False)
+    toon.output_options(shared, suppress=True, delimiter=False, text=False)
     sub = parser.add_subparsers(dest="action", required=True)
-    sub.add_parser("pending", help="read pending requests and cooperative control flags")
-    ack = sub.add_parser("ack", help="acknowledge an applied or declined user request")
+    sub.add_parser("pending", parents=[shared], help="read pending requests and cooperative control flags")
+    ack = sub.add_parser("ack", parents=[shared], help="acknowledge an applied or declined user request")
     ack.add_argument("--id", required=True)
     ack.add_argument("--status", choices=("applied", "declined"), required=True)
     ack.add_argument("--note", required=True)
     args = parser.parse_args(argv)
+    toon.resolve_format(args)
     repo = Path(args.repo).expanduser().resolve()
     try:
         if args.action == "ack":

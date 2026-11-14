@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
 import support  # noqa: E402,F401  (git isolation)
 
+from support import budget  # noqa: E402
 import improve_board as board  # noqa: E402
 import improve_graph as graph  # noqa: E402
 import improve_toon as toon  # noqa: E402
@@ -143,10 +144,12 @@ class GraphEngineTests(GraphFixture):
             report = graph.refine(value, self.repo)
         self.assertEqual(report["merged"], 1)
         value = self.graph()
-        self.assertNotIn("insight:b", value["nodes"])
-        merged = value["nodes"]["insight:a"]
+        # Provenance first: the user's wording is the one kept, and the agent's note folds into it.
+        self.assertNotIn("insight:a", value["nodes"])
+        merged = value["nodes"]["insight:b"]
         self.assertEqual((merged["reinforced"], merged["source"]), (4, "user"))
-        self.assertEqual(graph.node_detail(value, "insight:b")["node"]["id"], "insight:a")
+        self.assertEqual(merged["summary"], "Run cart tests with the iOS 18 simulator")
+        self.assertEqual(graph.node_detail(value, "insight:a")["node"]["id"], "insight:b")
 
     def test_citations_and_ratings_change_confidence_and_fade_knowledge(self):
         with graph.locked(self.repo) as value:
@@ -259,7 +262,7 @@ class GraphServerTests(GraphFixture):
         body = json.dumps(data).encode() if data is not None else None
         headers = {**({"Content-Type": "application/json"} if body else {}), **(headers or {})}
         with build_opener(ProxyHandler({})).open(Request(self.url + path, data=body, headers=headers,
-                                                         method="POST" if body else "GET"), timeout=5) as response:
+                                                         method="POST" if body else "GET"), timeout=budget(5)) as response:
             return json.load(response)
 
     def post(self, data):

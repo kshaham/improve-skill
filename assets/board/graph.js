@@ -24,6 +24,27 @@ const KIND_LABELS = {
   fact: "Fact",
 };
 const STATUS_COLORS = { done: "#2d8b66", rejected: "#9a9ead", blocked: "#c2410c" };
+// CSS classes built from graph data come only from these fixed sets.
+const GRAPH_RELATIONS = new Set([
+  "about", "relates_to", "causes", "fixes", "avoids", "depends_on", "supersedes", "used_in",
+  "in_run", "in_area", "touches", "verified_by", "blocked_by", "co_changed",
+  "applies_to", "co_cited", "similar_to", "affects", "contradicts", "via_task",
+]);
+const GRAPH_TYPE_IDS = new Set(GRAPH_TYPES.map((row) => row[0]));
+const LINK_TIERS = {
+  recorded: ["recorded", "Written by an agent or by you"],
+  observed: ["observed", "Observed in ledgers, git history, or code"],
+  inferred: ["inferred", "Inferred by dreaming from evidence"],
+};
+const QUESTION_KINDS = {
+  contested: "Contested",
+  contradiction: "Contradiction",
+  changed: "Code changed",
+  gap: "Gap",
+  bridge: "Bridge file",
+  loose: "Loose group",
+};
+const graphClass = (prefix, value, allowed) => (allowed.has(value) ? " " + prefix + value : "");
 let graphData = null,
   graphRevision = null,
   graphKey = "",
@@ -37,6 +58,7 @@ let graphData = null,
   graphPendingTask = null,
   graphKeepStatus = false,
   taskKnowledgeKey = "",
+  questionsKey = "",
   graphTypes = new Set(GRAPH_DEFAULT_TYPES);
 const graphLayout = new GraphLayout(),
   graphViewport = { scale: 1, x: 0, y: 0 },
@@ -193,7 +215,7 @@ function drawGraph() {
   graphElements.nodes = new Map();
   graphElements.edges = graphData.edges.map((edge) => {
     const line = svg("line", {
-      class: "graph-edge rel-" + edge.rel + (edge.inferred ? " inferred" : ""),
+      class: "graph-edge" + graphClass("rel-", edge.rel, GRAPH_RELATIONS) + (edge.inferred ? " inferred" : ""),
       "stroke-width": String(Math.min(4, 0.8 + 0.5 * (edge.weight || 1))),
     });
     line.dataset.src = edge.src;
@@ -204,8 +226,8 @@ function drawGraph() {
   for (const node of nodes) {
     const group = svg("g", {
       class:
-        "graph-node type-" +
-        node.type +
+        "graph-node" +
+        graphClass("type-", node.type, GRAPH_TYPE_IDS) +
         (node.archived ? " archived" : "") +
         (node.pinned ? " pinned" : "") +
         (node.stale ? " stale" : "") +
@@ -377,6 +399,8 @@ function renderNodeDetail({ node, links }) {
   if (node.source === "user") header.append(element("span", "graph-chip", "From you"));
   if (node.archived) header.append(element("span", "graph-chip muted-chip", "Archived"));
   if (node.stale) header.append(element("span", "graph-chip muted-chip", "File no longer tracked"));
+  const changed = codeChangedFiles(node);
+  if (changed.length) header.append(element("span", "graph-chip warn-chip", "Code changed since recorded"));
   const title = element("h3", "", node.label);
   const parts = [header, title];
   if (node.summary && node.summary !== node.label) parts.push(element("p", "graph-summary", node.summary));
@@ -389,6 +413,7 @@ function renderNodeDetail({ node, links }) {
   detailFact(facts, "Status", node.status && (labels[node.status] || node.status));
   detailFact(facts, "Area", node.area);
   if (node.verdict) detailFact(facts, "Verdict", node.verdict === "proven" ? "Proven by outcomes" : "Contested: outcomes are mixed");
+  if (changed.length) detailFact(facts, "Re-verify", "Changed since this was recorded: " + changed.join(", "));
   if (node.restored)
     detailFact(facts, "Restored", `${relativeTime(node.restored.at)} (${node.restored.reason})`);
   if (node.type === "insight") {
@@ -440,7 +465,7 @@ function renderNodeDetail({ node, links }) {
     groups.get(key).push(link);
   }
   for (const [rel, rows] of groups) {
-    const section = element("section", "graph-links");
+    const section = element("section", "graph-links" + (rel === "contradicts" ? " contradicts" : ""));
     section.append(element("h4", "", `${rel} · ${rows.length}`));
     const list = element("ul");
     for (const row of rows.slice(0, 12)) {
@@ -453,6 +478,11 @@ function renderNodeDetail({ node, links }) {
       if (row.inferred) {
         button.append(element("small", "inferred-tag", `inferred ${Math.round((row.confidence || 0) * 100)}%`));
         button.title = `Inferred by dreaming (${row.rule}). Evidence: ${row.evidence || "none recorded"}`;
+      } else if (LINK_TIERS[row.tier]) {
+        const [label, hint] = LINK_TIERS[row.tier];
+        const tag = element("small", "tier-tag tier-" + label, label);
+        tag.title = hint;
+        button.append(tag);
       }
       button.addEventListener("click", () => selectGraphNode(row.id));
       const item = element("li");
@@ -532,7 +562,47 @@ function renderGraphLists() {
         })
       : [element("li", "focus-hint", "No overlapping knowledge to consolidate.")]),
   );
+  $("graph-gaps").replaceChildren(
+    ...(graphData.gaps?.length
+      ? graphData.gaps.map((row) =>
+          button(`${row.file}: ${row.done} of ${row.attempts} attempts verified, nothing recorded about why`, row.id),
+        )
+      : [element("li", "focus-hint", "No file keeps failing without knowledge about it.")]),
+  );
   loadForgotten();
+  loadQuestions();
+}
+
+// Questions are recomputed only when the graph revision changes.
+async function loadQuestions() {
+  const key = String(graphRevision);
+  if (key === questionsKey) return;
+  questionsKey = key;
+  try {
+    const result = await boardJSON("/api/graph/questions");
+    $("graph-questions").replaceChildren(
+      ...(result.questions.length
+        ? result.questions.map((row) => {
+            const item = element("li", "question-row");
+            item.append(element("small", "question-kind", QUESTION_KINDS[row.kind] || "Question"));
+            if (row.node) {
+              const open = element("button", "link-button", row.question);
+              open.type = "button";
+              open.addEventListener("click", () => selectGraphNode(row.id, { focus: true }));
+              item.append(open);
+            } else item.append(element("span", "", row.question));
+            return item;
+          })
+        : [element("li", "focus-hint", "Nothing needs a closer look right now.")]),
+    );
+  } catch (error) {
+    questionsKey = "";
+    $("graph-questions").replaceChildren(element("li", "form-error", "Could not read suggested questions. " + error.message));
+  }
+}
+
+function codeChangedFiles(row) {
+  return Array.isArray(row.code_changed) ? row.code_changed.filter((path) => typeof path === "string") : [];
 }
 
 let forgottenLimit = 8,
@@ -699,25 +769,63 @@ async function renderTaskKnowledge(task) {
   }
 }
 
+function knowledgeBadge(kind, text, title) {
+  const badge = element("span", "knowledge-badge " + kind, text);
+  if (title) badge.title = title;
+  return badge;
+}
+
+// Badges say when knowledge may no longer hold: its files changed, other knowledge
+// contradicts it, or outcomes are mixed.
+function insightBadges(row) {
+  const badges = [];
+  const changed = codeChangedFiles(row);
+  if (changed.length)
+    badges.push(knowledgeBadge("changed", "Code changed", "Re-verify: " + changed.join(", ") + " changed since this was recorded."));
+  const against = Array.isArray(row.contradicted_by) ? row.contradicted_by.filter((id) => typeof id === "string") : [];
+  for (const [index, id] of against.entries()) {
+    const link = element("button", "link-button knowledge-badge contradicted", against.length > 1 ? "Contradicted " + (index + 1) : "Contradicted");
+    link.type = "button";
+    link.title = "Open the knowledge that says otherwise";
+    link.addEventListener("click", () => openGraphNode(id));
+    badges.push(link);
+  }
+  if (row.verdict === "contested") badges.push(knowledgeBadge("contested", "Contested", "Outcomes of tasks that used it are mixed."));
+  else if (row.verdict === "proven") badges.push(knowledgeBadge("proven", "Proven", "Tasks that used it were verified."));
+  return badges;
+}
+
 function taskKnowledgeParts(result) {
   const parts = [];
-  const list = (title, rows, render) => {
-    if (!rows.length) return;
+  const list = (title, rows, render, extras = () => [], rowClass = () => "") => {
+    if (!rows?.length) return;
     const block = element("div", "knowledge-block");
     const items = element("ul");
     for (const row of rows) {
-      const item = element("li");
+      const item = element("li", rowClass(row));
       const view = element("button", "link-button", render(row));
       view.type = "button";
       view.title = "View in the knowledge graph";
       view.addEventListener("click", () => openGraphNode(row.id));
-      item.append(view);
+      item.append(view, ...extras(row));
       items.append(item);
     }
     block.append(element("h4", "", title), items);
     parts.push(block);
   };
-  for (const row of result.files)
+  const plain = (title, lines) => {
+    if (!lines.length) return;
+    const block = element("div", "knowledge-block");
+    const items = element("ul");
+    for (const [text, extras] of lines) {
+      const item = element("li", "", text);
+      if (extras) item.append(...extras);
+      items.append(item);
+    }
+    block.append(element("h4", "", title), items);
+    parts.push(block);
+  };
+  for (const row of result.files || [])
     parts.push(
       element(
         "p",
@@ -727,12 +835,42 @@ function taskKnowledgeParts(result) {
           (row.stale ? " (no longer tracked)" : ""),
       ),
     );
-  list("Knowledge to apply", result.insights, (row) => `${KIND_LABELS[row.kind] || "Fact"}: ${row.summary || row.label}`);
-  list("Earlier attempts nearby", result.past_tasks.slice(0, 5), (row) =>
+  list("Knowledge to apply", result.insights, (row) => `${KIND_LABELS[row.kind] || "Fact"}: ${row.summary || row.label}`, insightBadges);
+  list("Earlier attempts nearby", (result.past_tasks || []).slice(0, 5), (row) =>
     `${labels[row.status] || row.status || "Task"}: ${row.label}` + (row.outcome_note ? ` (${shortLabel(row.outcome_note, 90)})` : ""),
   );
-  list("Blockers seen here", result.blockers, (row) => row.label);
+  list(
+    "Blockers seen here",
+    result.blockers,
+    (row) => row.label,
+    (row) => (row.resolved ? [knowledgeBadge("resolved", "Resolved", "Later work on these files got past it.")] : []),
+    (row) => (row.resolved ? "resolved" : ""),
+  );
+  list("Gates that verified work here", result.gates, (row) =>
+    row.label + (Number.isFinite(row.seconds) ? ` · ${row.seconds} s` : ""),
+  );
   list("Usually changed together", result.co_changed, (row) => row.label);
+  const code = result.code || {};
+  plain(
+    "Code that depends on these files",
+    (code.dependents || []).map((row) => {
+      // `site` is "path:line" when the code layer knows where the dependency is.
+      const file = String(row.file),
+        site = typeof row.site === "string" && row.site.startsWith(file) ? row.site : file;
+      return [site + (row.via ? " · " + String(row.via) : ""), row.test ? [knowledgeBadge("test", "test")] : null];
+    }),
+  );
+  plain("Imports", (code.imports || []).map((path) => [String(path)]));
+  plain(
+    "Notes in the code",
+    (code.notes || []).map((row) => [`${row.tag} ${row.path}:${row.line}: ${shortLabel(String(row.text || ""), 160)}`]),
+  );
+  plain(
+    "Module group",
+    (result.groups || []).map((row) => [
+      `${row.label} · ${countText(row.size)} files · cohesion ${Number(row.cohesion).toFixed(2)}`,
+    ]),
+  );
   if (!parts.length)
     parts.push(element("p", "focus-hint", "Nothing recorded yet for this task's files or area. The skill will add what it learns."));
   return parts;
