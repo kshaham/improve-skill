@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
 
@@ -39,6 +40,18 @@ def serving(repo):
         server.shutdown()
         server.server_close()
         thread.join(timeout=budget(2))
+
+
+class BindTests(unittest.TestCase):
+    def test_binding_does_not_look_up_the_host_name(self):
+        # The lookup took 35 seconds on a macOS CI runner, longer than start_board waits for the board.
+        with mock.patch("socket.getfqdn", side_effect=AssertionError("the board looked up its host name")):
+            server = board.BoardServer(("127.0.0.1", 0), board.BoardHandler)
+        try:
+            self.assertEqual(server.server_name, "127.0.0.1")
+            self.assertGreater(server.server_port, 0)
+        finally:
+            server.server_close()
 
 
 class BoardFixture(unittest.TestCase):

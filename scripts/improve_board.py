@@ -16,6 +16,7 @@ import re
 import secrets
 import shlex
 import signal
+import socketserver
 import sqlite3
 import stat
 import subprocess
@@ -805,6 +806,13 @@ def board_status(repo):
 
 class BoardServer(ThreadingHTTPServer):
     daemon_threads = True
+
+    def server_bind(self):
+        # HTTPServer.server_bind also resolves the bind address to a host name. Where the resolver
+        # is slow that lookup blocks for tens of seconds (35 on a macOS CI runner), longer than
+        # start_board waits. The board never uses the name, so bind without the lookup.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 class BoardHandler(BaseHTTPRequestHandler):
