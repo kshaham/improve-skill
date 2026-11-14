@@ -477,6 +477,35 @@ class ScaleTests(unittest.TestCase):
         self.assertLess(len(document), 1_500_000, "the TOON document stays bounded")
         self.assertLess(sum(len(text) for text in rendered.values()), 1_500_000)
 
+class RealDreamRecordTests(unittest.TestCase):
+    """The structures improve_dream writes, not hand-made ones: proposals carry member ids,
+    gaps carry file statistics, and a merged note leaves an alias."""
+
+    def graph(self):
+        value = wiki_graph(areas=["ui"], notes={"insight:a": "Cache the snapshot between polls",
+                                                 "insight:b": "Cache the board snapshot for five seconds"})
+        value["dream"]["proposals"] = [{"id": "dream:4f9d", "members": ["insight:a", "insight:b"], "strength": 0.8,
+                                        "kinds": ["technique"], "created_tick": 2}]
+        value["dream"]["gaps"] = [{"file": "src/flaky.py", "id": "file:src/flaky.py", "attempts": 5, "done": 0}]
+        return value
+
+    def test_proposals_show_their_notes_and_gaps_read_as_sentences(self):
+        pages, _ = wiki.pages(self.graph(), None, "t1", "run-1")
+        dreams = wiki.render(pages)["dreams"]
+        self.assertIn("Cache the snapshot between polls", dreams[dreams.index("## Consolidation proposals"):])
+        self.assertIn("Cache the board snapshot for five seconds", dreams[dreams.index("## Consolidation proposals"):])
+        self.assertIn("src/flaky.py: 0/5 attempts verified, nothing recorded about why", dreams)
+        self.assertNotIn('{"file"', dreams)
+
+    def test_a_merge_names_the_note_it_went_into(self):
+        value = self.graph()
+        _, manifest = wiki.pages(value, None, "t1", "run-1")
+        del value["nodes"]["insight:a"]
+        value["aliases"] = {"insight:a": "insight:b"}
+        pages, _ = wiki.pages(value, manifest, "t2", "run-2")
+        changes = wiki.render(pages)["changes"]
+        self.assertIn('merged into "Cache the board snapshot for five seconds"', changes)
+
 def wiki_graph(areas=(), notes=None):
     """A minimal in-memory graph with the fields the wiki reads."""
     nodes, edges = {}, {}

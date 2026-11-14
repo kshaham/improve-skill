@@ -162,7 +162,9 @@ def removal_reason(graph, node_id):
         return reason if isinstance(reason, str) else "archived"
     target = (graph.get("aliases") or {}).get(node_id)
     if target:
-        return f"merged into {target}"
+        merged = graph["nodes"].get(target) or {}
+        words = merged.get("summary") or merged.get("label")
+        return f'merged into "{clip(words, 120)}"' if words else f"merged into {target}"
     return "forgotten (the graph's history keeps it)"
 
 
@@ -225,6 +227,16 @@ def area_pages(nodes, rows, by_file):
     return result, summaries, len(files)
 
 
+def gap_text(row):
+    """A knowledge gap as a sentence: a file whose tasks keep failing with nothing recorded."""
+    if isinstance(row, str):
+        return row
+    if row.get("file"):
+        return (f"{row['file']}: {row.get('done', 0)}/{row.get('attempts', 0)} attempts verified, "
+                "nothing recorded about why")
+    return row.get("text") or row.get("label") or json.dumps(row)
+
+
 def dreams_page(graph, contradicting):
     """The latest dream: what it inferred, archived, and forgot, its proposals and gaps, and the
     notes that contradict each other."""
@@ -238,13 +250,15 @@ def dreams_page(graph, contradicting):
                          "dropped": inferred.get("dropped", 0)},
             "archived": latest.get("archived", 0), "forgotten": latest.get("forgotten", 0),
             "proven": latest.get("proven", 0), "contested": latest.get("contested", 0),
+            # A proposal names its member notes; show their words, which is what a person merges.
             "proposals": [{"id": row.get("id", ""), "members": len(row.get("members") or []),
-                           "text": clip(row.get("text") or row.get("summary") or "")}
+                           "text": clip(" / ".join(text(member) for member in row.get("members") or []
+                                                   if member in nodes) or row.get("text") or "")}
                           for row in (dream.get("proposals") or [])[:ROWS_PER_CHANGE]],
             "contradictions": [{"a": left, "a_text": text(left), "b": right, "b_text": text(right),
                                 "confidence": round(confidence, 2)}
                                for left, right, confidence in contradicting[:ROWS_PER_CHANGE]],
-            "gaps": [clip(row if isinstance(row, str) else row.get("text") or row.get("label") or json.dumps(row))
+            "gaps": [clip(gap_text(row))
                      for row in (dream.get("gaps") or [])[:ROWS_PER_CHANGE]]}
 
 
