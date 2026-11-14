@@ -272,6 +272,47 @@ class PhoneLayoutTests(unittest.TestCase):
         self.assertIn("flex: 1 1 0;", body)
         self.assertNotIn("min-width", body)
 
+
+class ShapeAndDepthTests(unittest.TestCase):
+    """Eleven corner radii and nine one-off shadows had no system; buttons gave no hover feedback."""
+
+    def body(self):
+        return CSS[CSS.index(':root[data-theme="dark"]'):]
+
+    def test_corner_radii_come_from_a_small_scale(self):
+        allowed = re.compile(r"^(var\(--radius(-[a-z]+)?\)|50%|999px|0|[1-3]px)(\s+(var\(--radius(-[a-z]+)?\)|0|[1-3]px))*$")
+        odd = [value.strip() for value in re.findall(r"(?<![-\w])border-radius:\s*([^;]+);", self.body())
+               if not allowed.match(value.strip())]
+        self.assertEqual(odd, [], "radii outside the scale")
+        light, dark, _ = token_blocks()
+        for name in ("--radius-xs", "--radius-sm", "--radius", "--radius-lg"):
+            self.assertIn(name, light)
+            self.assertEqual(light[name], dark[name])
+
+    def test_depth_comes_from_shadow_tokens(self):
+        shadows = [value.strip() for value in re.findall(r"(?<![-\w])box-shadow:\s*([^;]+);", self.body())]
+        # Rings (0 0 0 Npx) mark focus, selection, and pressed states; everything else is a token.
+        odd = [value for value in shadows if not value.startswith("var(--shadow") and not value.startswith("0 0 0")
+               and value != "none"]
+        self.assertEqual(odd, [], "one-off shadows")
+        light, dark, _ = token_blocks()
+        for name in ("--shadow-1", "--shadow-2", "--shadow-3"):
+            self.assertIn(name, light)
+            self.assertIn(name, dark)
+
+    def test_card_hover_shadow_animates_with_the_lift(self):
+        card = re.search(r"\n\.task-card \{([^}]*)\}", CSS).group(1)
+        hover = re.search(r"\n\.task-card:hover \{([^}]*)\}", CSS).group(1)
+        self.assertIn("box-shadow", hover)
+        self.assertIn("box-shadow", card[card.index("transition"):], "the hover shadow eases with the lift")
+
+    def test_buttons_answer_hover_and_press_without_beating_class_styles(self):
+        self.assertIn("button:where(:hover:not(:disabled)) {", CSS)
+        self.assertIn("button:where(:active:not(:disabled)) {", CSS)
+        base = "".join(re.findall(r"\nbutton \{([^}]*)\}", CSS))
+        self.assertIn("transition:", base)
+        self.assertIn("prefers-reduced-motion: reduce", CSS)
+
 class TypeScaleTests(unittest.TestCase):
     def test_no_board_text_is_smaller_than_11px(self):
         # Card ids, priorities, card footers, row ids and dates, badges and counts were 9-10.5px.

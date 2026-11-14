@@ -46,6 +46,15 @@
   --chip-ink-s: 52%;
   --chip-ink-l: 27%;
   --tile-l: 97%;
+  --radius-xs: 5px;
+  --radius-sm: 7px;
+  --radius: 9px;
+  --radius-lg: 12px;
+  --shadow-1: 0 1px 2px rgb(8 20 14 / 0.05), 0 1px 1px rgb(8 20 14 / 0.03);
+  --shadow-2: 0 10px 24px -10px rgb(8 20 14 / 0.22), 0 2px 4px rgb(8 20 14 / 0.05);
+  --shadow-3: 0 24px 80px rgb(4 14 9 / 0.26);
+  --shadow-up: 0 -4px 16px rgb(8 20 14 / 0.06);
+  --shadow-accent: 0 6px 16px rgb(14 129 89 / 0.35);
   --canvas: #10233f;
   --canvas-dot: #203a5e;
   --canvas-ink: #e9f0f8;
@@ -101,6 +110,15 @@
     --chip-ink-s: 60%;
     --chip-ink-l: 76%;
     --tile-l: 14%;
+    --radius-xs: 5px;
+    --radius-sm: 7px;
+    --radius: 9px;
+    --radius-lg: 12px;
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 0.45);
+    --shadow-2: 0 12px 28px -10px rgb(0 0 0 / 0.65), 0 2px 4px rgb(0 0 0 / 0.3);
+    --shadow-3: 0 24px 80px rgb(0 0 0 / 0.6);
+    --shadow-up: 0 -4px 16px rgb(0 0 0 / 0.4);
+    --shadow-accent: 0 6px 16px rgb(60 203 139 / 0.3);
     --canvas: #0b1a30;
     --canvas-dot: #1b3150;
     --canvas-ink: #e9f0f8;
@@ -156,6 +174,15 @@
   --chip-ink-s: 60%;
   --chip-ink-l: 76%;
   --tile-l: 14%;
+  --radius-xs: 5px;
+  --radius-sm: 7px;
+  --radius: 9px;
+  --radius-lg: 12px;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.45);
+  --shadow-2: 0 12px 28px -10px rgb(0 0 0 / 0.65), 0 2px 4px rgb(0 0 0 / 0.3);
+  --shadow-3: 0 24px 80px rgb(0 0 0 / 0.6);
+  --shadow-up: 0 -4px 16px rgb(0 0 0 / 0.4);
+  --shadow-accent: 0 6px 16px rgb(60 203 139 / 0.3);
   --canvas: #0b1a30;
   --canvas-dot: #1b3150;
   --canvas-ink: #e9f0f8;
@@ -232,7 +259,7 @@ a {
   display: grid;
   place-items: center;
   background: var(--accent);
-  border-radius: 9px;
+  border-radius: var(--radius);
   margin-right: 9px;
   font-size: 28px;
   color: var(--on-accent);
@@ -253,7 +280,7 @@ a {
 }
 .nav-item {
   padding: 12px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--sidebar-2);
   display: flex;
   align-items: center;
@@ -381,10 +408,25 @@ button {
   border: 1px solid var(--line);
   background: var(--surface);
   color: var(--ink-2);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   padding: 9px 14px;
   font-size: 12px;
   font-weight: 550;
+  transition:
+    background-color 0.12s,
+    border-color 0.12s,
+    color 0.12s,
+    box-shadow 0.12s,
+    transform 0.12s;
+}
+/* Hover and press feedback at element specificity, so every class rule (tabs, link buttons, the
+   phone navigation, primary actions) keeps its own look. Reduced motion turns transitions off. */
+button:where(:hover:not(:disabled)) {
+  border-color: var(--soft);
+  color: var(--ink);
+}
+button:where(:active:not(:disabled)) {
+  transform: translateY(1px);
 }
 .actions button span {
   margin-left: 5px;
@@ -401,7 +443,7 @@ button {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   overflow: hidden;
 }
@@ -440,7 +482,7 @@ button {
 .run-badge {
   background: var(--accent-soft);
   color: var(--accent-ink);
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   padding: 5px 9px;
   flex-shrink: 0;
   font-weight: 550;
@@ -456,7 +498,7 @@ button {
   margin: -10px 0 24px;
   padding: 13px 16px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--surface);
   color: var(--ink-2);
   font-size: 12px;
@@ -479,7 +521,7 @@ button {
 .warning {
   background: var(--warn-bg);
   border: 1px solid var(--warn-line);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   padding: 12px 15px;
   margin-bottom: 18px;
   color: var(--warn-fg);
@@ -500,7 +542,7 @@ button {
   gap: 9px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   padding: 0 12px;
   flex: 0 1 340px;
   min-width: 140px;
@@ -538,7 +580,7 @@ button {
   background: var(--surface);
   color: var(--ink-2);
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 8px;
   font-size: 11px;
 }
@@ -559,7 +601,7 @@ button {
 .column {
   background: var(--surface-3);
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   padding: 12px;
   min-height: 278px;
 }
@@ -594,7 +636,7 @@ button {
 }
 .column-count {
   margin-left: auto;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--line);
   color: var(--muted);
   min-width: 22px;
@@ -613,18 +655,20 @@ button {
   display: block;
   position: relative;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--radius);
   background: var(--surface);
   padding: 14px;
-  box-shadow: 0 1px 2px rgb(8 20 14 / 0.04);
+  box-shadow: var(--shadow-1);
   color: var(--ink);
   transition:
     border-color 0.15s,
+    box-shadow 0.15s,
     transform 0.15s;
 }
 .task-card:hover {
   border-color: var(--accent-line);
   transform: translateY(-1px);
+  box-shadow: var(--shadow-2);
 }
 .column[data-status="in_progress"] .task-card {
   border-top: 2px solid var(--accent);
@@ -681,7 +725,7 @@ button {
 .area-tag {
   background: var(--neutral-soft);
   color: var(--neutral-ink);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   padding: 3px 6px;
   font-weight: 550;
   max-width: 70%;
@@ -697,14 +741,14 @@ button {
   color: var(--muted);
   font-size: 11px;
   border: 1px dashed var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .empty-state {
   text-align: center;
   padding: 28px 20px 35px;
   border: 1px dashed var(--soft);
   margin-bottom: 20px;
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--surface-2);
 }
 .empty-state > span {
@@ -747,7 +791,7 @@ button {
   border: 1px solid var(--line);
   background: var(--surface);
   padding: 13px 15px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   min-width: 0;
 }
 .investigation strong {
@@ -776,8 +820,8 @@ dialog {
   padding: 26px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: 0 24px 80px rgb(4 14 9 / 0.26);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
   color: var(--ink);
 }
 dialog::backdrop {
@@ -1007,7 +1051,7 @@ dialog h2 {
 }
 .view-count {
   padding: 2px 7px;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: var(--surface-3);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
@@ -1035,7 +1079,7 @@ dialog h2 {
   gap: 14px;
   padding: 22px;
   border: 1px dashed var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   margin-bottom: 22px;
 }
 .active-empty > span {
@@ -1098,7 +1142,7 @@ dialog h2 {
 .report-picker select {
   padding: 8px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
 }
@@ -1119,7 +1163,7 @@ dialog h2 {
 .work-toolbar select {
   padding: 7px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
 }
@@ -1146,7 +1190,7 @@ dialog h2 {
   width: 100%;
   padding: 8px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .row-priority {
   font-size: 11px;
@@ -1211,7 +1255,7 @@ dialog h2 {
 .overview-metrics > div {
   padding: 18px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
 }
 .overview-metrics span {
@@ -1228,7 +1272,7 @@ dialog h2 {
 .overview-table {
   overflow-x: auto;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   margin-bottom: 25px;
   background: var(--surface);
 }
@@ -1254,7 +1298,7 @@ dialog h2 {
 }
 .activity-list {
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   background: var(--surface);
 }
@@ -1343,7 +1387,7 @@ dialog h2 {
 .task-rows {
   border: 1px solid var(--line);
   background: var(--surface);
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 .task-rows:empty {
@@ -1412,7 +1456,7 @@ dialog h2 {
 }
 .row-outcome {
   justify-self: start;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   padding: 3px 7px;
   font-size: 11px;
 }
@@ -1459,7 +1503,7 @@ dialog h2 {
   padding: 35px 16px;
   text-align: center;
   background: var(--surface-3);
-  border-radius: 8px;
+  border-radius: var(--radius);
   font-size: 13px;
   color: var(--muted);
 }
@@ -1538,7 +1582,7 @@ dialog h2 {
   margin: 18px 0 22px;
   padding: 18px 20px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
 }
 .control-heading,
@@ -1588,7 +1632,7 @@ button.danger {
   flex-wrap: wrap;
   padding: 14px;
   background: var(--surface-2);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 .task-controls button {
   font-size: 12px;
@@ -1611,7 +1655,7 @@ button.danger {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
   font: inherit;
@@ -1645,7 +1689,7 @@ button.danger {
 }
 .request-list {
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   background: var(--surface);
 }
@@ -1694,7 +1738,7 @@ button.danger {
 .request-badge {
   font-size: 11px;
   padding: 3px 7px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 .request-badge.pending {
   background: var(--warn-bg);
@@ -1829,7 +1873,7 @@ button.danger {
   margin: 0 0 22px;
   padding: 18px 20px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   background: linear-gradient(180deg, var(--surface-2) 0, var(--surface) 70px);
 }
 .focus-panel.collapsed #focus-body {
@@ -1902,7 +1946,7 @@ button.danger {
   min-width: 0;
   border: 1px solid var(--line);
   border-top: 3px solid hsl(var(--hue) 55% 72%);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 10px 12px 12px;
   background: var(--surface);
   transition:
@@ -1914,7 +1958,7 @@ button.danger {
   border-color: hsl(var(--hue) 50% 70%);
   border-top-color: hsl(var(--hue) 60% 50%);
   background: hsl(var(--hue) var(--chip-s) var(--tile-l));
-  box-shadow: 0 2px 8px hsl(var(--hue) 50% 50% / 0.12);
+  box-shadow: var(--shadow-2);
 }
 .focus-tile[data-level="skip"] {
   background: var(--surface-3);
@@ -1963,7 +2007,7 @@ button.danger {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 .focus-level {
@@ -2024,7 +2068,7 @@ button.danger {
 #focus-note {
   flex: 1 1 260px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   padding: 8px 10px;
   font-size: 12px;
 }
@@ -2088,7 +2132,7 @@ button.danger {
   height: 7px;
   border: 1.5px solid currentColor;
   border-top: 0;
-  border-radius: 0 0 6px 6px;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
 }
 .voice-button {
   display: inline-flex;
@@ -2177,14 +2221,14 @@ button.danger {
 .voice-dialog select {
   font-family: inherit;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   padding: 9px 10px;
   font-size: 14px;
 }
 .voice-preview {
   border: 1px solid var(--accent-line);
   background: var(--surface-2);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 10px 12px 2px;
   margin-bottom: 10px;
 }
@@ -2380,7 +2424,7 @@ button.danger {
   max-width: 100vw;
   max-height: 92vh;
   margin: auto 0 0;
-  border-radius: 16px 16px 0 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
 }
 .mobile .mobile-nav {
@@ -2394,7 +2438,7 @@ button.danger {
   background: var(--surface);
   border-top: 1px solid var(--line);
   padding: 6px 2px calc(6px + env(safe-area-inset-bottom, 0px));
-  box-shadow: 0 -4px 16px rgb(8 20 14 / 0.06);
+  box-shadow: var(--shadow-up);
 }
 .mobile-nav button {
   position: relative;
@@ -2426,7 +2470,7 @@ button.danger {
   background: var(--accent);
   color: var(--on-accent);
   place-items: center;
-  box-shadow: 0 6px 16px rgb(14 129 89 / 0.35);
+  box-shadow: var(--shadow-accent);
 }
 .nav-steer .mic-icon {
   transform: scale(1.7);
@@ -2502,7 +2546,7 @@ button.danger {
   text-align: left;
   padding: 12px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   color: var(--ink);
   transition:
@@ -2514,7 +2558,7 @@ button.danger {
 .category-tile:hover:not(:disabled) {
   border-color: hsl(var(--hue) 50% 70%);
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px hsl(var(--hue) 40% 50% / 0.12);
+  box-shadow: var(--shadow-2);
 }
 .category-glyph {
   grid-row: span 2;
@@ -2522,7 +2566,7 @@ button.danger {
   height: 34px;
   display: grid;
   place-items: center;
-  border-radius: 9px;
+  border-radius: var(--radius);
   font-size: 17px;
   background: hsl(var(--hue) var(--chip-s) var(--chip-l));
   color: hsl(var(--hue) var(--chip-ink-s) var(--chip-ink-l));
@@ -2591,7 +2635,7 @@ button.danger {
 .learning-panel {
   margin-top: 24px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   padding: 16px 18px;
 }
@@ -2671,7 +2715,7 @@ button.danger {
 }
 .graph-order select {
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   padding: 7px 10px;
   background: var(--surface);
   color: var(--ink);
@@ -2680,7 +2724,7 @@ button.danger {
   flex: 1;
   min-width: 0;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   padding: 7px 10px;
   background: var(--surface);
 }
@@ -2727,7 +2771,7 @@ button.danger {
   position: relative;
   min-width: 0;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   background:
     radial-gradient(circle at 1px 1px, var(--canvas-dot) 1px, transparent 0) 0 0 / 22px 22px,
     var(--canvas);
@@ -2839,7 +2883,7 @@ button.danger {
   color: var(--muted);
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   padding: 4px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   pointer-events: none;
 }
 .graph-empty {
@@ -2854,7 +2898,7 @@ button.danger {
 }
 .graph-detail {
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   padding: 14px 16px;
   max-height: min(62vh, 560px);
@@ -2944,7 +2988,7 @@ button.danger {
   width: 100%;
   text-align: left;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 4px 6px;
   font-weight: 450;
 }
@@ -2972,7 +3016,7 @@ button.danger {
 }
 .graph-lists {
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   padding: 16px 18px;
 }
@@ -3097,7 +3141,7 @@ summary:focus-visible {
   border: 1px dashed var(--line);
   background: var(--surface);
   color: var(--accent-ink);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
 }
 /* Run health: live ages, supervisor counters, the cycle timeline, and operational views. */
@@ -3223,7 +3267,7 @@ summary:focus-visible {
   overflow: auto;
   margin: 12px 0 0;
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--surface-3);
   font:
     12px/1.7 ui-monospace,
@@ -3236,7 +3280,7 @@ summary:focus-visible {
 }
 .quarantine-item {
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 12px;
 }
 .quarantine-heading {
@@ -3250,7 +3294,7 @@ summary:focus-visible {
   display: block;
   margin-top: 8px;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--surface-3);
   font:
     12px/1.5 ui-monospace,
@@ -3279,7 +3323,7 @@ summary:focus-visible {
   margin: -8px 0 18px;
   padding: 10px 14px;
   border: 1px solid var(--warn-line);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--warn-bg);
   color: var(--warn-fg);
   font-size: 13px;
