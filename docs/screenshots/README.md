@@ -15,10 +15,16 @@ generated mockups.
 | [board.png](board.png)       | Run controls and the current run's working columns |
 | [history.png](history.png)   | Current run's completed work in compact rows       |
 | [overview.png](overview.png) | Current run's area totals and recorded activity    |
+| [wiki.png](wiki.png)         | Knowledge > Wiki overview built at session end      |
 
 No background improvement daemon was running, so the run controls are unavailable. The
 Knowledge tab shows 0 because the copy has no knowledge graph. Screenshots are a snapshot:
 their counts and task statuses will differ from the live board as work continues.
+
+wiki.png was captured the same way from `improve/2026-11-14-2` at commit `bd6f2eb`. The
+copy also held this repository's knowledge graph and its run was marked finished, then the
+documented `improve_graph.py sync --dream` built the wiki from it. The notes, areas and
+session shown are this repository's own.
 
 To refresh them:
 
@@ -31,7 +37,9 @@ To refresh them:
 4. Open `#view=history&run=current&outcome=done`, then `#view=overview&run=current`.
    For these views, scroll the tab bar to 24 pixels below the top of the viewport, or as far
    as the page allows.
-5. Save each viewport as the matching PNG above. Inspect the images and update this
+5. For the wiki, open `#view=graph&run=current`, choose **Wiki**, and scroll the tab bar to
+   24 pixels below the top. The wiki exists only after a session has finished.
+6. Save each viewport as the matching PNG above. Inspect the images and update this
    capture date/revision when replacing them. Do not fabricate task data for the gallery.
 
 The captures do not submit requests or change the run. Test-generated screenshots are

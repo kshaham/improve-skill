@@ -138,6 +138,8 @@ Switch the tab to **Wiki** to read the knowledge wiki: the graph as pages (key k
 every note by kind, one page per area, what each session added or removed, what dreaming
 found). It is rebuilt only when a session finishes, so it never shifts under a running session.
 
+![Knowledge wiki overview with key knowledge, areas, and the page list beside it](docs/screenshots/wiki.png)
+
 **Phone and voice.** A phone layout with a bottom bar and swipeable columns, a dark theme
 that follows the system, and voice steering ("focus on security and skip docs", "new task:
 add offline mode, high priority", "pause the run"). For phone access put the board behind a
