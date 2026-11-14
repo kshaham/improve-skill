@@ -251,6 +251,15 @@ class PhoneLayoutTests(unittest.TestCase):
         self.assertGreaterEqual(float(re.search(r"font-size:\s*([0-9.]+)px", label).group(1)), 11)
 
 
+    def test_phone_bottom_navigation_buttons_can_share_a_narrow_bar(self):
+        # flex: 1 0 auto with a 52px minimum needed 382px, so at 360 and 375px the bar scrolled
+        # with a hidden scrollbar and Focus was cut off.
+        body = self.rule(".mobile-nav button")
+        # Equal shares keep 52px targets at 390px; the default min-width (the label) stops a
+        # button shrinking below its text on narrower phones.
+        self.assertIn("flex: 1 1 0;", body)
+        self.assertNotIn("min-width", body)
+
 class TypeScaleTests(unittest.TestCase):
     def test_no_board_text_is_smaller_than_11px(self):
         # Card ids, priorities, card footers, row ids and dates, badges and counts were 9-10.5px.

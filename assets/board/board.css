@@ -2393,7 +2393,7 @@ button.danger {
   z-index: 20;
   background: var(--surface);
   border-top: 1px solid var(--line);
-  padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px));
+  padding: 6px 2px calc(6px + env(safe-area-inset-bottom, 0px));
   box-shadow: 0 -4px 16px rgb(8 20 14 / 0.06);
 }
 .mobile-nav button {
@@ -2401,11 +2401,10 @@ button.danger {
   display: grid;
   justify-items: center;
   gap: 2px;
-  flex: 1 0 auto;
-  min-width: 52px;
+  flex: 1 1 0;
   border: 0;
   background: none;
-  padding: 6px 2px;
+  padding: 6px 1px;
   font-size: 10px;
   color: var(--muted);
 }
