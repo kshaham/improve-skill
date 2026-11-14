@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
 import support  # noqa: E402,F401
+from support import budget  # noqa: E402
 import improve_ledger as ledger  # noqa: E402
 import improve_toon as toon  # noqa: E402
 
@@ -24,7 +25,7 @@ class LedgerCliTests(unittest.TestCase):
         self.state.mkdir()
         self.rows = [
             dict(id="q-1", area="quality", severity=3, confidence=0.9, blast=2, file="src/a.py", line=10, title="A", claim=LONG, status="ready"),
-            dict(id="q-2", area="security", severity=5, confidence=0.8, blast=4, file="src/b.py", title="B", claim="b", status="ready", user_priority="low"),
+            dict(id="q-2", area="security", severity=4, confidence=0.8, blast=4, file="src/b.py", title="B", claim="b", status="ready", user_priority="low"),
             dict(id="q-3", area="ui", severity=1, confidence=0.5, blast=1, paths=["ui/x.ts", "ui/y.ts"], title="C", claim="c", status="ready",
                  user_priority="high", focus_priority=2),
             dict(id="q-4", area="ui", severity=4, confidence=0.9, blast=4, title="D", claim="d", status="ready", user_priority="high", focus_priority=1),
@@ -48,7 +49,7 @@ class LedgerCliTests(unittest.TestCase):
     def run_cli(self, *args, env=None):
         import os
         return subprocess.run([sys.executable, str(ROOT / "scripts/improve_ledger.py"), "--repo", str(self.repo), *args],
-                              capture_output=True, text=True, timeout=30, env={**os.environ, **(env or {})})
+                              capture_output=True, text=True, timeout=budget(30), env={**os.environ, **(env or {})})
 
     def decode(self, result):
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -58,7 +59,7 @@ class LedgerCliTests(unittest.TestCase):
         view = self.decode(self.run_cli("queue"))
         self.assertEqual([row["id"] for row in view["tasks"]], ["q-4", "q-3", "q-1", "q-2"], "high priority first, then focus, then severity product; low last")
         self.assertEqual((view["total"], view["shown"]), (4, 4))
-        self.assertTrue(view["tasks"][2]["claim"].endswith("..."))
+        self.assertRegex(view["tasks"][2]["claim"], r"\u2026\[\+\d+\]$")
         self.assertLessEqual(len(view["tasks"][2]["claim"]), ledger.DEFAULT_WIDTH)
         self.assertNotIn("evidence", view["tasks"][0], "compact columns only")
         self.assertTrue(self.run_cli("queue").stdout.startswith("total: 4\nshown: 4\ntasks[4]{"), "a TOON table with one header")
@@ -73,7 +74,7 @@ class LedgerCliTests(unittest.TestCase):
         by_dir = self.decode(self.run_cli("tasks", "--file", "ui"))
         self.assertEqual([row["id"] for row in by_dir["tasks"]], ["q-3"], "paths under a directory match")
         by_file = self.decode(self.run_cli("tasks", "--file", "src/b.py", "--fields", "id,severity"))
-        self.assertEqual(by_file["tasks"], [{"id": "q-2", "severity": 5}])
+        self.assertEqual(by_file["tasks"], [{"id": "q-2", "severity": 4}])
         prefix = self.decode(self.run_cli("tasks", "--id", "q-", "--area", "ui", "--status", "ready", "--status", "blocked"))
         self.assertEqual([row["id"] for row in prefix["tasks"]], ["q-4", "q-3", "q-6"])
 
@@ -91,7 +92,8 @@ class LedgerCliTests(unittest.TestCase):
         self.assertEqual(passes["total"], 3)
         run = self.decode(self.run_cli("run"))
         self.assertEqual((run["cycle"], run["scanned_paths_count"], run["focus"]["priorities"]), (7, 3, ["ui"]))
-        self.assertNotIn("gates", run, "bulky fields stay out of the view")
+        self.assertEqual(run["gates"], {"go": "go test ./..."}, "the instructions branch on gates, so the view has them")
+        self.assertNotIn("scanned_paths", run, "bulky fields stay out of the view (a count instead)")
         as_json = self.run_cli("--format", "json", "counts")
         self.assertEqual(json.loads(as_json.stdout)["totals"]["done"], 1)
         via_env = self.run_cli("counts", env={"IMPROVE_FORMAT": "json"})
@@ -101,7 +103,8 @@ class LedgerCliTests(unittest.TestCase):
 
     def test_set_rewrites_canonically_and_validates(self):
         # A duplicate append-only row, as older writers and the supervisor once produced.
-        (self.state / "backlog.jsonl").open("a").write(json.dumps(dict(id="q-1", status="in_progress")) + "\n")
+        with (self.state / "backlog.jsonl").open("a") as stream:
+            stream.write(json.dumps(dict(id="q-1", status="in_progress")) + "\n")
         result = self.decode(self.run_cli("set", "q-1", "--status", "done", "--commit", "abc1234", "--note", "gate green",
                                           "--graph-ref", "insight:aaa", "--graph-ref", "insight:aaa", "--json-field", "line=42",
                                           "--field", "verification=go test ./... (12 passed)"))
@@ -131,17 +134,19 @@ class LedgerCliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2, payload)
 
     def test_damaged_lines_do_not_break_views_or_writes(self):
-        (self.state / "backlog.jsonl").open("a").write("{broken\n")
+        with (self.state / "backlog.jsonl").open("a") as stream:
+            stream.write("{broken\n")
         view = self.decode(self.run_cli("counts"))
         self.assertEqual(view["totals"]["total"], 6)
         self.decode(self.run_cli("set", "q-5", "--note", "still fine"))
-        self.assertNotIn("{broken", (self.state / "backlog.jsonl").read_text(), "a canonical rewrite drops the unreadable line")
+        self.assertIn("{broken", (self.state / "backlog.jsonl").read_text(),
+                      "a rewrite keeps an unreadable line where it was, for repair or quarantine to recover")
 
     def test_missing_state_is_a_clear_error(self):
         empty = Path(self.temp.name) / "other"
         empty.mkdir()
         result = subprocess.run([sys.executable, str(ROOT / "scripts/improve_ledger.py"), "--repo", str(empty), "queue"],
-                                capture_output=True, text=True, timeout=30)
+                                capture_output=True, text=True, timeout=budget(30))
         self.assertEqual(result.returncode, 0, "no ledger yet is simply an empty queue")
         self.assertEqual(toon.loads(result.stdout)["total"], 0)
 

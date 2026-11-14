@@ -18,7 +18,9 @@ from urllib.parse import urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(ROOT / "scripts"))
+from support import budget  # noqa: E402
 import improve_board as board  # noqa: E402
 import improve_control as control  # noqa: E402
 import improve_graph  # noqa: E402
@@ -37,7 +39,7 @@ def in_process_server(repo):
     finally:
         server.shutdown()
         server.server_close()
-        thread.join(timeout=2)
+        thread.join(timeout=budget(2))
 
 
 class LedgerFixture(unittest.TestCase):
@@ -200,7 +202,7 @@ class ServerTests(LedgerFixture):
 
     def request(self, path, headers=None, method="GET"):
         return build_opener(ProxyHandler({})).open(
-            Request(self.url + path, headers=headers or {}, method=method), timeout=3)
+            Request(self.url + path, headers=headers or {}, method=method), timeout=budget(3))
 
     def test_http_assets_api_and_live_ledger_updates(self):
         for path, mime in (("/", "text/html"), ("/board.js", "text/javascript"), ("/board.css", "text/css")):
@@ -380,13 +382,15 @@ class SnapshotFieldTests(LedgerFixture):
                             first_snapshot["current"]["clock"]["remaining_seconds"])
         self.assertEqual(board.snapshot_etag(second_snapshot), first,
                          "a ticking clock alone does not change the tag")
-        # A new supervisor heartbeat is content: the browser must learn the fresh age.
+        # A new heartbeat alone is liveness, not content: a paused supervisor rewrites it every
+        # five seconds, and the browser reads it from /api/health instead.
         board.atomic_json(self.state / "supervisor.json", {**board.read_json(self.state / "supervisor.json"),
-                                                            "heartbeat_at": board.stamp()})
-        with_heartbeat = board.snapshot_etag(board.board_snapshot(self.repo))
-        self.assertNotEqual(with_heartbeat, first)
+                                                            "heartbeat_at": board.stamp(time.time() + 7)})
+        with_heartbeat = board.board_snapshot(self.repo)
+        self.assertNotEqual(with_heartbeat["current"]["heartbeat_at"], first_snapshot["current"]["heartbeat_at"])
+        self.assertEqual(board.snapshot_etag(with_heartbeat), first)
         self.rows([{"id": "a", "status": "ready"}])
-        self.assertNotEqual(board.snapshot_etag(board.board_snapshot(self.repo)), with_heartbeat)
+        self.assertNotEqual(board.snapshot_etag(board.board_snapshot(self.repo)), first)
 
 
 class EndpointTests(LedgerFixture):
@@ -397,7 +401,7 @@ class EndpointTests(LedgerFixture):
 
     def open(self, path, headers=None, method="GET", url=None):
         return build_opener(ProxyHandler({})).open(
-            Request((url or self.url) + path, headers=headers or {}, method=method), timeout=3)
+            Request((url or self.url) + path, headers=headers or {}, method=method), timeout=budget(3))
 
     def get(self, path, headers=None, url=None):
         with self.open(path, headers, url=url) as response:
@@ -454,7 +458,7 @@ class EndpointTests(LedgerFixture):
         with control.operator_lock(self.repo):
             started = time.monotonic()
             data, _ = self.get("/api/board?include=")
-            self.assertLess(time.monotonic() - started, 2)
+            self.assertLess(time.monotonic() - started, budget(2))
         self.assertEqual(data["counts"]["ready"], 1)
 
     def test_health_reports_snapshot_age_daemon_and_heartbeat(self):
@@ -466,9 +470,9 @@ class EndpointTests(LedgerFixture):
         self.get("/api/board?include=")
         with board.repo_lock(self.state / "daemon.lock"):
             health, _ = self.get("/api/health")
-        self.assertTrue(0 <= health["snapshot_age_seconds"] < 3)
+        self.assertTrue(0 <= health["snapshot_age_seconds"] < budget(3))
         self.assertTrue(health["daemon_running"])
-        self.assertTrue(39 <= health["heartbeat_age_seconds"] <= 43)
+        self.assertTrue(39 <= health["heartbeat_age_seconds"] <= 40 + budget(3))
         self.assertEqual(health["service"], "improve-board")
 
     def test_journal_is_served_per_run_bounded_and_never_through_symlinks(self):
@@ -545,7 +549,7 @@ class InProcessServerTests(LedgerFixture):
         self.temp.cleanup()
 
     def get(self, url, path):
-        with build_opener(ProxyHandler({})).open(Request(url + path), timeout=3) as response:
+        with build_opener(ProxyHandler({})).open(Request(url + path), timeout=budget(3)) as response:
             return json.load(response), response
 
     def test_locked_graph_database_keeps_the_board_answering(self):
@@ -614,7 +618,7 @@ class OptionalRequestTypeTests(LedgerFixture):
         defaults = ({"Origin": url, "Content-Type": "application/json", "X-Improve-Board-Token": token or self.token}
                     if body is not None else {})
         request = Request(url + path, data=body, headers={**defaults, **(headers or {})})
-        with build_opener(ProxyHandler({})).open(request, timeout=5) as response:
+        with build_opener(ProxyHandler({})).open(request, timeout=budget(5)) as response:
             return json.load(response)
 
     def rejected(self, path, data, **kwargs):

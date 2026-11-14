@@ -1,9 +1,12 @@
 """Exercise local browser capabilities and durable requests without real agents."""
 from concurrent.futures import ThreadPoolExecutor
+import contextlib
+import io
 import json
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from urllib.error import HTTPError
@@ -11,6 +14,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # Works both under discover and as a named module.
 
+from support import budget  # noqa: E402
 from test_board import LedgerFixture, board  # noqa: E402
 import improve_control as control
 import improve_toon as toon
@@ -88,7 +92,7 @@ class ControlTests(LedgerFixture):
         body = raw if raw is not None else json.dumps(data).encode() if data is not None else None
         defaults = {"Origin": self.url, "Content-Type": "application/json", "X-Improve-Board-Token": self.token} if body is not None else {}
         request = Request(self.url + path, data=body, headers={**defaults, **(headers or {})})
-        with build_opener(ProxyHandler({})).open(request, timeout=5) as response:
+        with build_opener(ProxyHandler({})).open(request, timeout=budget(5)) as response:
             return json.load(response)
 
     def rejected(self, path, data=None, code=400, **kwargs):
@@ -269,11 +273,14 @@ class ControlTests(LedgerFixture):
         self.assertIn("already withdrawn", self.rejected("/api/requests", self.request_data("withdraw", target_id=first["id"], text="")))
         self.rejected("/api/requests", self.request_data("withdraw", target_id=str(uuid.uuid4()), text=""))
         self.rejected("/api/requests", self.request_data("withdraw", target_id="not-a-uuid", text=""))
-        # A request the skill already answered keeps its answer.
+        # A request the skill already answered keeps its answer and cannot be withdrawn.
         second = self.request_data()
         self.http("/api/requests", second)
         control.acknowledge(self.repo, second["id"], "applied", "Queued user-task")
-        self.http("/api/requests", self.request_data("withdraw", target_id=second["id"], text=""))
+        before = (self.state / "operator.json").read_bytes()
+        message = self.rejected("/api/requests", self.request_data("withdraw", target_id=second["id"], text=""))
+        self.assertIn("already answered", message)
+        self.assertEqual((self.state / "operator.json").read_bytes(), before)
         rows = {row["id"]: row for row in control.request_view(self.repo)}
         self.assertEqual(rows[second["id"]]["status"], "applied")
 
@@ -430,24 +437,51 @@ class ControlTests(LedgerFixture):
         self.assertEqual(self.http("/api/report")["text"], "# Current work")
 
     def test_pending_reader_waits_for_new_run_transaction(self):
+        """The reader must block on operator.lock, not merely start late. A flock wrapper reports
+        when the reader reaches the lock, so a slow start cannot pass for waiting."""
         saved = self.seed()
-        script = Path(board.__file__).with_name("improve_control.py")
-        with control.operator_lock(self.repo):
-            process = subprocess.Popen([sys.executable, str(script), "--repo", str(self.repo), "pending"],
-                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            try:
-                with self.assertRaises(subprocess.TimeoutExpired):
-                    process.communicate(timeout=0.3)
+        reached, real_flock = threading.Event(), control.fcntl.flock
+
+        class Flock:
+            LOCK_EX, LOCK_UN, LOCK_NB = control.fcntl.LOCK_EX, control.fcntl.LOCK_UN, control.fcntl.LOCK_NB
+
+            @staticmethod
+            def flock(stream, operation):
+                if operation == control.fcntl.LOCK_EX and threading.current_thread() is not threading.main_thread():
+                    reached.set()
+                return real_flock(stream, operation)
+
+        result, output = {}, io.StringIO()
+
+        def read_pending():
+            with contextlib.redirect_stdout(output):
+                result["rc"] = control.main(["--repo", str(self.repo), "pending"])
+
+        control.fcntl = Flock
+        reader = threading.Thread(target=read_pending)
+        try:
+            with control.operator_lock(self.repo):
+                reader.start()
+                self.assertTrue(reached.wait(budget(5)), "the reader never reached operator.lock")
+                reader.join(0.3)
+                self.assertTrue(reader.is_alive(), "the reader did not wait for the lock")
                 replacement = {**saved, "run_id": uuid.uuid4().hex}
                 board.atomic_json(self.state / "supervisor.json", replacement)
                 board.atomic_json(self.state / "operator.json", {"requests": [dict(
                     id=str(uuid.uuid4()), type="guidance", text="New run only", run_id=replacement["run_id"])]})
-            except BaseException:
-                process.kill()
-                process.communicate()
-                raise
-        stdout, stderr = process.communicate(timeout=5)
-        self.assertEqual(process.returncode, 0, stderr)
-        result = toon.loads(stdout)
-        self.assertEqual(result["run_id"], replacement["run_id"])
-        self.assertEqual(result["requests"][0]["run_id"], result["run_id"])
+            reader.join(budget(5))
+        finally:
+            control.fcntl = sys.modules["fcntl"]
+        self.assertFalse(reader.is_alive())
+        self.assertEqual(result["rc"], 0)
+        parsed = toon.loads(output.getvalue())
+        self.assertEqual(parsed["run_id"], replacement["run_id"])
+        self.assertEqual(parsed["requests"][0]["run_id"], parsed["run_id"])
+
+    def test_pending_helper_process_reports_the_current_run(self):
+        saved = self.seed()
+        script = Path(board.__file__).with_name("improve_control.py")
+        result = subprocess.run([sys.executable, str(script), "--repo", str(self.repo), "pending"],
+                                capture_output=True, text=True, timeout=budget(10))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(toon.loads(result.stdout)["run_id"], saved["run_id"])

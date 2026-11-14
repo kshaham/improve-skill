@@ -9,6 +9,12 @@ const NOTICE_LIMIT = 20;
 const NOTIFIED_LIMIT = 400;
 const LOG_TAIL_LINES = 400;
 const LOG_REFRESH_MS = 5000;
+// Liveness has its own small endpoint: the snapshot ETag ignores heartbeats, so a paused run
+// answers 304 instead of resending the whole board every few seconds.
+const LIVENESS_POLL_MS = 5000,
+  LIVENESS_HIDDEN_POLL_MS = 15000;
+let liveness = null,
+  livenessTimer = null;
 let notifyEnabled = false,
   notifiedKeys = new Set(),
   noticeLog = [],
@@ -26,10 +32,55 @@ function formatDuration(seconds) {
   return hours + " h " + String(minutes).padStart(2, "0") + " min";
 }
 
-// Ages are reported by the server at snapshot time; the browser adds the time since.
-function liveAge(baseSeconds) {
+// Ages are reported by the server; the browser adds the time since that report. The newest
+// report wins: /api/health between snapshots, or a fresh snapshot.
+function currentLiveness(run) {
+  const sameRun =
+    liveness && (liveness.control_id == null || run.control_id == null || liveness.control_id === run.control_id);
+  if (sameRun && liveness.receivedAt > snapshotBaseAt)
+    return {
+      heartbeatAt: liveness.heartbeat_at,
+      heartbeat: liveness.heartbeat_age_seconds,
+      cycle: liveness.cycle_age_seconds,
+      baseAt: liveness.receivedAt,
+    };
+  return {
+    heartbeatAt: run.heartbeat_at,
+    heartbeat: run.heartbeat_age_seconds,
+    cycle: run.cycle_age_seconds,
+    baseAt: snapshotBaseAt,
+  };
+}
+
+function liveAge(baseSeconds, baseAt) {
   if (!Number.isFinite(baseSeconds)) return null;
-  return baseSeconds + (Date.now() - snapshotBaseAt) / 1000;
+  return baseSeconds + (Date.now() - baseAt) / 1000;
+}
+
+function renderCheckpoint() {
+  if (!snapshot) return;
+  const run = snapshot.current;
+  const formatTime = (value) =>
+    Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : "not recorded";
+  const checkpoints = ["Work checkpoint: " + formatTime(run.last_activity_at)];
+  if (run.supervised)
+    checkpoints.push("Supervisor checkpoint: " + formatTime(currentLiveness(run).heartbeatAt));
+  $("run-checkpoint").textContent = checkpoints.join(" · ");
+}
+
+async function pollLiveness() {
+  clearTimeout(livenessTimer);
+  try {
+    const data = await boardJSON("/api/health");
+    liveness = { ...data, receivedAt: Date.now() };
+    renderHealthAges();
+    renderCheckpoint();
+  } catch (error) {
+    // The snapshot poll owns connection state and its messages; keep the last liveness.
+    void error;
+  } finally {
+    livenessTimer = setTimeout(pollLiveness, document.hidden ? LIVENESS_HIDDEN_POLL_MS : LIVENESS_POLL_MS);
+  }
 }
 
 function cycleTimeout(run) {
@@ -54,7 +105,8 @@ function renderHealthAges() {
   const run = snapshot.current;
   const live = run.daemon_running && !run.outcome;
   const timeout = cycleTimeout(run);
-  const heartbeat = liveAge(run.heartbeat_age_seconds);
+  const ages = currentLiveness(run);
+  const heartbeat = liveAge(ages.heartbeat, ages.baseAt);
   if (heartbeat === null) setAge("health-heartbeat", "", "");
   else
     setAge(
@@ -62,7 +114,7 @@ function renderHealthAges() {
       "Supervisor heartbeat " + formatDuration(heartbeat) + " ago",
       live ? ageLevel(heartbeat, timeout, 2 * timeout) : "",
     );
-  const cycle = liveAge(run.cycle_age_seconds);
+  const cycle = liveAge(ages.cycle, ages.baseAt);
   const cycleRunning = live && run.child_pid != null && cycle !== null;
   if (cycleRunning)
     setAge(
@@ -323,9 +375,13 @@ async function loadTextDialog() {
     } else {
       const data = await boardJSON("/api/quarantine");
       if (load !== textDialogLoad) return;
-      note.textContent = data.refs.length
-        ? "Work the supervisor set aside when the tree was dirty. Run the command in the repository to restore a snapshot."
-        : "No quarantined work. The supervisor saves a ref here when it has to clear a dirty tree.";
+      note.textContent =
+        (data.refs.length
+          ? "Work the supervisor set aside when the tree was dirty. Run the command in the repository to restore a snapshot."
+          : "No quarantined work. The supervisor saves a ref here when it has to clear a dirty tree.") +
+        (data.hidden > 0
+          ? " " + countText(data.hidden) + " other ref(s) under refs/improve/quarantine are not named like the supervisor's and are not shown; inspect them with git for-each-ref."
+          : "");
       list.replaceChildren(
         ...data.refs.map((ref) => {
           const item = element("div", "quarantine-item");
@@ -368,6 +424,7 @@ function openTextDialog(kind) {
 
 function renderHealthExtras(run) {
   renderHealthAges();
+  renderCheckpoint();
   renderHealthCounters(run);
   renderCycleTimeline(run);
 }
@@ -383,6 +440,7 @@ function initHealth() {
   $("open-log").addEventListener("click", () => openTextDialog("log"));
   $("open-quarantine").addEventListener("click", () => openTextDialog("quarantine"));
   $("text-dialog-reload").addEventListener("click", loadTextDialog);
+  pollLiveness();
   $("text-dialog").addEventListener("close", () => {
     clearInterval(textDialogTimer);
     textDialogTimer = null;

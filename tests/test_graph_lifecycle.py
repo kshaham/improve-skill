@@ -302,11 +302,11 @@ class ConcurrencyTests(GraphTestCase):
         try:
             processes = [subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                          for command in commands]
-            results = [(process.wait(timeout=120), *process.communicate()) for process in processes]
+            results = [(process.wait(timeout=budget(120)), *process.communicate()) for process in processes]
         finally:
             stop.set()
             for thread in threads:
-                thread.join(timeout=60)
+                thread.join(timeout=budget(60))
         self.assertEqual([code for code, _, err in results if code], [], [err for code, _, err in results if code])
         ids = {toon.loads(out)["id"] for code, out, _ in results[:32]}
         value = load(self.repo)
@@ -463,8 +463,8 @@ class ScaleTests(unittest.TestCase):
 
     def test_large_history_is_bounded_consistent_and_conserved(self):
         check_invariants(self, self.value, refined=True)
-        self.assertLess(self.backfill_seconds, 10)
-        self.assertLess(self.first_refine_seconds, 10, "pruning thousands of tasks stays linear")
+        self.assertLess(self.backfill_seconds, budget(10))
+        self.assertLess(self.first_refine_seconds, budget(10), "pruning thousands of tasks stays linear")
         done = sum(node["stats"]["done"] for node in self.value["nodes"].values() if node["type"] == "area")
         self.assertEqual(done, self.total_done, "pruned outcomes are folded into area baselines exactly once")
         self.assertLessEqual(graph.summary(self.value)["insights"], graph.MAX_INSIGHTS)
@@ -491,7 +491,7 @@ class ScaleTests(unittest.TestCase):
             with self.subTest(query=name):
                 started = time.perf_counter()
                 result = query()
-                self.assertLess(time.perf_counter() - started, 0.5, name)
+                self.assertLess(time.perf_counter() - started, budget(0.5), name)
                 self.assertTrue(result or name == "path")
         detail = graph.node_detail(value, "area:ui")
         self.assertEqual(len(detail["links"]), 200)

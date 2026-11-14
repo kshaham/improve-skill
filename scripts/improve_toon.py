@@ -27,6 +27,7 @@ import datetime
 import decimal
 import json
 import math
+import os
 import re
 import sys
 
@@ -85,10 +86,18 @@ def normalize(value, depth=0):
         return approximate if decimal.Decimal(repr(approximate)) == value else format(value, "f")
     if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
         return value.isoformat()
+    # Plain loops, not comprehensions: before Python 3.12 a comprehension is a frame of its own,
+    # which doubled the stack per level and overflowed before MAX_DEPTH was reached.
     if isinstance(value, dict):
-        return {str(key): normalize(item, depth + 1) for key, item in value.items()}
+        result = {}
+        for key, item in value.items():
+            result[str(key)] = normalize(item, depth + 1)
+        return result
     if isinstance(value, (list, tuple)):
-        return [normalize(item, depth + 1) for item in value]
+        items = []
+        for item in value:
+            items.append(normalize(item, depth + 1))
+        return items
     if isinstance(value, (set, frozenset)):
         items = [normalize(item, depth + 1) for item in value]
         return sorted(items, key=lambda item: json.dumps(item, sort_keys=True, default=str))
@@ -335,7 +344,12 @@ class Encoder:
 
 def dumps(value, indent=2, delimiter=","):
     """Encode a JSON-shaped value as TOON."""
-    return Encoder(indent, delimiter).encode(value)
+    try:
+        return Encoder(indent, delimiter).encode(value)
+    except RecursionError:
+        # The encoder uses a few frames per level; a value just under MAX_DEPTH can still
+        # exhaust a small interpreter stack. Report it as the documented error.
+        raise ToonError("value nests too deeply to encode") from None
 
 
 # ---------------------------------------------------------------- decoder helpers
@@ -931,17 +945,100 @@ def uniform(rows, keys=None, fill=None):
     return [{key: row.get(key, fill) for key in keys} for row in rows]
 
 
-def truncate(value, width, marker="..."):
-    """Bound every string in `value` to `width` characters, marking the cut."""
+def truncate(value, width, marker=None, keep=()):
+    """Bound every string in `value` to `width` characters, marking the cut. The default marker
+    says how much was cut (`…[+42]`), which real text ending in "..." can never be mistaken
+    for; an explicit `marker` string is used as given. Strings under a key in `keep`
+    (identifiers, paths, SHAs) are never cut: a shortened id cannot be used."""
     if width is None or width <= 0:
         return value
     if isinstance(value, str):
-        return value if len(value) <= width else value[:max(0, width - len(marker))] + marker
+        return value if len(value) <= width else cut_text(value, width, marker)
     if isinstance(value, dict):
-        return {key: truncate(item, width, marker) for key, item in value.items()}
+        return {key: item if key in keep else truncate(item, width, marker, keep) for key, item in value.items()}
     if isinstance(value, list):
-        return [truncate(item, width, marker) for item in value]
+        return [truncate(item, width, marker, keep) for item in value]
     return value
+
+
+def cut_text(text, width, marker=None):
+    if marker is not None:
+        return text[:max(0, width - len(marker))] + marker
+    kept = width
+    for _ in range(3):  # The count's own digits shorten what fits; settle in a pass or two.
+        suffix = f"\u2026[+{len(text) - kept}]"
+        kept = max(0, width - len(suffix))
+    return text[:kept] + f"\u2026[+{len(text) - kept}]"
+
+
+def flatten(row, separator="."):
+    """One level of nested objects becomes `parent.child` columns, so rows that carry a small
+    object (a file's `stats`) can still share one table header."""
+    flat = {}
+    for key, value in row.items():
+        clash = isinstance(value, dict) and any(f"{key}{separator}{child}" in row for child in value)
+        if isinstance(value, dict) and value and not clash and all(is_primitive(item) for item in value.values()):
+            for child, item in value.items():
+                flat[f"{key}{separator}{child}"] = item
+        else:
+            flat[key] = value
+    return flat
+
+
+def compact_rows(rows, delimiter=","):
+    """The shortest TOON form of an array of objects: as given, made uniform (one header,
+    missing cells null), or made uniform after flattening nested objects. Padding mixed rows
+    with nulls can cost more than it saves, so each candidate is measured, never assumed."""
+    if not rows or not all(isinstance(row, dict) for row in rows):
+        return rows
+    candidates = [rows, uniform(rows)]
+    flattened = [flatten(row) for row in rows]
+    if flattened != rows:
+        candidates.append(uniform(flattened))
+    return min(candidates, key=lambda candidate: (len(dumps({"x": candidate}, delimiter=delimiter)),
+                                                  candidates.index(candidate)))
+
+
+FORMATS = ("toon", "json")
+
+
+def default_format(environ=None, warn=None):
+    """`IMPROVE_FORMAT`, normalized (`JSON`, ` json ` work); an unknown value warns and means toon."""
+    environ = os.environ if environ is None else environ
+    value = str(environ.get("IMPROVE_FORMAT", "toon")).strip().lower() or "toon"
+    if value not in FORMATS:
+        message = f"IMPROVE_FORMAT={value!r} is not one of {', '.join(FORMATS)}; using toon"
+        (warn or (lambda text: print(text, file=sys.stderr)))(message)
+        return "toon"
+    return value
+
+
+def output_options(parser, suppress=False, delimiter=True, text=True, width=None):
+    """The output switches every helper shares. Added to the top-level parser with real
+    defaults and to each subcommand with `suppress`, so `helper --format json stats` and
+    `helper stats --format json` mean the same thing (agents put flags at the end)."""
+    import argparse
+    blank = argparse.SUPPRESS
+
+    def default(value):
+        return blank if suppress else value
+
+    parser.add_argument("--format", choices=FORMATS, type=str.lower, default=default(None) if not suppress else blank,
+                        help="structured output format (default toon; IMPROVE_FORMAT overrides)")
+    if delimiter:
+        parser.add_argument("--delimiter", choices=("comma", "tab", "pipe"), default=default("comma"),
+                            help="TOON cell delimiter")
+    if text:
+        parser.add_argument("--width", type=int, default=default(width),
+                            help="bound long text cells to this many characters (0 for no bound)")
+        parser.add_argument("--full", action="store_true", default=default(False), help="every field, untruncated")
+
+
+def resolve_format(args):
+    """The format chosen on the command line, else IMPROVE_FORMAT, else toon."""
+    chosen = getattr(args, "format", None)
+    args.format = chosen if chosen in FORMATS else default_format()
+    return args.format
 
 
 def main(argv=None):

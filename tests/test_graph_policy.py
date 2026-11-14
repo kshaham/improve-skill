@@ -1,7 +1,6 @@
 """Knowledge-graph policy and robustness: protected knowledge, damage classification, bounded
 locks, lesson import, gate attribution, stable co-change links, due checks, and CLI exit codes."""
 import fcntl
-import json
 import os
 from pathlib import Path
 import sqlite3
@@ -13,7 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from graph_support import ROOT, environment, load, make_repo, restore_environment, write_ledger, write_run  # noqa: E402
+from graph_support import budget, ROOT, environment, load, make_repo, restore_environment, write_ledger, write_run  # noqa: E402
 import improve_dream as dreaming  # noqa: E402
 import improve_graph as graph  # noqa: E402
 import improve_graph_store as store  # noqa: E402
@@ -23,7 +22,7 @@ import improve_toon as toon  # noqa: E402
 
 def cli(repo, *args, env=None):
     return subprocess.run([sys.executable, str(ROOT / "scripts/improve_graph.py"), "--repo", str(repo), *args],
-                          capture_output=True, text=True, timeout=60, env={**os.environ, **(env or {})})
+                          capture_output=True, text=True, timeout=budget(60), env={**os.environ, **(env or {})})
 
 
 class PolicyCase(unittest.TestCase):
@@ -97,7 +96,8 @@ class DamageClassificationTests(PolicyCase):
         self.assertFalse(store.is_damage(sqlite3.IntegrityError("UNIQUE constraint failed: node.id")))
         self.assertFalse(store.is_damage(sqlite3.ProgrammingError("Cannot operate on a closed database.")))
         self.assertFalse(store.is_damage(sqlite3.OperationalError("database is locked")))
-        self.assertTrue(store.is_damage(sqlite3.OperationalError("no such table: meta")))
+        # A missing graph table is caught by Store.open; a missing table elsewhere is a bug, not damage.
+        self.assertFalse(store.is_damage(sqlite3.OperationalError("no such table: meta")))
         self.assertTrue(store.is_damage(sqlite3.DatabaseError("file is not a database")))
         self.assertTrue(store.is_damage(sqlite3.DatabaseError("database disk image is malformed")))
 
@@ -145,7 +145,12 @@ class LockTests(PolicyCase):
                 with self.assertRaises(graph.GraphBusy):
                     with graph.locked(self.repo):
                         pass
-            result = cli(self.repo, "note", "--text", "Blocked note that should retry later.", env={"IMPROVE_GRAPH_LOCK_WAIT": "0.3"})
+            # A note is queued, not lost or failed, while another process holds the graph.
+            result = cli(self.repo, "note", "--text", "Blocked note that is applied later.", env={"IMPROVE_GRAPH_LOCK_WAIT": "0.3"})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIs(toon.loads(result.stdout)["queued"], True)
+            # A whole-graph write cannot be queued and still fails fast with the retryable code.
+            result = cli(self.repo, "restore", "insight:none", env={"IMPROVE_GRAPH_LOCK_WAIT": "0.3"})
             self.assertEqual(result.returncode, 3, result.stderr)
             self.assertIn("retry later", result.stderr)
             reads = cli(self.repo, "search", "seed")

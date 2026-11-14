@@ -328,6 +328,8 @@ function openRequest(kind, task = null, decision = null, restored = null, target
   $("request-priority-field").hidden = !["task", "priority"].includes(kind);
   $("request-text").required = ["guidance", "note"].includes(kind);
   $("request-priority").value = task?.user_priority || "normal";
+  // A priority draft that still shows its starting level is empty (drafts.js).
+  draftContext.initial_priority = $("request-priority").value;
   if (kind === "task" && task) {
     $("request-title").textContent = "Create follow-up task";
     $("request-task-title").value = ("Follow up: " + task.title).slice(0, 200);

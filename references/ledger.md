@@ -135,11 +135,13 @@ keeps its runs.
 Do not `cat` the ledgers: a raw row repeats every key and carries every evidence string
 into context. The ledger helper prints TOON (Token-Oriented Object Notation): one header
 that declares the columns, then one comma-separated row per task, with long text bounded
-to 100 characters unless `--full` is given. Measured on a 40-task backlog, the ranked
+to 100 characters (marked `…[+N]`, N characters cut) unless `--full` is given. Measured on a 40-task backlog, the ranked
 queue view costs about 28% of the tokens of the raw rows it summarizes. `L` stands for
 `python3 <skill-directory>/scripts/improve_ledger.py --repo /absolute/repo`.
 
-    # ranked ready queue after scope and critical-security checks (user priority, focus, severity x confidence x blast)
+    # ranked ready queue: critical in-scope security first, then user priority, board `prefer`
+    # areas, focus priority, severity x confidence x blast; `skip` and intake-excluded areas are
+    # left queued and counted in `skipped_areas` (`--all-areas` shows them)
     L queue
     L queue --area security --fields id,severity,file,claim
 
@@ -150,9 +152,18 @@ queue view costs about 28% of the tokens of the raw rows it summarizes. `L` stan
     L tasks --file src/cart.ts --fields id,status,claim,note
 
     # counts for the hourly report; the latest discovery passes; the run's own state
+    # (`run` includes preflight_complete, gates, gate_seconds, authorization, continuation;
+    # `run --full` is the whole run.json)
     L counts
     L discovery --limit 5
     L run
+
+    # write run state: any lower_snake_case key, in any order; started_at, deadline, and outcome are refused
+    L run-set cycle=8 next_action='verify the cart fix' --json-field 'active_item={"id":"q-0007","title":"Cart total"}'
+    L run-set preflight_complete=true phase=discover
+
+    # append a discovery checkpoint
+    L discovery-add --json '{"generation":3,"lane":"ui","status":"complete","accepted":2,"rejected":1,"next_scope":"src/cart"}'
 
     # everything about one task, untruncated
     L show q-0007
@@ -169,16 +180,24 @@ queue view costs about 28% of the tokens of the raw rows it summarizes. `L` stan
 
 `set` validates statuses, priorities, commit SHAs, severity, blast, and confidence, stamps
 `updated_at` (and `started_at`/`completed_at` on the matching transitions), merges any
-duplicate rows for the id, and leaves every other row byte-for-byte as it was. Add
-`--format json` to any command for JSON; `IMPROVE_FORMAT=json` does so for every helper.
-The jq equivalents still work for anyone reading the files by hand:
+duplicate rows for the id, and leaves every other row as it was. `id` and `created_at`
+identify a row and cannot be changed with `--field` or `--json-field`. A line that is not a JSON
+object with an id (a half-written row) is kept verbatim where it was, for repair or
+quarantine to recover. `--graph-ref` adds to the citations already recorded
+(`--clear-graph-refs` replaces them). Writes take `.improve/ledger.lock`, which the supervisor
+also takes when it blocks a task, so neither overwrites the other. `set ID --status
+in_progress` prints an advisory `hint` when no graph `context` query covered the task's files
+in the last hour. List views cut long text at `--width`, never ids, files, paths, or SHAs.
+Add `--format json` to any command, before or after it, for JSON; `IMPROVE_FORMAT=json` does
+so for every helper.
+For anyone reading the files by hand, jq still works (read-only; it ignores board focus):
 
     jq -s 'map(select(.status=="ready"))
            | sort_by([(if .user_priority=="high" then 0 elif .user_priority=="low" then 2 else 1 end),
                       (.focus_priority // 999), -((.severity // 0) * (.confidence // 0) * (.blast // 0))])' .improve/backlog.jsonl
-    jq -c --arg id "$ID" --arg s done --arg c "$SHA" \
-       'if .id==$id then .status=$s | .commit=$c else . end' \
-       .improve/backlog.jsonl > .improve/backlog.tmp && mv .improve/backlog.tmp .improve/backlog.jsonl
+
+Do not rewrite the ledger with jq or an editor during a run: that bypasses `ledger.lock` and
+can drop a row the supervisor wrote at the same moment. Use `set` or `add`.
 
 
 ## Intake, discovery, and supervision

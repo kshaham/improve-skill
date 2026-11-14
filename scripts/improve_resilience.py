@@ -3,16 +3,19 @@
 Runs only between cycles, when no child agent can be writing the ledgers.
 """
 
+import contextlib
+import fcntl
 import json
 import os
 from pathlib import Path
 import re
 import signal
+import stat
 import subprocess
 import tempfile
 import time
 
-from improve_runtime import StateError, atomic_json, coerce_count, git, read_json, stamp
+from improve_runtime import StateError, atomic_json, coerce_count, git, read_json, stamp, target_stop_allowed
 
 # Lanes the supervisor rotates through when the queue is empty. Board focus and
 # intake scope still filter them; this only suggests where to look next.
@@ -21,6 +24,10 @@ DISCOVERY_LANES = (
     "quality", "coverage", "concurrency", "contracts", "docs", "assets", "gate-speed",
 )
 MAX_REASON = 500
+# How many removed artifact paths are recorded by name; the total is always recorded.
+ARTIFACT_RECORD_LIMIT = 50
+# The supervisor waits this long for an agent's ledger write before deferring a repair.
+REPAIR_LOCK_WAIT = 30
 # Outcomes an agent may legitimately write; anything else is repaired, never trusted.
 TERMINAL_OUTCOMES = ("completed", "stopped by user", "target reached")
 LEDGERS = ("backlog.jsonl", "discovery.jsonl", "bets.jsonl")
@@ -41,19 +48,82 @@ def read_rows(path):
     return rows
 
 
-def write_rows(path, rows):
-    """Atomically replace a JSONL ledger, the way the skill itself writes it."""
+@contextlib.contextmanager
+def ledger_lock(state, timeout=None):
+    """One writer of backlog.jsonl at a time: the agent's ledger helper and the supervisor.
+    Readers do not take it; every rewrite is atomic, so they see the old or the new file.
+    With a timeout, a lock still held after that many seconds raises TimeoutError."""
+    fd = os.open(Path(state) / "ledger.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise StateError("ledger.lock must be a regular file")
+        if timeout is None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        else:
+            until = time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= until:
+                        raise TimeoutError("ledger.lock is held by another writer") from None
+                    time.sleep(0.05)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def rewrite_tasks(path, update, append=()):
+    """Rewrite a ledger with one canonical row per id, in first-seen order, applying
+    `update(tasks)` (a dict of id -> merged row it may change in place) and appending `append`.
+
+    Lines that are not JSON objects with an id are kept verbatim where they were: they may be
+    a half-written row that repair or quarantine can still recover, and a routine status
+    change must never be what deletes them."""
+    path = Path(path)
+    lines = path.read_text(errors="replace").splitlines() if path.is_file() and not path.is_symlink() else []
+    entries, tasks = [], {}
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            entries.append(("raw", line))
+            continue
+        task_id = row.get("id") if isinstance(row, dict) else None
+        if not isinstance(task_id, str) or not task_id:
+            entries.append(("raw", line))
+            continue
+        if task_id not in tasks:
+            entries.append(("task", task_id))
+            tasks[task_id] = row
+        else:
+            tasks[task_id] = {**tasks[task_id], **row}
+    known = set(tasks)
+    if update(tasks) is False and not append:
+        return tasks  # Nothing to change: leave the file exactly as it is.
+    entries.extend(("task", task_id) for task_id in tasks if task_id not in known)  # Rows `update` created.
+    for row in append:
+        if row["id"] not in tasks:
+            entries.append(("task", row["id"]))
+        tasks[row["id"]] = row
     fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(fd, "w") as stream:
-            for row in rows:
-                stream.write(json.dumps(row) + "\n")
+            for kind, value in entries:
+                stream.write((value if kind == "raw" else json.dumps(tasks[value])) + "\n")
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(name, path)
     finally:
         if os.path.exists(name):
             os.unlink(name)
+    return tasks
 
 
 def merged_tasks(state):
@@ -71,12 +141,14 @@ def ready_count(state):
 
 # ---------------------------------------------------------------- agent-written state
 
-def repair_run(run):
+def repair_run(run, skill=None, extra_args=""):
     """Normalize the agent-written fields the supervisor and clock depend on.
 
     Returns the problems found (and repaired in place). The ledger an agent writes is
     input, not truth: an unrecognized outcome, a float report hour, or a string cycle
-    must never end a run that still has time on the clock.
+    must never end a run that still has time on the clock. Given the run's skill and
+    arguments, `target reached` is also cleared unless this run may stop at its target;
+    honoring it would be impossible and keeping it would stop every later cycle.
     """
     problems = []
     if not isinstance(run, dict):
@@ -94,7 +166,11 @@ def repair_run(run):
             elif re.match(r"halted\b[\s:-]*", lowered):
                 reason = re.sub(r"(?i)^halted\b[\s:-]*", "", text).strip() or "unspecified"
                 fixed = f"halted: {reason}"
-        if fixed != outcome:
+        if fixed == "target reached" and skill is not None and not target_stop_allowed(skill, extra_args):
+            problems.append("outcome 'target reached' is valid only for improve-max with --stop-at-target; "
+                            "cleared so the run continues")
+            run["outcome"] = None
+        elif fixed != outcome:
             problems.append(f"outcome {outcome!r} is not a recognized terminal outcome; "
                             + (f"normalized to {fixed!r}" if fixed else "cleared so the run continues"))
             run["outcome"] = fixed
@@ -205,6 +281,33 @@ def quarantine_changes(repo, label):
     return ref
 
 
+def untracked_paths(repo):
+    """Untracked, unignored paths outside .improve, untracked directories collapsed, as git spells them."""
+    result = subprocess.run(["git", "-C", str(repo), "ls-files", "-z", "--others", "--exclude-standard", "--directory",
+                             "--no-empty-directory", "--", ".", ":(exclude).improve"], capture_output=True)
+    if result.returncode:
+        raise StateError(result.stderr.decode(errors="replace").strip()[:200] or "git ls-files failed")
+    return [os.fsdecode(path) for path in result.stdout.split(b"\0") if path]
+
+
+def clean_artifacts(repo, artifact_paths=()):
+    """Delete the untracked build output in the tree without committing it anywhere.
+
+    Only paths that match ARTIFACT_PATTERNS or the run's artifact_paths are removed; anything
+    else stays for the quarantine path. Returns (the first ARTIFACT_RECORD_LIMIT removed paths,
+    how many there were), so the record of a large node_modules/ stays small."""
+    extra = tuple(pattern for pattern in artifact_paths if isinstance(pattern, str)) if isinstance(artifact_paths, (list, tuple)) else ()
+    doomed = [path for path in untracked_paths(repo) if is_artifact(path, extra)]
+    for start in range(0, len(doomed), 100):
+        chunk = doomed[start:start + 100]
+        # Literal pathspecs: a file named `*.o` must not widen the clean to every object file.
+        result = subprocess.run(["git", "-C", str(repo), "--literal-pathspecs", "clean", "-fdq", "--", *chunk],
+                                capture_output=True)
+        if result.returncode:
+            raise StateError("could not remove build artifacts: " + result.stderr.decode(errors="replace").strip()[:200])
+    return doomed[:ARTIFACT_RECORD_LIMIT], len(doomed)
+
+
 def quarantine_refs(repo, limit=50):
     """Saved quarantine refs, newest first, for status and the board."""
     try:
@@ -296,26 +399,29 @@ def block_active_item(state, reason, source="supervisor"):
     run = read_json(run_path) if run_path.exists() else {}
     active = run.get("active_item")
     task_id = active.get("id") if isinstance(active, dict) else None
-    rows = read_rows(state / "backlog.jsonl")
-    tasks = {}
-    for row in rows:
-        key = row.get("id")
-        if isinstance(key, str) and key:
-            tasks[key] = {**tasks.get(key, {}), **row}
-    if not isinstance(task_id, str) or not task_id:
-        in_progress = [key for key, task in tasks.items() if task.get("status") == "in_progress"]
-        task_id = in_progress[-1] if in_progress else None
     reason = reason.strip()[:MAX_REASON]
-    if task_id:
-        task = dict(tasks.get(task_id, {}))
+    chosen = {"id": task_id if isinstance(task_id, str) and task_id else None}
+
+    def block(tasks):
+        if not chosen["id"]:
+            in_progress = [key for key, task in tasks.items() if task.get("status") == "in_progress"]
+            chosen["id"] = in_progress[-1] if in_progress else None
+        if not chosen["id"]:
+            return False
+        task = dict(tasks.get(chosen["id"], {}))
         if "title" not in task and isinstance(active, dict):
             task.update({key: active[key] for key in ("title", "area") if key in active})
-        task.update(id=task_id, status="blocked", blocked_reason=reason, blocked_by=source, blocked_at=stamp(),
+        task.update(id=chosen["id"], status="blocked", blocked_reason=reason, blocked_by=source, blocked_at=stamp(),
                     supervisor_note=reason, updated_at=stamp(),
-                    block_count=int(task.get("block_count", 0) or 0) + 1)
+                    block_count=(coerce_count(task.get("block_count")) or 0) + 1)
         task.setdefault("note", reason)
-        tasks[task_id] = task
-        write_rows(state / "backlog.jsonl", list(tasks.values()))
+        tasks[chosen["id"]] = task
+
+    with ledger_lock(state):
+        path = state / "backlog.jsonl"
+        if chosen["id"] or path.exists():
+            rewrite_tasks(path, block)
+    task_id = chosen["id"]
     if run:
         run.pop("active_item", None)
         history = run.get("supervisor_blocks") if isinstance(run.get("supervisor_blocks"), list) else []
@@ -386,32 +492,63 @@ def recovery_brief(state, focus=None):
     return "\n\n".join(parts)
 
 
+def write_durably(path, data):
+    """Replace a file atomically and durably (temp file, fsync, rename)."""
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
 def repair_ledgers(state, names=LEDGERS):
-    """Move unparsable JSONL lines aside so one bad write cannot stop the run."""
+    """Move unparsable JSONL lines aside so one bad write cannot stop the run.
+
+    Holds ledger.lock, like every other ledger writer, so an agent's helper write is never
+    lost to a repair. A rewritten ledger's previous bytes are kept as <ledger>.bak (lines
+    that were not UTF-8 cannot be recovered from the repaired copy); invalid lines are also
+    appended to <ledger>.damaged."""
     problems = []
-    for name in names:
-        path = state / name
-        if not path.exists() or path.is_symlink():
+    try:
+        with ledger_lock(state, timeout=REPAIR_LOCK_WAIT):
+            for name in names:
+                problems.extend(repair_ledger(state / name))
+    except TimeoutError:
+        problems.append("ledger.lock stayed busy; ledger repair deferred to the next cycle")
+    return problems
+
+
+def repair_ledger(path):
+    if not path.is_file() or path.is_symlink():
+        return []
+    raw = path.read_bytes()
+    undecodable = decode_problems(path)
+    good, bad = [], []
+    for line in raw.decode("utf-8", errors="replace").splitlines():
+        if not line.strip():
             continue
-        undecodable = decode_problems(path)
-        good, bad = [], []
-        for line in path.read_text(errors="replace").splitlines():
-            if not line.strip():
-                continue
-            try:
-                ok = isinstance(json.loads(line), dict)
-            except ValueError:
-                ok = False
-            (good if ok else bad).append(line)
-        if bad:
-            with (state / (name + ".damaged")).open("a") as stream:
-                stream.write("\n".join(bad) + "\n")
-        if bad or undecodable:
-            tmp = path.with_suffix(".repair")
-            tmp.write_text("".join(line + "\n" for line in good))
-            tmp.replace(path)
-        if bad:
-            problems.append(f"moved {len(bad)} invalid line(s) from {name} to {name}.damaged")
-        if undecodable:
-            problems.append(undecodable)
+        try:
+            ok = isinstance(json.loads(line), dict)
+        except ValueError:
+            ok = False
+        (good if ok else bad).append(line)
+    if not (bad or undecodable):
+        return []
+    if bad:
+        with path.with_name(path.name + ".damaged").open("a") as stream:
+            stream.write("\n".join(bad) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    write_durably(path.with_name(path.name + ".bak"), raw)
+    write_durably(path, "".join(line + "\n" for line in good).encode())
+    problems = []
+    if bad:
+        problems.append(f"moved {len(bad)} invalid line(s) from {path.name} to {path.name}.damaged")
+    if undecodable:
+        problems.append(undecodable)
     return problems

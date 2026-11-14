@@ -2,7 +2,9 @@
 """Local task board and cooperative controls for improve. Python 3.9+, standard library only."""
 
 import argparse
+from collections import OrderedDict
 import contextlib
+import fcntl
 import gzip
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shlex
 import signal
 import sqlite3
 import stat
@@ -32,13 +35,28 @@ ASSETS = Path(__file__).resolve().parent.parent / "assets/board"
 SERVICE_FILES = {"board.json", "board.lock", "board.log", "operator.lock"}
 SNAPSHOT_EXTRAS = ("learning", "graph")
 DEFAULT_PORT = 8765
+# The parse cache holds at least this many files, and grows with the number of run
+# directories so that an unchanged "All runs" poll re-parses nothing (LRU beyond that).
 FILE_CACHE_LIMIT = 64
+LEDGER_FILES_PER_RUN = 6
+FILE_CACHE_CEILING = 4096
 JOURNAL_LIMIT = 1024 * 1024
 LOG_LIMIT = 256 * 1024
 LOG_LINES_DEFAULT = 200
 LOG_LINES_MAX = 2000
 CYCLE_HISTORY_LIMIT = 48
 QUARANTINE_LIMIT = 100
+# The supervisor names quarantine refs `refs/improve/quarantine/<UTC stamp>[-<label>]`
+# (improve_resilience.quarantine_changes). Anything else under that namespace was not written
+# by the supervisor and is not offered as a command to paste.
+QUARANTINE_REF = re.compile(r"refs/improve/quarantine/\d{4}-\d{2}-\d{2}T[0-9-]{4,8}Z(?:-[A-Za-z0-9][A-Za-z0-9._-]{0,79})?")
+# /api/report reads under the operator lock, but a browser request must never queue behind a
+# stuck holder indefinitely or starve the worker's own `pending`/`ack` calls.
+REPORT_LOCK_SECONDS = 2.0
+# Sec-Fetch-Site values a same-origin board page (or a non-browser client) sends.
+SAME_SITE_FETCH = (None, "same-origin", "none")
+GRAPH_INT_PATTERN = re.compile(r"-?\d{1,9}")
+HISTORY_OFFSET_MAX = 1_000_000
 GZIP_MIN_BYTES = 1024
 # Request types whose validation lives in improve_control; the board only offers them when
 # the runtime it is paired with knows them.
@@ -46,11 +64,17 @@ OPTIONAL_REQUEST_TYPES = ("retry", "withdraw")
 # Fields of the server clock that change on every poll; they are left out of the ETag so
 # an unchanged ledger yields 304 and the browser advances the countdown itself.
 VOLATILE_CLOCK_KEYS = ("now", "elapsed_seconds", "remaining_seconds", "hour", "report_hour", "status")
-VOLATILE_CURRENT_KEYS = ("heartbeat_age_seconds", "cycle_age_seconds")
+# Liveness: the supervisor rewrites heartbeat_at every 5 s even while paused. Including it in
+# the ETag resent the whole snapshot (megabytes on a large ledger) on every poll of a paused
+# run, so the browser reads these from /api/health on its own cadence instead.
+VOLATILE_CURRENT_KEYS = ("heartbeat_at", "heartbeat_age_seconds", "cycle_age_seconds")
+# Board-view fields the Knowledge tab never renders; they are dropped before sending.
+UNUSED_GRAPH_VIEW_KEYS = ("counts", "runs", "dropped")
 ERROR_CODES = {"unknown run": "unknown_run", "not found": "not_found",
                "that node is no longer in the graph": "node_missing"}
-_file_cache = {}
+_file_cache = OrderedDict()
 _file_cache_lock = threading.Lock()
+_file_cache_capacity = FILE_CACHE_LIMIT
 
 
 class BoardError(StateError):
@@ -147,17 +171,35 @@ def load_file(directory, name, warnings, jsonl=False):
     key = (str(path), info.st_ino, info.st_mtime_ns, info.st_size)
     with _file_cache_lock:
         cached = _file_cache.get(key[0])
+        if cached is not None:
+            _file_cache.move_to_end(key[0])
     if cached and cached[0] == key:
         warnings.extend(cached[2])
         return cached[1]
     notices = []
     value = parse_ledger_file(path, name, notices, jsonl)
     with _file_cache_lock:
-        if key[0] not in _file_cache and len(_file_cache) >= FILE_CACHE_LIMIT:
-            _file_cache.pop(next(iter(_file_cache)))
         _file_cache[key[0]] = (key, value, tuple(notices))
+        _file_cache.move_to_end(key[0])
+        trim_file_cache()
     warnings.extend(notices)
     return value
+
+
+def trim_file_cache():
+    """Evict least recently used parses beyond the capacity. Caller holds the cache lock."""
+    while len(_file_cache) > _file_cache_capacity:
+        _file_cache.popitem(last=False)
+
+
+def size_file_cache(run_count):
+    """Fit the parse cache to the ledgers one snapshot reads. A fixed 64 entries with
+    oldest-first eviction meant that with a dozen archived runs the "All runs" view evicted
+    its own files and re-parsed every ledger on every poll."""
+    global _file_cache_capacity
+    with _file_cache_lock:
+        _file_cache_capacity = max(FILE_CACHE_LIMIT, min(FILE_CACHE_CEILING, LEDGER_FILES_PER_RUN * (run_count + 1)))
+        trim_file_cache()
 
 
 def age_seconds(value, now=None):
@@ -287,6 +329,7 @@ def board_snapshot(repo, selected="current", include=SNAPSHOT_EXTRAS):
     warnings = []
     now = int(time.time())
     directories = run_directories(repo)
+    size_file_cache(len(directories))
     if selected != "all" and selected not in directories:
         raise StateError("unknown run")
     runs, tasks, discovery, requests = [], [], [], []
@@ -529,23 +572,45 @@ def log_view(repo, requested):
 
 
 def quarantine_refs(repo):
-    """Quarantined worktrees saved by the supervisor as refs, newest first."""
+    """Quarantined worktrees saved by the supervisor as refs, newest first.
+
+    The recovery command is meant to be pasted into a shell. Git accepts ref names such as
+    `refs/improve/quarantine/$(cmd)`, so only refs named the way the supervisor names them are
+    listed, and the ref is shell-quoted anyway; other refs are counted, never echoed.
+    """
     output = git(repo, "for-each-ref", "--sort=-creatordate",
                  "--format=%(refname)%09%(objectname)%09%(creatordate:iso-strict)%09%(subject)",
                  "refs/improve/quarantine")
-    refs = []
+    refs, hidden = [], 0
     for line in output.splitlines():
         parts = line.split("\t", 3)
         if len(parts) < 3 or not parts[0]:
             continue
+        if not QUARANTINE_REF.fullmatch(parts[0]) or not re.fullmatch(r"[0-9a-f]{7,64}", parts[1]):
+            hidden += 1
+            continue
         refs.append({"ref": parts[0], "commit": parts[1], "date": parts[2],
                      "subject": (parts[3] if len(parts) > 3 else "")[:200],
-                     "recover": f"git checkout {parts[0]} -- ."})
-    return {"refs": refs[:QUARANTINE_LIMIT]}
+                     "recover": f"git checkout {shlex.quote(parts[0])} -- ."})
+    return {"refs": refs[:QUARANTINE_LIMIT], "hidden": hidden}
 
 
 def query_values(query, name, limit=200):
     return [value[:limit] for value in query.get(name, [])]
+
+
+def query_int(value, name, low, high):
+    """A whole-number query parameter clamped to [low, high]. More than nine digits is refused
+    before conversion: a 30-digit offset used to overflow SQLite's integer binding and drop
+    the connection instead of answering."""
+    if not isinstance(value, str) or not GRAPH_INT_PATTERN.fullmatch(value.strip()):
+        raise StateError(f"{name} must be a whole number")
+    return max(low, min(int(value), high))
+
+
+GRAPH_GET_PATHS = ("/api/graph", "/api/graph/node", "/api/graph/context", "/api/graph/history",
+                   "/api/graph/questions")
+QUESTION_LIMIT = 12
 
 
 def graph_get(repo, path, query):
@@ -555,17 +620,21 @@ def graph_get(repo, path, query):
     first = lambda name, fallback=None: (query_values(query, name) or [fallback])[0]
     if path == "/api/graph":
         types = [kind for kind in first("types", "").split(",") if kind in improve_graph.TYPES]
-        return improve_graph.board_view(graph, limit=int(first("limit", "250")), focus=first("focus"),
-                                        depth=int(first("depth", "1")), query=first("q"), types=types or None,
+        # board_view clamps the limit to its own 10..800 range; the parse only refuses junk.
+        view = improve_graph.board_view(graph, limit=query_int(first("limit", "250"), "limit", -1000, 100000),
+                                        focus=first("focus"), depth=query_int(first("depth", "1"), "depth", 1, 3),
+                                        query=first("q"), types=types or None,
                                         include_archived=first("archived") == "1")
+        return {key: value for key, value in view.items() if key not in UNUSED_GRAPH_VIEW_KEYS}
     if path == "/api/graph/node":
-        return improve_graph.node_detail(graph, first("id", ""))
+        # With the repository, insight details carry `code_changed` (files edited since the
+        # note was recorded); links carry their `tier`.
+        return improve_graph.node_detail(graph, first("id", ""), repo=repo)
     if path == "/api/graph/history":
         types = [kind for kind in first("types", "").split(",") if kind in improve_graph.TYPES]
-        result = improve_graph.history(repo, max(1, min(int(first("limit", "20")), 100)),
-                                       max(0, int(first("offset", "0"))), types or None, first("q"),
-                                       first("restored") == "1")
-        return result
+        return improve_graph.history(repo, query_int(first("limit", "20"), "limit", 1, 100),
+                                     query_int(first("offset", "0"), "offset", 0, HISTORY_OFFSET_MAX),
+                                     types or None, first("q"), first("restored") == "1")
     if path == "/api/graph/context":
         files = query_values(query, "file", 300)[:MAX_CONTEXT_FILES]
         area = first("area")
@@ -573,17 +642,83 @@ def graph_get(repo, path, query):
             area = None
         exclude = first("exclude")
         try:
-            result = improve_graph.context(graph, files, area, first("text"), 6, repo)
+            # The open task is excluded inside the ranking, so it neither weights the other
+            # results nor takes one of the six slots.
+            result = improve_graph.context(graph, files, area, first("text"), 6, repo, exclude=exclude)
         except improve_graph.GraphError:
             result = {"seeds": [], "files": [], "insights": [], "past_tasks": [], "blockers": [], "gates": [], "co_changed": []}
-        result["past_tasks"] = [task for task in result["past_tasks"] if task["id"] != exclude]
+        if "code" not in result:
+            code = code_context(repo, files)
+            if code:
+                result["code"] = code
         return {**result, "total_nodes": len(graph["nodes"])}
+    if path == "/api/graph/questions":
+        return {"questions": suggested_questions(graph, repo), "revision": graph.get("revision", 0)}
     raise StateError("not found")
 
 
-def graph_post(repo, data):
-    """Curate the graph from the board. Retried requests with the same request_id apply once."""
+def code_context(repo, files):
+    """Dependents, imports, and code notes for the task's files. The cached board graph has
+    no open database (load_cached closes it), so `context()` on it never reaches the code
+    layer; a short read-only session supplies it. Optional: any failure just omits it."""
     import improve_graph
+    paths = list(dict.fromkeys(path for path in (improve_graph.safe_path(value, repo) for value in files) if path))
+    if not paths:
+        return None
+    try:
+        with improve_graph.reading(repo) as session:
+            return improve_graph.code_context(session, paths)
+    except (StateError, OSError, ValueError, sqlite3.Error):
+        return None
+
+
+def suggested_questions(graph, repo):
+    """What the graph suggests a person look at; `node` says whether the id opens in the graph
+    (a module group id, for example, does not)."""
+    from improve_analysis import suggested_questions as suggest
+    nodes = graph["nodes"]
+    rows = []
+    for row in suggest(graph, repo, QUESTION_LIMIT):
+        if not isinstance(row, dict) or not isinstance(row.get("question"), str):
+            continue
+        rows.append({"kind": str(row.get("kind", "")), "id": str(row.get("id", "")),
+                     "question": row["question"][:600], "node": row.get("id") in nodes,
+                     **({"other": row["other"]} if row.get("other") in nodes else {})})
+    return rows
+
+
+@contextlib.contextmanager
+def bounded_operator_lock(repo, seconds):
+    """improve_control.operator_lock with a deadline: the same lock file and flock, polled
+    without blocking, so a read endpoint gives up (BoardError code "busy") instead of waiting
+    on a stuck holder."""
+    state = state_directory(repo)
+    fd = os.open(state / "operator.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise StateError("operator.lock must be a regular file")
+    with os.fdopen(fd, "a+") as stream:
+        until = time.monotonic() + seconds
+        while True:
+            try:
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= until:
+                    raise BoardError("The run state is busy; try again in a moment.", code="busy") from None
+                time.sleep(0.05)
+        try:
+            yield state
+        finally:
+            fcntl.flock(stream, fcntl.LOCK_UN)
+
+
+def graph_post(repo, data):
+    """Curate the graph from the board. Retried requests with the same request_id apply once.
+    Every curated write goes through the shared write path, so it is journaled and survives a
+    recovery from the last checkpoint."""
+    import improve_graph
+    import improve_graph_journal as journal
     action, request_id = data.get("action"), data.get("request_id")
     if not isinstance(request_id, str) or not re.fullmatch(r"[\w-]{8,80}", request_id):
         raise StateError("a request_id is required")
@@ -599,11 +734,13 @@ def graph_post(repo, data):
             text, kind = data.get("text"), data.get("kind", "fact")
             if not isinstance(text, str) or len(text) > improve_graph.MAX_SUMMARY:
                 raise StateError(f"knowledge must be text of at most {improve_graph.MAX_SUMMARY} characters")
-            node = improve_graph.add_insight(graph, text, kind, "user", [item for item in about if item.strip()], repo=repo)
+            node = journal.apply_write(graph, "note", {"text": text, "kind": kind, "source": "user",
+                                                        "about": [item for item in about if item.strip()]}, repo)
             node["score"] = round(improve_graph.score(node, improve_graph.run_seq(graph)), 4)
             result = {"node": improve_graph.node_view(node), "message": "Saved. The skill will see this in its next cycle."}
         elif action == "rate":
-            node = improve_graph.rate(graph, str(data.get("id", ""))[:400], data.get("verdict"), "user")
+            node = journal.apply_write(graph, "rate", {"id": str(data.get("id", ""))[:400], "verdict": data.get("verdict"),
+                                                        "source": "user"}, repo)
             node["score"] = round(improve_graph.score(node, improve_graph.run_seq(graph)), 4)
             result = {"node": improve_graph.node_view(node), "message": {
                 "useful": "Marked useful; it will rank higher.", "wrong": "Marked wrong; the skill will stop using it.",
@@ -616,15 +753,17 @@ def graph_post(repo, data):
             result = {"dream": report, "message": f"Dreamed: {inferred['new']} new links, {inferred['dropped']} dropped, "
                                                   f"{report['archived']} archived, {report['forgotten']} forgotten."}
         elif action == "restore":
-            node = improve_graph.restore_node(graph, str(data.get("id", ""))[:400], "restored from the board", "user")
+            node = journal.apply_write(graph, "restore", {"id": str(data.get("id", ""))[:400],
+                                                           "reason": "restored from the board", "source": "user"}, repo)
             result = {"node": improve_graph.node_view(node), "message": "Restored with its links. The skill sees it again."}
         elif action == "reject_link":
-            from improve_dream import reject_link
             fields = [data.get(name) for name in ("src", "rel", "dst")]
             if not all(isinstance(value, str) and 0 < len(value) <= 400 for value in fields):
                 raise StateError("src, rel, and dst are required")
-            result = {**reject_link(graph, *fields, by="user", reason=data.get("reason") if isinstance(data.get("reason"), str) else None),
-                      "message": "Link removed. Dreaming will not infer it again."}
+            reason = data.get("reason") if isinstance(data.get("reason"), str) else None
+            removed = journal.apply_write(graph, "unlink", {"src": fields[0], "rel": fields[1], "dst": fields[2], "by": "user",
+                                                            "reason": reason, "source": "user"}, repo)
+            result = {**removed, "message": "Link removed. Dreaming will not infer it again."}
         elif action == "refine":
             report = improve_graph.refine(graph, repo)
             result = {"refine": report, "message": f"Refined: {report['merged']} merged, {report['faded']} faded, {report['stale_files']} stale files."}
@@ -731,8 +870,7 @@ class BoardHandler(BaseHTTPRequestHandler):
         except (StateError, OSError, ValueError) as exc:
             return self.reply(400, error_payload(exc))
         except Exception as exc:  # Never drop the connection; report the fault as JSON.
-            traceback.print_exc()
-            return self.reply(500, {"error": f"board snapshot failed: {type(exc).__name__}: {exc}", "code": "internal"})
+            return self.internal_error("board snapshot", exc)
         self.server.snapshot_built_at = time.monotonic()
         etag = snapshot_etag(snapshot)
         if etag_matches(self.headers.get("If-None-Match"), etag):
@@ -740,26 +878,47 @@ class BoardHandler(BaseHTTPRequestHandler):
         return self.reply(200, snapshot, etag=etag)
 
     def health(self):
-        """Identity plus cheap liveness: the board's own snapshot age and the daemon's heartbeat."""
+        """Identity plus cheap liveness: the board's own snapshot age, the daemon's heartbeat,
+        and the running cycle's age. The snapshot ETag leaves these out, so the browser polls
+        this small payload to keep ages right while the snapshot itself answers 304."""
         payload = {"service": "improve-board", "instance": self.server.instance, "repo": str(self.server.repo),
-                   "snapshot_age_seconds": None, "daemon_running": False, "heartbeat_age_seconds": None}
+                   "snapshot_age_seconds": None, "daemon_running": False, "control_id": None,
+                   "heartbeat_at": None, "heartbeat_age_seconds": None,
+                   "cycle_started_at": None, "cycle_age_seconds": None}
         built = getattr(self.server, "snapshot_built_at", None)
         if built is not None:
             payload["snapshot_age_seconds"] = round(time.monotonic() - built, 1)
         try:
             state = state_directory(self.server.repo)
             control = load_file(state, "supervisor.json", [])
-            payload["heartbeat_age_seconds"] = age_seconds(control.get("heartbeat_at"))
+            run = load_file(state, "run.json", [])
+            source = control or run
+            now = int(time.time())
+            payload.update(
+                control_id=text_value(source.get("run_id")) or text_value(source.get("started_at")) or None,
+                heartbeat_at=text_value(control.get("heartbeat_at")) or None,
+                heartbeat_age_seconds=age_seconds(control.get("heartbeat_at"), now),
+                cycle_started_at=text_value(control.get("cycle_started_at")) or None,
+                cycle_age_seconds=age_seconds(control.get("cycle_started_at"), now))
             if not (state / "daemon.lock").is_symlink():
                 payload["daemon_running"] = lock_active(state / "daemon.lock")
-        except (StateError, OSError, ValueError):
+        except (StateError, OSError, ValueError, AttributeError):
             pass  # Liveness fields are best-effort; identity must always answer.
         return payload
+
+    def internal_error(self, what, exc):
+        """Never drop the connection on an unexpected fault; report it as JSON."""
+        traceback.print_exc()
+        return self.reply(500, {"error": f"{what} failed: {type(exc).__name__}: {exc}", "code": "internal"})
 
     def do_GET(self):
         if not self.allowed_host():
             return self.reply(403, {"error": "local host required"})
         target = urlsplit(self.path)
+        if target.path.startswith("/api/") and self.headers.get("Sec-Fetch-Site") not in SAME_SITE_FETCH:
+            # A page on another site (or a sibling subdomain) may not read board state or
+            # drive the operator lock through /api/report, even though it cannot see replies.
+            return self.reply(403, {"error": "same-origin board request required", "code": "cross_site"})
         if target.path == "/api/session":
             # A custom header prevents cross-site forms/images from retrieving the
             # browser capability. No CORS response is ever sent.
@@ -772,7 +931,7 @@ class BoardHandler(BaseHTTPRequestHandler):
         if target.path == "/api/report":
             try:
                 selected = parse_qs(target.query, max_num_fields=8).get("run", ["current"])[0]
-                with operator_lock(self.server.repo):
+                with bounded_operator_lock(self.server.repo, REPORT_LOCK_SECONDS):
                     directory = run_directories(self.server.repo).get(selected)
                     if directory is None:
                         raise StateError("unknown run")
@@ -780,14 +939,20 @@ class BoardHandler(BaseHTTPRequestHandler):
                 if report is None:
                     return self.reply(404, {"error": "No saved final report yet."})
                 return self.reply(200, {"text": report, "run_id": selected})
+            except BoardError as exc:
+                return self.reply(503 if exc.code == "busy" else 400, error_payload(exc))
             except (StateError, OSError, ValueError) as exc:
                 return self.reply(400, error_payload(exc))
-        if target.path in ("/api/graph", "/api/graph/node", "/api/graph/context", "/api/graph/history"):
+            except Exception as exc:
+                return self.internal_error("reading the report", exc)
+        if target.path in GRAPH_GET_PATHS:
             try:
                 query = parse_qs(target.query, max_num_fields=40)
                 return self.reply(200, graph_get(self.server.repo, target.path, query))
             except (StateError, OSError, ValueError, sqlite3.Error) as exc:
                 return self.reply(400, error_payload(exc))
+            except Exception as exc:
+                return self.internal_error("graph read", exc)
         if target.path == "/api/health":
             return self.reply(200, self.health())
         if target.path == "/api/board":
@@ -805,6 +970,8 @@ class BoardHandler(BaseHTTPRequestHandler):
                 return self.reply(404 if exc.code in ("journal_missing", "log_missing") else 400, error_payload(exc))
             except (StateError, OSError, ValueError) as exc:
                 return self.reply(400, error_payload(exc))
+            except Exception as exc:
+                return self.internal_error("operational view", exc)
         assets = {"/": ("index.html", "text/html; charset=utf-8"),
                   "/board.js": ("board.js", "text/javascript; charset=utf-8"),
                   "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
@@ -900,6 +1067,8 @@ class BoardHandler(BaseHTTPRequestHandler):
                 }[action]})
         except (StateError, OSError, ValueError, TypeError, RecursionError, sqlite3.Error) as exc:
             return self.reply(400, error_payload(exc))
+        except Exception as exc:
+            return self.internal_error("graph write" if self.path == "/api/graph" else "request", exc)
 
 
 HOST_PATTERN = re.compile(r"(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+")

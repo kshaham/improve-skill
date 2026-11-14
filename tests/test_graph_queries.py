@@ -9,7 +9,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from graph_support import ROOT, archive, check_invariants, environment, load, make_repo, restore_environment, write_ledger, write_run  # noqa: E402
+from graph_support import budget, ROOT, archive, check_invariants, environment, load, make_repo, restore_environment, write_ledger, write_run  # noqa: E402
 import improve_graph as graph  # noqa: E402
 import improve_toon as toon  # noqa: E402
 import improve_learning as learning  # noqa: E402
@@ -254,11 +254,14 @@ class BriefAndSummaryTests(RichGraph):
 
     def test_brief_is_bounded_on_a_line_boundary(self):
         full = graph.brief(self.graph, "graph.py", "/repo")
+        full_lines = set(full.splitlines())
         for limit in (50, 200, 400, len(full) - 1, 5000):
             with self.subTest(limit=limit):
                 text = graph.brief(self.graph, "graph.py", "/repo", max_chars=limit)
                 self.assertLessEqual(len(text), limit)
-                self.assertTrue(full.startswith(text))
+                # Whole lines only; a smaller budget drops notes, never half a line.
+                self.assertTrue(all(line in full_lines or line.startswith(("(showing ", "Knowledge graph: "))
+                                    for line in text.splitlines()))
         self.assertEqual(graph.brief(graph.empty_graph(), "g", "r"), "")
 
     def test_summary_counts_active_knowledge(self):
@@ -408,7 +411,7 @@ class WriteApiTests(RichGraph):
 class CommandLineQueryTests(RichGraph):
     def run_cli(self, *args):
         return subprocess.run([sys.executable, str(ROOT / "scripts/improve_graph.py"), "--repo", str(self.repo), *args],
-                              capture_output=True, text=True, env=os.environ, timeout=30)
+                              capture_output=True, text=True, env=os.environ, timeout=budget(30))
 
     def test_every_read_command(self):
         cases = {
@@ -417,7 +420,7 @@ class CommandLineQueryTests(RichGraph):
             ("context", "--area", "ui", "--limit", "1"): "Past tasks here:",
             ("brief",): "Top knowledge",
             ("brief", "--max-chars", "60"): "Knowledge graph:",
-            ("path", "area:ui", "area:ui"): "No connection within six steps.",
+            ("path", "area:ui", "area:ui"): "No connection within six steps",
         }
         for args, expected in cases.items():
             with self.subTest(args=args):
@@ -435,7 +438,10 @@ class CommandLineQueryTests(RichGraph):
         self.assertEqual(toon.loads(self.run_cli("stats").stdout)["runs"], 2)
 
     def test_errors_exit_two_without_tracebacks(self):
-        for args in (("context",), ("node", "file:none.py"), ("path", "area:ui", "area:none"),
+        missing = self.run_cli("node", "file:none.py")
+        self.assertEqual(missing.returncode, 5, "nothing by that name has its own exit code")
+        self.assertNotIn("Traceback", missing.stderr)
+        for args in (("context",), ("path", "area:ui", "area:none"),
                      ("search", "x", "--type", "planet"), ("rate", "insight:none", "useful"),
                      ("note", "--text", "short"), ("link", "area:ui", "likes", "area:security"), ()):
             with self.subTest(args=args):
@@ -447,7 +453,7 @@ class CommandLineQueryTests(RichGraph):
         with tempfile.TemporaryDirectory() as directory:
             repo = make_repo(Path(directory), [])
             run = lambda *args: subprocess.run([sys.executable, str(ROOT / "scripts/improve_graph.py"), "--repo",
-                                                str(repo), *args], capture_output=True, text=True, timeout=30)
+                                                str(repo), *args], capture_output=True, text=True, timeout=budget(30))
             self.assertEqual(run("brief").stdout.strip(), "The knowledge graph is empty.")
             self.assertEqual(toon.loads(run("stats").stdout)["nodes"], 0)
             self.assertEqual(toon.loads(run("hotspots").stdout), [])

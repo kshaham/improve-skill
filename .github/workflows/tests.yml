@@ -8,46 +8,99 @@ on:
   workflow_dispatch:
 
 jobs:
-  fast:
-    name: unit and daemon tests (python ${{ matrix.python }})
+  lint:
+    name: lint (python 3.9 grammar, unused imports, board scripts)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Shell syntax
+        run: for script in scripts/*.sh; do bash -n "$script"; done
+      - name: Python lint
+        run: python tests/lint.py
+      - name: Board scripts parse
+        run: for script in assets/board/*.js; do node --check "$script"; done
+
+  fast:
+    # macOS is the primary platform (flock, ps -o stat=, process groups); Linux is CI's default.
+    name: fast suite (${{ matrix.os }}, python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest]
         python: ["3.9", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Shell syntax
-        run: for script in scripts/*.sh; do bash -n "$script"; done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
       - name: Python syntax
         run: python -m compileall -q scripts tests
       - name: Fast suite
         env:
           IMPROVE_TEST_SPEED_FACTOR: "3"
-        run: python -B -m unittest discover -s tests -v
+        run: python -B -W error::ResourceWarning -m unittest discover -s tests -v
 
   nightly:
-    name: soak, scale, performance, and browser checks
+    name: soak, scale, and performance (${{ matrix.os }}, python ${{ matrix.python }})
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.9", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python }}
       - name: Slow suites
         env:
           IMPROVE_TEST_SLOW: "1"
           IMPROVE_TEST_SPEED_FACTOR: "3"
         run: python -B -m unittest discover -s tests -v
-      - name: Browser checks
+      - name: Test-order independence (shared fixtures run in reverse)
+        env:
+          IMPROVE_TEST_SPEED_FACTOR: "3"
+        working-directory: tests
+        run: python -B reverse_order.py test_graph_queries test_graph_store test_graph_lifecycle test_graph_server test_graph
+
+  browser:
+    name: browser checks
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install a pinned Playwright
         run: |
-          python -m pip install playwright
+          python -m pip install "playwright==1.48.0"
           python -m playwright install --with-deps chromium
-          python tests/browser_board.py
-          python tests/browser_graph.py
-          python tests/browser_graph_scale.py
+      - name: Board, controls, workflow, triage, focus, mobile, and graph views
+        # browser_board.py also runs the graph, controls, workflow, triage, focus, and mobile checks.
+        run: python tests/browser_board.py --artifacts browser-artifacts/board
+      - name: Large graph view
+        run: python tests/browser_graph_scale.py --artifacts browser-artifacts/scale
+      - name: Keep screenshots of a failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-artifacts
+          path: browser-artifacts/
+          retention-days: 14

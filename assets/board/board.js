@@ -676,10 +676,6 @@ function renderHealth(run) {
     Number.isFinite(Date.parse(value))
       ? new Date(value).toLocaleString()
       : "not recorded";
-  const checkpoints = ["Work checkpoint: " + formatTime(run.last_activity_at)];
-  if (run.supervised)
-    checkpoints.push("Supervisor checkpoint: " + formatTime(run.heartbeat_at));
-  $("run-checkpoint").textContent = checkpoints.join(" · ");
   const notices = [];
   if (run.summary_pending)
     notices.push(

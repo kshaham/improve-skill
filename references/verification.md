@@ -31,6 +31,11 @@ hourly. Record both:
                  "batch": "./scripts/ios-test.sh" }
     }
 
+Record their cost in `gate_seconds` with the same nesting (`{"go": {"fast": 41, "batch": 380}}`)
+or flat dotted names (`{"go.fast": 41}`); the knowledge graph reads either and calls the
+gates `go.fast`, `go.batch` (and cites `go` as the group). Name gates in a task's
+`verification.gates` the same way, so outcomes credit the gate that ran.
+
 Run the fast gate on every change and the batch gate once per hour before the report. A red
 batch gate after green fast gates means the fast gate has a hole - report that as a finding
 in its own right, because it is more valuable than whatever item exposed it.

@@ -186,7 +186,8 @@ if mode == 'bad_utf8':
     with (state / 'backlog.jsonl').open('ab') as stream:
         stream.write(b'\xff\xfe{"id":"zz"}\n')
 if mode == 'orphan':
-    subprocess.Popen([sys.executable, '-c', 'import signal,time,pathlib; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(3); pathlib.Path(".improve/orphan-wrote").touch()'])
+    orphan = subprocess.Popen([sys.executable, '-c', 'import signal,time,pathlib; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(3); pathlib.Path(".improve/orphan-wrote").touch()'])
+    (state / 'orphan.pid').write_text(str(orphan.pid))
 if mode in ('timeout', 'orphan') or (mode == 'overrun' and 'FINALIZATION ONLY' not in prompt):
     time.sleep(30)
     sys.exit(0)
@@ -237,6 +238,10 @@ if 'FINALIZATION ONLY' in prompt:
         (state / 'limit-final-done').touch()
         print('usage limit reached')
         sys.exit(1)
+    if mode == 'limit_final0' and not (state / 'limit-final-done').exists():
+        (state / 'limit-final-done').touch()
+        print("You've hit your usage limit. Try again later.")
+        sys.exit(0)
     if mode == 'final_commit':
         subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'unauthorized final edit'], check=True)
     run['outcome'] = control.get('outcome') or 'completed'
@@ -279,6 +284,14 @@ else:
         pathlib.Path('__pycache__/m.cpython-313.pyc').write_text('bytecode')
     elif mode == 'newfile':
         pathlib.Path('notes.txt').write_text('unverified work')
+    elif mode == 'custom_artifact':
+        run['artifact_paths'] = ['generated/*']
+        pathlib.Path('generated').mkdir(exist_ok=True)
+        pathlib.Path('generated/schema.bin').write_text('generated output')
+    elif mode == 'unreadable':
+        secret = pathlib.Path('secret.txt')
+        secret.write_text('unverified work git cannot read')
+        secret.chmod(0)
     elif mode == 'tracked_dirty':
         with open('README.txt', 'a') as stream:
             stream.write('edited\n')
@@ -352,7 +365,7 @@ class DaemonTests(unittest.TestCase):
     def tearDown(self):
         if (self.state / "board.json").exists():
             subprocess.run([str(ROOT / "scripts/improve-board.sh"), "--repo", str(self.repo), "--stop"],
-                           capture_output=True, timeout=5)
+                           capture_output=True, timeout=budget(5))
         self.temp.cleanup()
 
     def git(self, *args):
@@ -373,7 +386,7 @@ class DaemonTests(unittest.TestCase):
         saved = self.load("board.json")
         lock_inode = (self.state / "board.lock").stat().st_ino
         status = subprocess.run(self.command("--status", "--json"), env=self.env,
-                                capture_output=True, text=True, timeout=5)
+                                capture_output=True, text=True, timeout=budget(5))
         info = json.loads(status.stdout)
         self.assertFalse(info["running"])
         self.assertTrue(info["board"]["running"])
@@ -404,7 +417,7 @@ class DaemonTests(unittest.TestCase):
         self.assertFalse((self.state / "board.json").exists())
         self.assertIn("disabled by --no-board", self.launches()[0]["prompt"])
 
-    def invoke(self, mode="early", *extra, intake=True, duration="60s", env=None, script=None, timeout=25):
+    def invoke(self, mode="early", *extra, intake=True, duration="60s", env=None, script=None, timeout=budget(25)):
         args = ["--for", duration, *extra]
         if intake:
             args += ["--intake", str(self.intake)]
@@ -432,7 +445,7 @@ class DaemonTests(unittest.TestCase):
         runtime.atomic_json(self.state / 'supervisor.json', control)
         return control
 
-    def wait_control(self, predicate, timeout=5):
+    def wait_control(self, predicate, timeout=budget(5)):
         until = time.monotonic() + timeout
         while time.monotonic() < until:
             try:
@@ -468,7 +481,7 @@ class DaemonTests(unittest.TestCase):
             self.wait_control(lambda value: value.get('phase') == 'paused')
             self.assertEqual(len(self.launches()), launches + 1)
             (self.state / 'stop.request').touch()
-            out, err = proc.communicate(timeout=5)
+            out, err = proc.communicate(timeout=budget(5))
             self.assertEqual(proc.returncode, 0, out + err)
             self.assertEqual(self.load('supervisor.json')['outcome'], 'stopped by user')
             self.assertEqual(self.load('supervisor.json')['deadline'], saved['deadline'])
@@ -477,7 +490,7 @@ class DaemonTests(unittest.TestCase):
         finally:
             if proc.poll() is None:
                 (self.state / 'stop.request').touch()
-                proc.communicate(timeout=5)
+                proc.communicate(timeout=budget(5))
             proc.stdout.close()
             proc.stderr.close()
 
@@ -555,13 +568,13 @@ class DaemonTests(unittest.TestCase):
             self.wait_control(lambda value: value.get('phase') == 'account-limit')
             self.assertFalse((self.state / 'launches.jsonl').exists())
             (self.state / 'stop.request').touch()
-            out, err = proc.communicate(timeout=5)
+            out, err = proc.communicate(timeout=budget(5))
             self.assertEqual(proc.returncode, 0, out + err)
             self.assertGreaterEqual(self.load('supervisor.json')['limit_waited_seconds'], 3)
         finally:
             if proc.poll() is None:
                 (self.state / 'stop.request').touch()
-                proc.communicate(timeout=5)
+                proc.communicate(timeout=budget(5))
             proc.stdout.close()
             proc.stderr.close()
 
@@ -869,7 +882,12 @@ class DaemonTests(unittest.TestCase):
         self.env.update(IMPROVE_CYCLE_TIMEOUT="1", IMPROVE_MAX_FAILURES="1")
         result = self.invoke("orphan")
         self.assertEqual(result.returncode, 1, result.stderr)
-        time.sleep(2.2)
+        import improve_resilience as resilience
+        pid = int((self.state / "orphan.pid").read_text())
+        until = time.monotonic() + budget(2)
+        while resilience.process_command(pid) is not None and time.monotonic() < until:
+            time.sleep(0.05)
+        self.assertIsNone(resilience.process_command(pid), "the TERM-ignoring descendant was killed with its group")
         self.assertFalse((self.state / "orphan-wrote").exists())
 
     def test_rate_limit_wait_is_capped_at_deadline_and_finalized(self):
@@ -890,7 +908,7 @@ class DaemonTests(unittest.TestCase):
         process = subprocess.Popen(command, env={**self.env, "FAKE_MODE": "limit"},
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
-            until = time.monotonic() + 5
+            until = time.monotonic() + budget(5)
             while time.monotonic() < until:
                 journal = self.state / "journal.md"
                 if journal.exists() and "Account usage limit" in journal.read_text():
@@ -900,7 +918,7 @@ class DaemonTests(unittest.TestCase):
                 self.fail("daemon never reached backoff")
             result = subprocess.run(self.command("--stop"), env=self.env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            process.communicate(timeout=3)
+            process.communicate(timeout=budget(3))
             self.assertEqual(self.load("supervisor.json")["outcome"], "stopped by user")
             self.assertEqual(len(self.launches()), 1)
         finally:
@@ -1043,7 +1061,7 @@ class DaemonTests(unittest.TestCase):
         self.seed(-1)
         self.assertEqual(self.invoke("final_fail").returncode, 0)
         old = self.load()
-        result = subprocess.run(self.command("--finalize"), env=self.env, capture_output=True, text=True, timeout=5)
+        result = subprocess.run(self.command("--finalize"), env=self.env, capture_output=True, text=True, timeout=budget(5))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.load()["ended_at"], old["ended_at"])
         self.assertEqual(self.load()["deadline"], old["deadline"])
@@ -1109,7 +1127,7 @@ class DaemonTests(unittest.TestCase):
                                    env={**self.env, "FAKE_MODE": "timeout"},
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
-            until = time.monotonic() + 5
+            until = time.monotonic() + budget(5)
             while time.monotonic() < until:
                 control_path = self.state / "supervisor.json"
                 if control_path.exists() and json.loads(control_path.read_text()).get("child_pid"):
@@ -1118,13 +1136,68 @@ class DaemonTests(unittest.TestCase):
             else:
                 self.fail("cycle never started")
             subprocess.run(self.command("--stop"), env=self.env, check=True, capture_output=True)
-            process.communicate(timeout=4)
+            process.communicate(timeout=budget(4))
             self.assertEqual(self.load("supervisor.json")["outcome"], "stopped by user")
             self.assertIsNone(self.load("supervisor.json")["child_pid"])
         finally:
             if process.poll() is None:
                 process.kill()
                 process.communicate()
+
+
+# Engine routing, pause, intake, finalization, and limit behavior that must hold in the default
+# resilient configuration too, where run() contains errors instead of re-raising them. Tests that
+# rely on a worker halt ending the run stay strict-only: by default such halts are softened.
+DEFAULT_MODE_TESTS = (
+    "test_codex_host_launches_codex_and_relaunches_until_stopped",
+    "test_claude_host_launches_without_nested_session_marker",
+    "test_auto_detection_refuses_ambiguity_without_launch",
+    "test_codex_max_uses_max_prompt_and_target_rules",
+    "test_dry_run_shows_codex_command_without_state_or_launch",
+    "test_engine_environment_is_validated",
+    "test_codex_expiry_and_report_retry_keep_engine",
+    "test_board_pause_resume_and_stop_claude",
+    "test_board_pause_resume_and_stop_codex",
+    "test_pause_survives_restart_but_never_extends_deadline",
+    "test_explicit_resume_clears_pause_but_keeps_run_identity",
+    "test_pause_preserves_account_limit_retry_and_resume_restores_wait_phase",
+    "test_missing_intake_launches_no_agent",
+    "test_rejected_recovery_does_not_install_supplied_intake",
+    "test_awaiting_answers_intake_cannot_start_or_archive_a_run",
+    "test_expired_legacy_run_does_not_require_new_intake",
+    "test_finalize_retries_pending_report_without_restarting_work",
+    "test_failed_finalization_reports_pending_summary",
+    "test_stale_report_does_not_count_as_new_finalization",
+    "test_finalization_cannot_commit_and_report_success",
+    "test_expired_resume_only_finalizes",
+    "test_cycle_completion_at_deadline_still_gets_final_report",
+    "test_empty_discovery_keeps_running_to_deadline",
+    "test_restart_waits_for_recorded_rate_limit_retry",
+    "test_expired_retry_accounts_downtime_without_sleeping_again",
+    "test_restart_after_deadline_accounts_pending_wait_before_final_report",
+    "test_invalid_saved_retry_does_not_launch_or_erase_state",
+    "test_rate_limit_wait_is_capped_at_deadline_and_finalized",
+    "test_stop_interrupts_rate_limit_wait",
+    "test_restart_preserves_deadline_and_repairs_reset",
+    "test_early_completion_relaunches_and_fast_empty_scan_is_not_failure",
+    "test_stop_bounds_an_uncooperative_running_cycle",
+    "test_deadline_grace_bounds_long_cycle",
+    "test_status_and_dry_run_do_not_create_state",
+)
+
+
+class DefaultModeTests(DaemonTests):
+    """DaemonTests' routing, pause, intake, finalize, and limit cases with no strict switches."""
+
+    def setUp(self):
+        super().setUp()
+        for key in ("IMPROVE_MAX_RECOVERIES", "IMPROVE_MAX_WORKER_HALTS", "IMPROVE_QUARANTINE"):
+            self.env.pop(key)
+
+
+for _name in [name for name in vars(DaemonTests) if name.startswith("test_")]:
+    if _name not in DEFAULT_MODE_TESTS:
+        setattr(DefaultModeTests, _name, None)
 
 
 class ResilienceTests(DaemonTests):
@@ -1153,8 +1226,18 @@ class ResilienceTests(DaemonTests):
         self.assertIn("Work around it", self.launches()[1]["prompt"])
         self.assertIn("Blocked tasks", self.launches()[1]["prompt"])
 
-    def test_repeated_worker_halts_are_eventually_honored(self):
-        result = self.invoke("halt")
+    def test_repeated_worker_halts_park_and_the_run_reaches_its_deadline(self):
+        result = self.invoke("halt", duration=f"{round(budget(5))}s", env={"IMPROVE_PARK_WAIT": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        control = self.load("supervisor.json")
+        self.assertEqual(control["outcome"], "completed", "repeated halts park like every other breaker")
+        self.assertGreaterEqual(control["parks"], 1)
+        self.assertIn("worker halts in a row", (self.state / "journal.md").read_text())
+        self.assertGreater(len(self.launches()), 3)
+        self.assertIn("FINALIZATION ONLY", self.launches()[-1]["prompt"])
+
+    def test_repeated_worker_halts_are_honored_when_parking_is_disabled(self):
+        result = self.invoke("halt", env={"IMPROVE_PARK": "0"})
         self.assertEqual(result.returncode, 1)
         self.assertEqual(len(self.launches()), 3)  # Two softened halts, then the third is honored.
         self.assertIn("required gate unavailable", self.load("supervisor.json")["outcome"])
@@ -1181,7 +1264,7 @@ class ResilienceTests(DaemonTests):
     def test_failure_breaker_recovers_before_halting(self):
         result = subprocess.run(self.command("--for", "60s", "--intake", str(self.intake)),
                                 env={**self.env, "FAKE_MODE": "no_checkpoint", "IMPROVE_MAX_RECOVERIES": "1", "IMPROVE_PARK": "0"},
-                                capture_output=True, text=True, timeout=15)
+                                capture_output=True, text=True, timeout=budget(15))
         self.assertEqual(result.returncode, 1)
         self.assertEqual(len(self.launches()), 6)
         self.assertIn("Supervisor recovery 1", self.launches()[3]["prompt"])
@@ -1286,7 +1369,7 @@ class LongRunResilienceTests(ResilienceTests):
         self.assertIs(type(run["cycle"]), int)
         self.assertEqual(run["cycle"], 4)
         clock = subprocess.run([str(ROOT / "scripts/improve-clock.sh"), "--json", str(self.repo)],
-                               capture_output=True, text=True, timeout=5)
+                               capture_output=True, text=True, timeout=budget(5))
         self.assertEqual(clock.returncode, 0, clock.stderr)
 
     def test_undecodable_ledger_bytes_are_repaired_not_fatal(self):
@@ -1312,12 +1395,17 @@ class LongRunResilienceTests(ResilienceTests):
         self.assertEqual(result.returncode, 0, result.stderr)
         control = self.control()
         self.assertEqual(control["outcome"], "stopped by user")
-        self.assertEqual(control["quarantines"], 4)
+        self.assertEqual(control["artifact_cleanups"], 4)
+        self.assertNotIn("quarantines", control)
         self.assertEqual(control.get("recoveries", 0), 0)
         self.assertFalse((self.state / "backlog.jsonl").exists(), "artifacts never block a task")
         self.assertIn("build artifacts", self.launches()[1]["prompt"])
         self.assertFalse((self.repo / "build").exists())
         self.assertEqual(self.git("status", "--porcelain", "--", ".", ":(exclude).improve").stdout, b"")
+        self.assertEqual(self.git("for-each-ref", "refs/improve").stdout, b"",
+                         "build output is never committed to a quarantine ref")
+        self.assertIn("build/", self.journal())
+        self.assertIn("build/", control["last_artifacts"])
 
     def test_new_untracked_source_files_still_count_as_unverified_work(self):
         (self.state).mkdir(exist_ok=True)
@@ -1340,7 +1428,7 @@ class LongRunResilienceTests(ResilienceTests):
         self.assertIn("exited 2 without a checkpoint", self.launches()[1]["prompt"])
 
     def test_exhausted_breakers_park_the_run_instead_of_halting(self):
-        result = self.invoke("no_checkpoint", duration="6s",
+        result = self.invoke("no_checkpoint", duration=f"{round(budget(6))}s",
                              env={"IMPROVE_MAX_FAILURES": "2", "IMPROVE_MAX_RECOVERIES": "1", "IMPROVE_PARK_WAIT": "1"})
         self.assertEqual(result.returncode, 0, result.stderr)
         control = self.control()
@@ -1350,7 +1438,7 @@ class LongRunResilienceTests(ResilienceTests):
         self.assertGreater(len(self.launches()), 4)
 
     def test_supervisor_errors_are_contained_and_the_run_reaches_its_deadline(self):
-        result = self.invoke(script=["pause_break", "empty"], duration="5s",
+        result = self.invoke(script=["pause_break", "empty"], duration=f"{round(budget(5))}s",
                              env={"IMPROVE_MAX_CRASHES": "2", "IMPROVE_PARK_WAIT": "1"})
         self.assertEqual(result.returncode, 0, result.stderr)
         control = self.control()
@@ -1378,12 +1466,12 @@ class LongRunResilienceTests(ResilienceTests):
 
     def test_status_reports_a_crashed_daemon(self):
         self.seed_control(run_id="crashed-run", phase="working", child_pid=None)
-        status = subprocess.run(self.command("--status", "--json"), env=self.env, capture_output=True, text=True, timeout=5)
+        status = subprocess.run(self.command("--status", "--json"), env=self.env, capture_output=True, text=True, timeout=budget(5))
         info = json.loads(status.stdout)
         self.assertFalse(info["running"])
         self.assertTrue(info["crashed"])
         self.assertEqual(info["quarantine"], [])
-        text = subprocess.run(self.command("--status"), env=self.env, capture_output=True, text=True, timeout=5)
+        text = subprocess.run(self.command("--status"), env=self.env, capture_output=True, text=True, timeout=budget(5))
         self.assertIn("crashed", text.stdout)
 
     def test_stale_child_detection_and_termination(self):
@@ -1398,7 +1486,7 @@ class LongRunResilienceTests(ResilienceTests):
             self.assertIsNone(resilience.stale_child({"child_pid": child.pid, "engine": "codex"}), "a reused pid runs something else")
             self.assertIsNone(resilience.stale_child({"child_pid": os.getpid(), "engine": "claude"}))
             self.assertTrue(resilience.terminate_group(child.pid, grace=1))
-            self.assertIsNotNone(child.poll() if child.poll() is not None else child.wait(timeout=3))
+            self.assertIn(child.wait(timeout=budget(3)), (-signal.SIGTERM, -signal.SIGKILL), "ended by the group signal")
         finally:
             if child.poll() is None:
                 child.kill()
@@ -1408,11 +1496,11 @@ class LongRunResilienceTests(ResilienceTests):
         process = subprocess.Popen(self.command("--for", "60s", "--intake", str(self.intake)),
                                    env={**self.env, "FAKE_MODE": "controlled"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
-            until = time.monotonic() + 10
+            until = time.monotonic() + budget(10)
             while time.monotonic() < until and not (self.state / "launches.jsonl").exists():
                 time.sleep(0.05)
             process.send_signal(signal.SIGTERM)
-            out, err = process.communicate(timeout=15)
+            out, err = process.communicate(timeout=budget(15))
         finally:
             if process.poll() is None:
                 process.kill()
@@ -1437,6 +1525,11 @@ class LongRunResilienceTests(ResilienceTests):
         self.assertIn("Cycle budget", prompt)
         self.assertIn("3600s", prompt)
         self.assertIn("never a reason to block a task", prompt)
+        # The TOON hint covers every form the encoder emits, and the text-output commands.
+        for form in ("f{a,b}", "stats.done", "name[N:]{f1,f2}:", "`null`", "…[+N]", "before or after the command"):
+            self.assertIn(form, prompt)
+        self.assertIn("--graph-ref INSIGHT_ID", prompt)
+        self.assertIn("`impact PATH`", prompt)
         control = self.control()
         self.assertEqual(control["cycle_timeout_seconds"], 3600)
         history = control["cycle_history"]

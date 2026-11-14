@@ -43,9 +43,10 @@ function focusSummary(areas = {}, themes = []) {
 }
 
 function savedFocus() {
-  // The latest current-run focus request wins until the skill records a newer one.
+  // The latest current-run focus request wins until the skill records a newer one; a
+  // declined or withdrawn request never shows as the focus.
   const rows = (snapshot?.controls?.requests || []).filter(
-    (row) => row.type === "focus" && row.status !== "declined",
+    (row) => row.type === "focus" && !["declined", "withdrawn"].includes(row.status),
   );
   const latest = rows[rows.length - 1];
   const applied = snapshot?.current?.focus || {};

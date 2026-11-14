@@ -11,7 +11,7 @@ Before selecting an item, after settling an item, and after a context reset, run
 installed skill's helper (use its actual absolute path):
 
 ```sh
-python3 /path/to/improve/scripts/improve_control.py --repo /absolute/repo pending
+python3 <skill-directory>/scripts/improve_control.py --repo /absolute/repo pending
 ```
 
 It prints the run identity, the pause/stop flags, and pending requests oldest first as a
@@ -23,7 +23,9 @@ does not pretend that saving or displaying one has fulfilled it.
 Requests are user intent. Preserve existing scope/exclusions unless the user explicitly
 changes them. Proposal approval covers the named proposal; it is not blanket permission
 to deploy, publish, spend, or make unrelated changes. If a request needs clarification,
-leave it pending and explain the missing detail in the current conversation. Continue
+explain the missing detail in the current conversation and leave it pending; under the
+daemon there is no conversation, so acknowledge it `declined` with the question in the note
+instead (the user sees it on the board and can send a clearer request). Continue
 independent authorized work. A request outside the remaining duration may be queued as
 unimplemented work; it must not extend the deadline.
 
@@ -61,7 +63,7 @@ After atomically saving the plan/task change, acknowledge the request with a sho
 specific result. Include the created task ID or affected proposal when useful:
 
 ```sh
-python3 /path/to/improve/scripts/improve_control.py --repo /absolute/repo ack \
+python3 <skill-directory>/scripts/improve_control.py --repo /absolute/repo ack \
   --id REQUEST-UUID --status applied --note 'Queued user-REQUEST-UUID with mobile acceptance checks.'
 ```
 
@@ -97,8 +99,11 @@ do not reopen or overwrite the source task merely because the form came from its
 
 Unsubmitted drafts live only in this browser, separated by repository, run, request type,
 target, and proposal decision. They are not user requests until explicitly submitted.
-Closing keeps a draft; Resume draft opens the most recently edited one. Submission clears
-that draft; Discard draft removes it. A stale draft can be copied into a new request but
+Closing keeps a draft; Resume draft opens the most recently edited one. Every request type,
+including `retry` and `withdraw`, has drafts; a form closed with nothing typed (a priority
+form with its level unchanged) keeps none. An unreadable saved draft is dropped by itself and
+the rest stay readable and writable; drafts written by a newer board version are never
+overwritten. Submission clears that draft; Discard draft removes it. A stale draft can be copied into a new request but
 must never be silently retargeted to a new run. Retry IDs persist across reloads so a
 response lost after a successful save can be retried without creating duplicate work.
 

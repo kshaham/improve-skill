@@ -89,6 +89,7 @@ function openBulkPriority() {
     text:
       `Change priority for these ${tasks.length} current tasks:\n\n` +
       tasks.map((task) => "• " + task.title.slice(0, 200)).join("\n"),
+    initial_priority: "normal",
   };
   $("request-context").textContent = draftContext.text;
   $("request-title").textContent =

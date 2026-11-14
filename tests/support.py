@@ -4,8 +4,12 @@ IMPROVE_TEST_SLOW=1 runs the soak, scale, and performance suites (minutes each);
 skipped by default so the fast suite stays reliable on a loaded machine or CI runner.
 IMPROVE_TEST_SPEED_FACTOR scales every wall-clock ceiling (2 doubles them).
 Git is isolated from the developer's global and system configuration so signing, hooks,
-and templates on the host never reach fixture repositories.
+and templates on the host never reach fixture repositories. The host's own IMPROVE_*
+settings (an exported IMPROVE_FORMAT=json, a short IMPROVE_GRAPH_LOCK_WAIT) are removed for
+the same reason, and the cross-project learning store points at a throwaway directory so no
+test writes to the developer's real one.
 """
+import atexit
 import os
 from pathlib import Path
 import tempfile
@@ -30,6 +34,7 @@ def isolate_git():
     if _GIT_HOME is not None:
         return
     _GIT_HOME = tempfile.TemporaryDirectory(prefix="improve-test-git ")
+    atexit.register(_GIT_HOME.cleanup)
     config = Path(_GIT_HOME.name) / "gitconfig"
     config.write_text("[user]\n\tname = Improve tests\n\temail = tests@example.invalid\n"
                       "[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n[core]\n\thooksPath = /dev/null\n"
@@ -52,4 +57,12 @@ def fts5_available():
         connection.close()
 
 
+def isolate_environment():
+    """Drop host IMPROVE_* settings (test knobs excepted) and isolate the learning store."""
+    for key in [key for key in os.environ if key.startswith("IMPROVE_") and not key.startswith("IMPROVE_TEST_")]:
+        del os.environ[key]
+    os.environ["IMPROVE_LEARNING_HOME"] = str(Path(_GIT_HOME.name) / "learning-home")
+
+
 isolate_git()
+isolate_environment()
