@@ -434,6 +434,11 @@ class TopicsTests(unittest.TestCase):
         text = wiki.render(pages)["topics"]
         self.assertIn("Keep the grid columns in one place", text)
         self.assertIn("cohesion 0.8", text)
+        many = self.graph()
+        many["communities"]["groups"][0]["members"] = [f"file:web/{i}.js" for i in range(wiki.FILES_PER_AREA + 4)]
+        many["communities"]["groups"][0]["size"] = wiki.FILES_PER_AREA + 4
+        listed = wiki.render(wiki.pages(many, None, "t1", "run-1")[0])["topics"]
+        self.assertIn(f"Files ({wiki.FILES_PER_AREA} of {wiki.FILES_PER_AREA + 4}):", listed)
         self.assertNotIn("A note about no file at all", text)
 
     def test_a_capped_topics_page_says_how_many_it_leaves_out(self):

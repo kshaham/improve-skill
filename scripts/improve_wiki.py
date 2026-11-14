@@ -526,6 +526,11 @@ def md_area(page, rows):
     return lines
 
 
+def files_label(topic):
+    listed = len(topic["files"].split())
+    return f"Files ({listed} of {topic['size']}): " if topic["size"] > listed else "Files: "
+
+
 def md_topics(page, rows):
     """Each module group dreaming discovered, with its files and the knowledge about them."""
     lines = ["Groups of files that change together or depend on each other, found by dreaming.", ""]
@@ -533,7 +538,7 @@ def md_topics(page, rows):
     lines += capped_line(len(page["groups"]), page.get("total"), "largest")
     for topic in page["groups"]:
         lines += [f"## {md(topic['label'])} ({plural(topic['size'], 'file')}, cohesion {topic['cohesion']})", "",
-                  "Files: " + ", ".join(f"`{path}`" for path in topic["files"].split()), ""]
+                  files_label(topic) + ", ".join(f"`{path}`" for path in topic["files"].split()), ""]
         lines += capped_line(len(topic["knowledge"]), topic.get("total"))
         lines += [note_line(rows[key]) for key in topic["knowledge"] if key in rows] or ["- No knowledge recorded."]
         lines.append("")

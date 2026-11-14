@@ -488,6 +488,17 @@ def wiki_command(args, repo):
     if args.markdown:
         return improve_wiki.render(pages)[args.page]
     page = pages[args.page]
+    if args.page.startswith("areas/") or args.page == "topics":
+        # The stored document lists note ids; an agent reading one page gets the notes themselves.
+        knowledge = pages.get("knowledge") or {}
+        rows = {row["id"]: row for row in [note for group in knowledge.get("groups", []) for note in group["notes"]]
+                + list(knowledge.get("more", []))}
+        brief = lambda key: {field: rows[key][field] for field in ("id", "kind", "verdict", "text")}  # noqa: E731
+        resolve = lambda ids: [brief(key) for key in ids if key in rows]  # noqa: E731
+        if args.page == "topics":
+            page = {**page, "groups": [{**topic, "knowledge": resolve(topic["knowledge"])} for topic in page["groups"]]}
+        else:
+            page = {**page, "knowledge": resolve(page["knowledge"])}
     if args.page == "knowledge":
         # `more` only lets area pages resolve their ids inside the wiki document.
         page = {key: value for key, value in page.items() if key != "more"}

@@ -366,8 +366,10 @@ function wikiTopicsPage(page, pages) {
     intro,
     ...wikiCapped(page.groups.length, page.total, "largest"),
     ...page.groups.map((topic) => {
+      const files = topic.files.split(" ").filter(Boolean);
+      const shown = topic.size > files.length ? `${files.length} of ${topic.size} files: ` : "";
       const section = wikiSection(`${topic.label} · ${wikiPlural(topic.size, "file")} · cohesion ${topic.cohesion}`, [
-        element("small", "wiki-where", topic.files.split(" ").filter(Boolean).join(" · ")),
+        element("small", "wiki-where", shown + files.join(" · ")),
         ...wikiCapped(topic.knowledge.length, topic.total),
         ...wikiNoteRows(topic.knowledge.map((id) => rows.get(id)).filter(Boolean)),
       ]);

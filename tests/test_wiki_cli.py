@@ -126,6 +126,19 @@ class WikiCommandTests(unittest.TestCase):
             result = cli(self.repo, "wiki", page, "--budget", "200")
             self.assertEqual(result.returncode, 0, f"{page}: {result.stderr}")
 
+    def test_area_pages_carry_their_notes_for_an_agent(self):
+        with graph.locked(self.repo) as value:
+            graph.add_insight(value, "Area pages list their notes for agents in one call",
+                              kind="pitfall", about=["area:ui"], repo=self.repo)
+        run_file(self.repo, "completed")
+        cli(self.repo, "wiki", "build")
+        page = json.loads(cli(self.repo, "wiki", "areas/ui", "--format", "json").stdout)
+        self.assertEqual(page["knowledge"][0]["text"], "Area pages list their notes for agents in one call")
+        self.assertEqual(page["knowledge"][0]["kind"], "pitfall")
+        stored = improve_toon.loads((self.repo / ".improve" / "wiki" / "wiki.toon").read_text())
+        self.assertTrue(all(isinstance(key, str) for key in stored["pages"]["areas/ui"]["knowledge"]),
+                        "the stored document keeps ids only")
+
     def test_an_unknown_page_is_not_read_from_disk(self):
         run_file(self.repo, "completed")
         cli(self.repo, "wiki", "build")
