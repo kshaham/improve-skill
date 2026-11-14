@@ -47,5 +47,13 @@ class BoardScriptTests(unittest.TestCase):
         self.assertEqual(len(report["checks"]), 5)
 
 
+    def test_graph_messages_match_the_current_view(self):
+        result = self.node(HARNESS / "graph_wording_check.mjs", ASSETS / "graph-layout.js", ASSETS / "graph.js")
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        self.assertIn("graph wording checks passed", result.stdout)
+        source = (ASSETS / "graph.js").read_text()
+        # The node_missing handler uses the tested helper with the live order and search text.
+        self.assertIn('graphStatus(graphFallbackStatus(graphOrder(), $("graph-query").value.trim()));', source)
+
 if __name__ == "__main__":
     unittest.main()

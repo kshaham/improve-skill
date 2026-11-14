@@ -131,6 +131,36 @@ function graphShow() {
   return GRAPH_SHOW.includes(value) ? Number(value) : GRAPH_LIMIT;
 }
 
+// Wording that has to match the current Show filter and scope.
+const GRAPH_ORDER_PHRASES = {
+  balanced: "the strongest nodes",
+  important: "the most important nodes",
+  recent: "the most recently created nodes",
+};
+
+function graphOrderPhrase(order) {
+  return GRAPH_ORDER_PHRASES[order] || GRAPH_ORDER_PHRASES.balanced;
+}
+
+// After a removed node the retry keeps the search text, so a search describes the view first.
+function graphFallbackStatus(order, query) {
+  const shown = query ? `nodes that match “${shortLabel(query, 60)}”` : graphOrderPhrase(order);
+  return `That node was merged or removed during refinement. Showing ${shown}.`;
+}
+
+function knowledgeEmptyHint({ recorded, focused, searching, order, knowledgeOn }) {
+  if (!recorded) return "No knowledge recorded yet.";
+  if (focused) return "No knowledge in this neighborhood. Focus a note, or show strongest, to see notes.";
+  if (!knowledgeOn) return "Knowledge is hidden: turn on Knowledge to see the strongest notes.";
+  // Most important and Recently created cut the matches with no share per type, so notes that
+  // match can be pushed out of a small Top N.
+  if (searching && order !== "balanced")
+    return "No knowledge among the top search matches. Choose Balanced mix to include matching notes.";
+  if (searching) return "No knowledge matches this search.";
+  if (order !== "balanced") return "No knowledge in this view. Choose Balanced mix to see the strongest notes.";
+  return "No knowledge in this view.";
+}
+
 function graphQueryKey() {
   return JSON.stringify({
     focus: graphFocus,
@@ -208,7 +238,7 @@ async function loadGraph() {
       graphFocus = null;
       graphSelected = null;
       graphKeepStatus = true;
-      graphStatus("That node was merged or removed during refinement. Showing the strongest nodes.");
+      graphStatus(graphFallbackStatus(graphOrder(), $("graph-query").value.trim()));
     } else graphStatus("The knowledge graph could not load. " + error.message, true);
   } finally {
     graphLoading = false;
@@ -547,9 +577,13 @@ function renderGraphLists() {
           element(
             "li",
             "focus-hint",
-            snapshot?.graph?.insights
-              ? "No knowledge in this view. Choose Balanced mix, or turn on Knowledge, to see the strongest notes."
-              : "No knowledge recorded yet.",
+            knowledgeEmptyHint({
+              recorded: snapshot?.graph?.insights || 0,
+              focused: Boolean(graphData.focus),
+              searching: Boolean($("graph-query").value.trim()),
+              order: graphOrder(),
+              knowledgeOn: graphTypes.has("insight"),
+            }),
           ),
         ]),
   );

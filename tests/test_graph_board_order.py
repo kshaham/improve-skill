@@ -119,7 +119,11 @@ class KnowledgeToolbarTests(unittest.TestCase):
         source = (ROOT / "assets/board/graph.js").read_text()
         panel = source[source.index("function renderGraphLists() {"):source.index('$("graph-hotspots")')]
         self.assertIn("snapshot?.graph?.insights", panel)
-        self.assertIn("No knowledge in this view", panel)
+        # The wording moved into knowledgeEmptyHint, checked case by case in
+        # tests/js/graph_wording_check.mjs.
+        self.assertIn("knowledgeEmptyHint({", panel)
+        self.assertIn('return "No knowledge in this view.";', source)
+        self.assertIn("recorded: snapshot?.graph?.insights", panel)
 
     def test_the_view_sends_the_order_and_count(self):
         source = (ROOT / "assets/board/graph.js").read_text()
