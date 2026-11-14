@@ -266,7 +266,7 @@ function wikiIndexPage(page) {
     wikiSection("Key knowledge", wikiNoteRows(page.key || [])),
     wikiSection("Areas", [page.areas?.length ? areas : element("p", "focus-hint", "None yet.")]),
     wikiSection("Files that resist change", wikiHotspots(page.hotspots || [])),
-    wikiSection("Last session", [element("p", "", `${last.added || 0} added, ${last.removed || 0} removed, ${last.verdicts || 0} verdicts changed.`)]),
+    wikiSection("Last session", [element("p", "", `${last.added || 0} added, ${last.removed || 0} removed, ${wikiPlural(last.verdicts || 0, "verdict")} changed.`)]),
   ];
 }
 
@@ -297,7 +297,7 @@ function wikiChangesPage(page) {
     }
     const counts = session.counts || {};
     return wikiSection(`Session ${session.run_id || "?"} · ${relativeTime(session.built_at)}`, [
-      element("p", "focus-hint", `${counts.added || 0} added, ${counts.removed || 0} removed, ${counts.verdicts || 0} verdicts changed${session.first ? " · first build" : ""}`),
+      element("p", "focus-hint", `${counts.added || 0} added, ${counts.removed || 0} removed, ${wikiPlural(counts.verdicts || 0, "verdict")} changed${session.first ? " · first build" : ""}`),
       rows.length ? list : element("p", "focus-hint", "No changes."),
     ]);
   });

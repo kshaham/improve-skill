@@ -42,14 +42,20 @@ class TwoSessionTests(unittest.TestCase):
 
     def test_the_wiki_grows_cleans_up_and_dreams_across_sessions(self):
         self.start("2026-11-14T01:00:00Z")
+        ids = []
         for text in ("Retry the upload twice before reporting a network failure",
                      "Cache the board snapshot for five seconds between polls"):
-            self.cli(GRAPH, "note", "--kind", "technique", "--text", text, "--about", "file:src/app.py")
+            out = self.cli(GRAPH, "note", "--kind", "technique", "--text", text, "--about", "file:src/app.py")
+            ids.append(next(line.split(":", 1)[1].strip().strip('"') for line in out.splitlines() if line.startswith("id:")))
         self.end()
         wiki = self.state / "wiki"
         self.assertIn("2 live notes", (wiki / "index.md").read_text())
 
         self.start("2026-11-14T02:00:00Z")
+        # Successful tasks that relied on the retry note prove it (three or more).
+        rows = [{"id": f"t{i}", "title": f"Upload fix {i}", "area": "resilience", "status": "done",
+                 "file": "src/app.py", "graph_refs": [ids[0]], "commit": f"abc{i}"} for i in range(4)]
+        (self.state / "backlog.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
         with graph.locked(self.repo) as value:
             graph.add_insight(value, "Cache the board snapshot for five seconds between board polls",
                               kind="technique", source="user", about=["file:src/app.py"], repo=self.repo)
@@ -60,7 +66,8 @@ class TwoSessionTests(unittest.TestCase):
 
         changes = (wiki / "changes.md").read_text()
         latest = changes[changes.index("2026-11-14T02:00:00Z"):changes.index("2026-11-14T01:00:00Z")]
-        self.assertIn("3 added, 1 removed", latest)
+        self.assertIn("3 added, 1 removed, 1 verdict changed", latest)
+        self.assertIn("Verdict none → proven: Retry the upload twice before reporting a network failure", latest)
         self.assertIn('Removed (merged into "Cache the board snapshot for five seconds between board polls")', latest)
         dreams = (wiki / "dreams.md").read_text()
         contradictions = dreams[dreams.index("## Contradictions"):dreams.index("## Knowledge gaps")]

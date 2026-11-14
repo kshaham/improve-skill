@@ -417,7 +417,7 @@ def md_index(page):
               for row in page.get("hotspots", [])] or ["- None: no file keeps failing."]
     last = page["last_session"]
     lines += ["", "## Last session", "",
-              f"{last['added']} added, {last['removed']} removed, {last['verdicts']} verdicts changed. "
+              f"{last['added']} added, {last['removed']} removed, {plural(last['verdicts'], 'verdict')} changed. "
               "See [Changes](changes.md)."]
     return lines
 
@@ -439,7 +439,7 @@ def md_changes(page):
     for session in page["sessions"]:
         counts = session["counts"]
         lines += [f"## Session `{session['run_id']}`, built {session['built_at']}", "",
-                  f"{counts['added']} added, {counts['removed']} removed, {counts['verdicts']} verdicts changed."
+                  f"{counts['added']} added, {counts['removed']} removed, {plural(counts['verdicts'], 'verdict')} changed."
                   + (" First build of the wiki." if session.get("first") else ""), ""]
         lines += [f"- Added: {md(row['text'])}" for row in session["added"]]
         lines += [f"- Removed ({md(row['reason'])}): {md(row['text'])}" for row in session["removed"]]

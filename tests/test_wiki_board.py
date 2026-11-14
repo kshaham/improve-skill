@@ -166,6 +166,7 @@ class WikiWordingTests(unittest.TestCase):
         self.assertIn('const wikiPlural = (count, word) => `${countText(count)} ${count === 1 ? word : word + "s"}`;', script)
         self.assertNotRegex(script, r"\$\{row\.notes\} notes")
         self.assertNotIn("attempts verified", script, "attempts go through wikiPlural")
+        self.assertNotIn("verdicts changed", script, "verdict counts go through wikiPlural")
 
 class WikiAnnouncementTests(unittest.TestCase):
     def test_the_page_is_not_a_live_region_but_the_filter_count_is(self):
