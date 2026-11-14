@@ -2816,6 +2816,13 @@ button.danger {
   cursor: pointer;
   outline: none;
 }
+/* An invisible, larger target beneath each node, so small nodes are easy to click or tap. */
+.graph-hit {
+  fill: transparent;
+  stroke: none;
+  pointer-events: all;
+  cursor: pointer;
+}
 .graph-node circle {
   stroke: var(--canvas);
   stroke-width: 1.5;

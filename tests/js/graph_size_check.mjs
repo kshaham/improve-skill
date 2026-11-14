@@ -11,10 +11,10 @@ const context = vm.createContext({ console, Math, document: {}, window: {}, matc
 vm.runInContext(readFileSync(process.argv[2], "utf8"), context);
 vm.runInContext(
   readFileSync(process.argv[3], "utf8") +
-    "\n;this.graphPercentiles = graphPercentiles; this.graphNodeRadius = graphNodeRadius; this.graphEdgeWidth = graphEdgeWidth;",
+    "\n;this.graphPercentiles = graphPercentiles; this.graphNodeRadius = graphNodeRadius; this.graphEdgeWidth = graphEdgeWidth; this.graphHitRadius = graphHitRadius;",
   context,
 );
-const { graphPercentiles, graphNodeRadius, graphEdgeWidth } = context;
+const { graphPercentiles, graphNodeRadius, graphEdgeWidth, graphHitRadius } = context;
 assert.equal(typeof graphPercentiles, "function");
 assert.equal(typeof graphNodeRadius, "function");
 
@@ -73,5 +73,10 @@ for (const weight of [undefined, 0, 1, 3, 10, 1000]) {
   assert.ok(width < smallestNode, `edge weight ${weight} draws ${width}px, wider than a ${smallestNode}px node`);
 }
 assert.ok(graphEdgeWidth(5) > graphEdgeWidth(1), "heavier edges draw wider");
+
+// A small node is hard to click or tap, so every node has a hit area at least 16px across; a
+// large node's hit area is its own circle.
+assert.equal(graphHitRadius(2.5), 8);
+assert.equal(graphHitRadius(14), 14);
 
 console.log("graph size checks passed");

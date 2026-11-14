@@ -62,7 +62,7 @@ let graphData = null,
   graphTypes = new Set(GRAPH_DEFAULT_TYPES);
 const graphLayout = new GraphLayout(),
   graphViewport = { scale: 1, x: 0, y: 0, fit: 1 },
-  graphElements = { nodes: new Map(), edges: [], ranks: new Map(), sizedAt: null };
+  graphElements = { nodes: new Map(), hits: new Map(), edges: [], ranks: new Map(), sizedAt: null };
 
 // Node size is in screen pixels, from the node's importance rank among those shown. Most nodes stay
 // small so hundreds of them do not merge; the most important few are drawn large. A view with
@@ -74,7 +74,8 @@ const NODE_RADIUS_MIN = 2.5,
   GRAPH_LABEL_ROOM = 200,
   GRAPH_FIT_MARGIN = 24,
   GRAPH_LEGEND_ROOM = 32,
-  GRAPH_FIT_MIN = 0.05;
+  GRAPH_FIT_MIN = 0.05,
+  GRAPH_HIT_RADIUS = 8;
 
 function graphPercentiles(nodes) {
   // Knowledge is ranked among knowledge, so the most valuable notes are drawn large even beside
@@ -116,6 +117,11 @@ function graphEdgeWidth(weight) {
   return Math.min(2.4, 0.7 + 0.35 * (Number.isFinite(weight) ? Math.max(0, weight) : 1));
 }
 
+// A small node is hard to click or tap: every node has a hit area at least 16px across.
+function graphHitRadius(radius) {
+  return Math.max(radius, GRAPH_HIT_RADIUS);
+}
+
 function sizeGraphNodes() {
   const ratio = graphViewport.scale / graphViewport.fit;
   if (graphElements.sizedAt === ratio) return;
@@ -124,6 +130,10 @@ function sizeGraphNodes() {
     const radius = graphNodeRadius(graphElements.ranks.get(id) ?? 0, ratio, graphElements.nodes.size);
     group.querySelector("circle").setAttribute("r", radius.toFixed(1));
     group.querySelector("text").setAttribute("x", (radius + 4).toFixed(1));
+    const hit = graphElements.hits.get(id),
+      reach = graphHitRadius(radius);
+    for (const [name, value] of [["x", -reach], ["y", -reach], ["width", 2 * reach], ["height", 2 * reach], ["rx", reach]])
+      hit?.setAttribute(name, value.toFixed(1));
   }
 }
 
@@ -326,7 +336,11 @@ function drawGraph() {
   );
   const viewport = svg("g", { class: "graph-viewport" }),
     edgeLayer = svg("g", { class: "graph-edges" }),
-    nodeLayer = svg("g", { class: "graph-nodes" });
+    nodeLayer = svg("g", { class: "graph-nodes" }),
+    hitLayer = svg("g", { class: "graph-hits" });
+  // Hit areas sit beneath every node, so a visible node always wins over a neighbour's hit area.
+  nodeLayer.append(hitLayer);
+  graphElements.hits = new Map();
   graphElements.nodes = new Map();
   graphElements.ranks = graphPercentiles(nodes);
   graphElements.sizedAt = null;
@@ -367,6 +381,10 @@ function drawGraph() {
     group.append(circle, label, title);
     nodeLayer.append(group);
     graphElements.nodes.set(node.id, group);
+    const hit = svg("rect", { class: "graph-hit", "aria-hidden": "true" });
+    hit.dataset.id = node.id;
+    hitLayer.append(hit);
+    graphElements.hits.set(node.id, hit);
   }
   // Edges are drawn in layout units inside the zoomed viewport; nodes sit above them in screen
   // coordinates, so their size, outline and 11px label do not scale with the zoom.
@@ -400,8 +418,10 @@ function positionGraph() {
   const { scale, x, y } = graphViewport;
   for (const [id, group] of graphElements.nodes) {
     const point = graphLayout.points.get(id);
-    if (point)
-      group.setAttribute("transform", `translate(${(point.x * scale + x).toFixed(1)} ${(point.y * scale + y).toFixed(1)})`);
+    if (!point) continue;
+    const place = `translate(${(point.x * scale + x).toFixed(1)} ${(point.y * scale + y).toFixed(1)})`;
+    group.setAttribute("transform", place);
+    graphElements.hits.get(id)?.setAttribute("transform", place);
   }
   sizeGraphNodes();
   for (const { edge, line } of graphElements.edges) {
@@ -1162,7 +1182,9 @@ function initGraph() {
   const canvas = $("graph-canvas");
   let drag = null;
   canvas.addEventListener("pointerdown", (event) => {
-    const group = event.target.closest?.(".graph-node");
+    const group =
+      event.target.closest?.(".graph-node") ||
+      graphElements.nodes.get(event.target.closest?.(".graph-hit")?.dataset.id);
     const point = group && graphLayout.points.get(group.dataset.id);
     drag = {
       id: group?.dataset.id,

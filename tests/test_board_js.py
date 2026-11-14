@@ -66,6 +66,17 @@ class BoardScriptTests(unittest.TestCase):
         self.assertIn('"vector-effect": "non-scaling-stroke"', source)
         self.assertIn('"stroke-width": graphEdgeWidth(edge.weight).toFixed(2)', source)
         self.assertIn("(point.x * scale + x)", source)
+        # The hit area is a rect, so it inherits none of the .graph-node circle rules. Hit areas
+        # sit in their own layer beneath every node, so a visible node always wins and the DOM
+        # (and keyboard tab) order stays most important first.
+        self.assertIn('svg("rect", { class: "graph-hit"', source)
+        self.assertIn("nodeLayer.append(hitLayer);", source)
+        self.assertIn('graphElements.nodes.get(event.target.closest?.(".graph-hit")?.dataset.id)', source)
+        css = (ASSETS / "board.css").read_text()
+        rule = css[css.index(".graph-hit {"):]
+        rule = rule[:rule.index("}")]
+        self.assertIn("fill: transparent;", rule)
+        self.assertIn("pointer-events: all;", rule)
         self.assertIn("sizeGraphNodes();", source[source.index("function positionGraph()"):])
         # The fit reserves screen room for labels (at most 30% of a phone canvas) and the legend,
         # and zooming out can always reach a fit below the usual 0.15 floor.
