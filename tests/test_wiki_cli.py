@@ -62,6 +62,17 @@ class WikiCommandTests(unittest.TestCase):
         self.assertIn("knowledge", listing)
         self.assertIn("changes", listing)
 
+    def test_the_documented_foreground_finish_builds_the_wiki(self):
+        # SKILL.md: a foreground run finishes with `sync --dream` after its final report.
+        run_file(self.repo, None)
+        self.assertEqual(cli(self.repo, "sync", "--dream").returncode, 0)
+        self.assertFalse((self.repo / ".improve" / "wiki").exists(), "mid-run: no wiki")
+        run_file(self.repo, "completed")
+        result = cli(self.repo, "sync", "--dream")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.repo / ".improve" / "wiki" / "index.md").is_file())
+        self.assertIn("wiki", result.stdout)
+
     def test_an_unknown_page_is_not_read_from_disk(self):
         run_file(self.repo, "completed")
         cli(self.repo, "wiki", "build")
