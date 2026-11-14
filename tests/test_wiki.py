@@ -387,6 +387,15 @@ class WordingTests(unittest.TestCase):
         for right in ("1 note recorded", "1 live note", "1 area", "1/1 attempt verified"):
             self.assertIn(right, text)
 
+class AreaSlugTests(unittest.TestCase):
+    def test_areas_whose_names_share_a_slug_keep_separate_pages(self):
+        value = wiki_graph(areas=["UI", "ui", "Docs & Guides", "docs-guides"])
+        pages, _ = wiki.pages(value, None, "t1", "run-1")
+        links = [row["page"] for row in pages["index"]["areas"]]
+        self.assertEqual(len(set(links)), 4, links)
+        for row in pages["index"]["areas"]:
+            self.assertEqual(pages[row["page"]]["name"], row["name"])
+
 def wiki_graph(areas=(), notes=None):
     """A minimal in-memory graph with the fields the wiki reads."""
     nodes, edges = {}, {}

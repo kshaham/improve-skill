@@ -197,16 +197,22 @@ def area_pages(nodes, rows, by_file):
     """One page per area (note ids, files that touched it) and the index's area rows."""
     areas = sorted((node for node in nodes.values() if node["type"] == "area"), key=lambda node: node["label"])
     files = [node for node in nodes.values() if node["type"] == "file" and not node.get("archived")]
-    result, summaries = {}, []
+    result, summaries, taken = {}, [], set()
     for area in areas:
         name = area["label"]
+        # Area names are free text, so two can share a slug ("UI" and "ui"): number the later ones.
+        page_name, number = f"areas/{slug(name)}", 1
+        while page_name in taken:
+            number += 1
+            page_name = f"areas/{slug(name)}-{number}"
+        taken.add(page_name)
         stats = area.get("stats") or {}
         in_notes = [row for row in rows if name in row["areas"].split()]
         in_area = sorted((node for node in files if name in by_file.get(node["id"], ())),
                          key=lambda node: (-(node.get("stats") or {}).get("attempts", 0), node["id"]))
         area_files = [{"path": node["label"], "attempts": (node.get("stats") or {}).get("attempts", 0),
                        "success": (node.get("stats") or {}).get("success")} for node in in_area[:FILES_PER_AREA]]
-        summary = {"name": name, "page": f"areas/{slug(name)}", "attempts": stats.get("attempts", 0),
+        summary = {"name": name, "page": page_name, "attempts": stats.get("attempts", 0),
                    "done": stats.get("done", 0), "rejected": stats.get("rejected", 0),
                    "success": stats.get("success"), "notes": len(in_notes)}
         summaries.append(summary)
