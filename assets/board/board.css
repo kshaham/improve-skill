@@ -3595,6 +3595,26 @@ summary:focus-visible {
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
+.wiki-open {
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.wiki-open:hover {
+  color: var(--accent-ink);
+  text-decoration: underline;
+}
+.wiki-related {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 12px;
+}
+.wiki-related .link-button {
+  font-size: 12px;
+}
 .wiki-where {
   grid-column: 2;
   color: var(--muted);

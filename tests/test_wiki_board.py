@@ -87,6 +87,15 @@ class WikiSessionsViewTests(unittest.TestCase):
         self.assertIn('if (name === "sessions")', script)
         self.assertIn('wikiSection("Files that resist change"', script)
 
+class WikiRelationsViewTests(unittest.TestCase):
+    def test_notes_open_in_the_graph_and_dream_relations_are_shown(self):
+        script = (ASSETS / "wiki.js").read_text()
+        helper = script[script.index("function wikiGraphButton("):]
+        self.assertIn("openGraphNode(id)", helper[:helper.index("\n}")])
+        self.assertIn('wikiGraphButton(row.id, row.text, "wiki-text wiki-open")', script)
+        self.assertIn('wikiSection("Contradictions", wikiContradictions(page.contradictions || []))', script)
+        self.assertIn('element("small", "wiki-related", "Related: ")', script)
+
 class WikiStyleTests(unittest.TestCase):
     def rule(self, css, selector):
         start = css.index("\n" + selector + " {")

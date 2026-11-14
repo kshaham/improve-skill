@@ -37,6 +37,8 @@ ROWS_PER_CHANGE = 40
 SESSION_ROWS = 30
 HOTSPOT_ROWS = 8
 HOTSPOT_SUCCESS = 0.5
+RELATED_PER_NOTE = 5
+RELATED_RELATIONS = ("similar_to", "co_cited", "relates_to", "supersedes")
 TEXT_LIMIT = 300
 KIND_ORDER = ("decision", "convention", "pitfall", "technique", "lesson", "fact")
 
@@ -111,14 +113,38 @@ def note_links(graph, by_file=None):
     return links
 
 
-def note_row(node, links):
+def note_relations(graph, live_ids):
+    """What dreaming (and people) linked between live notes: related ids per note, strongest
+    first, and contradicting pairs. A contradiction is not a relation."""
+    related, contradictions = {}, []
+    for edge in graph.get("edges", {}).values():
+        left, right, rel = edge.get("src"), edge.get("dst"), edge.get("rel")
+        if left not in live_ids or right not in live_ids or left == right:
+            continue
+        if rel == "contradicts":
+            contradictions.append((min(left, right), max(left, right), float(edge.get("confidence") or 1)))
+        elif rel in RELATED_RELATIONS:
+            weight = float(edge.get("confidence") or 1)
+            related.setdefault(left, {})[right] = max(weight, related.get(left, {}).get(right, 0))
+            related.setdefault(right, {})[left] = max(weight, related.get(right, {}).get(left, 0))
+    # Dreaming can infer both similar_to and contradicts for one pair; a contradiction wins.
+    for left, right, _ in contradictions:
+        related.get(left, {}).pop(right, None)
+        related.get(right, {}).pop(left, None)
+    ordered = {key: " ".join(other for other, _ in sorted(value.items(), key=lambda item: (-item[1], item[0]))
+                             [:RELATED_PER_NOTE]) for key, value in related.items()}
+    return ordered, sorted(set(contradictions), key=lambda row: (-row[2], row[0], row[1]))
+
+
+def note_row(node, links, related=None):
     linked = links.get(node["id"], {"areas": set(), "files": set()})
     return {"id": node["id"], "kind": node.get("kind") or "fact",
             "text": clip(node.get("summary") or node.get("label")),
             "verdict": node.get("verdict") or "", "score": round(float(node.get("score") or 0), 2),
             "pinned": bool(node.get("pinned")), "source": node.get("source") or "agent",
             # Space-separated, so every row is flat and TOON writes the notes as one table.
-            "areas": " ".join(sorted(linked["areas"])), "files": " ".join(sorted(linked["files"])[:5])}
+            "areas": " ".join(sorted(linked["areas"])), "files": " ".join(sorted(linked["files"])[:5]),
+            "related": (related or {}).get(node["id"], "")}
 
 
 def rank(node):
@@ -143,7 +169,8 @@ def pages(graph, previous, built_at, run_id):
     links = note_links(graph, by_file)
     live = sorted((node for node in nodes.values() if node["type"] == "insight" and not node.get("archived")),
                   key=rank)
-    rows = [note_row(node, links) for node in live]
+    related, contradicting = note_relations(graph, {node["id"] for node in live})
+    rows = [note_row(node, links, related) for node in live]
     archived = sum(1 for node in nodes.values() if node["type"] == "insight" and node.get("archived"))
 
     # What this session changed, compared with the build before it. A second build for the
@@ -201,6 +228,10 @@ def pages(graph, previous, built_at, run_id):
               "proposals": [{"id": row.get("id", ""), "members": len(row.get("members") or []),
                              "text": clip(row.get("text") or row.get("summary") or "")}
                             for row in (dream.get("proposals") or [])[:ROWS_PER_CHANGE]],
+              "contradictions": [{"a": left, "a_text": clip(nodes[left].get("summary") or nodes[left].get("label")),
+                                  "b": right, "b_text": clip(nodes[right].get("summary") or nodes[right].get("label")),
+                                  "confidence": round(confidence, 2)}
+                                 for left, right, confidence in contradicting[:ROWS_PER_CHANGE]],
               "gaps": [clip(row if isinstance(row, str) else row.get("text") or row.get("label") or json.dumps(row))
                        for row in (dream.get("gaps") or [])[:ROWS_PER_CHANGE]]}
 
@@ -260,7 +291,8 @@ def note_line(row):
     tags = [row["kind"]] + ([row["verdict"]] if row.get("verdict") else []) + (["pinned"] if row.get("pinned") else [])
     where = ", ".join([f"area {area}" for area in row.get("areas", "").split()]
                       + [f"`{path}`" for path in row.get("files", "").split()])
-    return f"- **{', '.join(tags)}**: {md(row['text'])}" + (f" ({where})" if where else "")
+    line = f"- **{', '.join(tags)}**: {md(row['text'])}" + (f" ({where})" if where else "")
+    return line + (f"; related: {', '.join(f'`{key}`' for key in row['related'].split())}" if row.get("related") else "")
 
 
 def render(result):
@@ -319,6 +351,9 @@ def markdown(name, page, rows=None):
                   f"- Verdicts: {page['proven']} proven, {page['contested']} contested", "",
                   "## Consolidation proposals", ""]
         lines += [f"- `{row['id']}` ({row['members']} notes): {md(row['text'])}" for row in page["proposals"]] or ["- None."]
+        lines += ["", "## Contradictions", "", "Notes that say opposite things; decide which holds and rate the other.", ""]
+        lines += [f"- {md(row['a_text'])} (`{row['a']}`) **contradicts** {md(row['b_text'])} (`{row['b']}`)"
+                  for row in page.get("contradictions", [])] or ["- None."]
         lines += ["", "## Knowledge gaps", ""] + ([f"- {md(row)}" for row in page["gaps"]] or ["- None."])
     else:
         success = page.get("success")

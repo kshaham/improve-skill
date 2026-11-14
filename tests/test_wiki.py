@@ -264,6 +264,53 @@ class SessionsAndHotspotsTests(unittest.TestCase):
         self.assertNotIn("web/easy.js", files)
         self.assertIn("web/hard.js", wiki.render(pages)["index"])
 
+class DreamRelationsTests(unittest.TestCase):
+    def graph(self):
+        value = wiki_graph(areas=["ui"], notes={
+            "insight:always": "Always cache the board snapshot between refreshes",
+            "insight:never": "Never cache the board snapshot between refreshes",
+            "insight:keyed": "Render the list with keyed rows to keep focus",
+            "insight:focus": "Restore focus after the list re-renders"})
+        for left, rel, right in [("insight:always", "contradicts", "insight:never"),
+                                 ("insight:keyed", "similar_to", "insight:focus"),
+                                 ("insight:keyed", "co_cited", "insight:always")]:
+            value["edges"][f"{left}|{rel}|{right}"] = {"src": left, "rel": rel, "dst": right, "inferred": True,
+                                                       "confidence": 0.7}
+        return value
+
+    def test_contradicting_notes_are_listed_for_a_person_to_settle(self):
+        pages, _ = wiki.pages(self.graph(), None, "t1", "run-1")
+        pairs = pages["dreams"]["contradictions"]
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual({pairs[0]["a"], pairs[0]["b"]}, {"insight:always", "insight:never"})
+        text = wiki.render(pages)["dreams"]
+        self.assertIn("Always cache the board snapshot", text[text.index("## Contradictions"):])
+
+    def test_each_note_lists_the_knowledge_dreaming_relates_to_it(self):
+        pages, _ = wiki.pages(self.graph(), None, "t1", "run-1")
+        rows = {row["id"]: row for group in pages["knowledge"]["groups"] for row in group["notes"]}
+        self.assertEqual(sorted(rows["insight:keyed"]["related"].split()), ["insight:always", "insight:focus"])
+        self.assertEqual(rows["insight:focus"]["related"], "insight:keyed", "relations run both ways")
+        self.assertEqual(rows["insight:never"]["related"], "", "a contradiction is not a relation")
+        self.assertIn("related:", wiki.render(pages)["knowledge"])
+
+    def test_a_contradicting_pair_is_never_listed_as_related(self):
+        # Dreaming can infer both similar_to and contradicts for two short opposite notes.
+        value = self.graph()
+        value["edges"]["insight:always|similar_to|insight:never"] = {
+            "src": "insight:always", "rel": "similar_to", "dst": "insight:never", "inferred": True, "confidence": 0.9}
+        pages, _ = wiki.pages(value, None, "t1", "run-1")
+        rows = {row["id"]: row for group in pages["knowledge"]["groups"] for row in group["notes"]}
+        self.assertEqual(rows["insight:never"]["related"], "")
+        self.assertEqual(rows["insight:always"]["related"], "insight:keyed")
+        self.assertEqual(len(pages["dreams"]["contradictions"]), 1)
+
+    def test_archived_notes_are_left_out_of_relations(self):
+        value = self.graph()
+        value["nodes"]["insight:never"]["archived"] = "marked wrong by the user"
+        pages, _ = wiki.pages(value, None, "t1", "run-1")
+        self.assertEqual(pages["dreams"]["contradictions"], [])
+
 def wiki_graph(areas=(), notes=None):
     """A minimal in-memory graph with the fields the wiki reads."""
     nodes, edges = {}, {}

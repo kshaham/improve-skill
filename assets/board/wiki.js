@@ -93,8 +93,17 @@ function openWikiPage(name) {
   $("wiki-page").focus({ preventScroll: true });
 }
 
+// Open a note in the graph view, where its links, evidence, and curation live.
+function wikiGraphButton(id, text, className = "link-button") {
+  const button = element("button", className, text);
+  button.type = "button";
+  button.addEventListener("click", () => openGraphNode(id));
+  return button;
+}
+
 function wikiNoteRows(rows) {
   if (!rows.length) return [element("p", "focus-hint", "None recorded.")];
+  const texts = new Map((wikiData?.pages?.knowledge?.groups || []).flatMap((group) => group.notes).map((row) => [row.id, row.text]));
   const list = element("ul", "wiki-notes");
   for (const row of rows) {
     const item = element("li");
@@ -103,9 +112,18 @@ function wikiNoteRows(rows) {
     if (row.verdict === "proven" || row.verdict === "contested")
       tags.append(element("span", "wiki-tag verdict-" + row.verdict, row.verdict === "proven" ? "Proven" : "Contested"));
     if (row.pinned) tags.append(element("span", "wiki-tag pinned", "Pinned"));
-    item.append(tags, element("span", "wiki-text", row.text));
+    item.append(tags, wikiGraphButton(row.id, row.text, "wiki-text wiki-open"));
     const where = [...(row.areas || "").split(" ").filter(Boolean), ...(row.files || "").split(" ").filter(Boolean)];
     if (where.length) item.append(element("small", "wiki-where", where.join(" · ")));
+    const related = (row.related || "").split(" ").filter((id) => texts.has(id));
+    if (related.length) {
+      const links = element("small", "wiki-related", "Related: ");
+      related.forEach((id, index) => {
+        if (index) links.append(" · ");
+        links.append(wikiGraphButton(id, shortLabel(texts.get(id), 48)));
+      });
+      item.append(links);
+    }
     list.append(item);
   }
   return [list];
@@ -117,6 +135,21 @@ function wikiHotspots(rows) {
   for (const row of rows) {
     const item = element("li");
     item.append(element("span", "wiki-path", row.file), element("small", "", `${row.done}/${row.attempts} verified`));
+    list.append(item);
+  }
+  return [list];
+}
+
+function wikiContradictions(rows) {
+  if (!rows.length) return [element("p", "focus-hint", "None: no two notes say opposite things.")];
+  const list = element("ul", "wiki-changes");
+  for (const row of rows) {
+    const item = element("li", "change-verdict");
+    item.append(
+      element("strong", "", "Decide which holds, then rate the other Wrong"),
+      wikiGraphButton(row.a, row.a_text, "wiki-text wiki-open"),
+      wikiGraphButton(row.b, row.b_text, "wiki-text wiki-open"),
+    );
     list.append(item);
   }
   return [list];
@@ -210,6 +243,7 @@ function wikiPageContent(name, page, pages) {
       heading,
       element("p", "wiki-stamp", `Latest dream: tick ${page.tick}${page.at ? " · " + relativeTime(page.at) : ""}`),
       element("p", "", `Inferred links: ${inferred.new || 0} new, ${inferred.kept || 0} kept, ${inferred.dropped || 0} dropped. Knowledge archived ${page.archived || 0}, forgotten ${page.forgotten || 0}. ${page.proven || 0} proven, ${page.contested || 0} contested.`),
+      wikiSection("Contradictions", wikiContradictions(page.contradictions || [])),
       wikiSection("Consolidation proposals", [page.proposals?.length ? proposals : element("p", "focus-hint", "None.")]),
       wikiSection("Knowledge gaps", page.gaps?.length ? [element("ul", "wiki-gaps")].map((list) => (list.append(...page.gaps.map((gap) => element("li", "", gap))), list)) : [element("p", "focus-hint", "None.")]),
     ];
