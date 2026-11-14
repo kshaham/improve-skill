@@ -396,6 +396,58 @@ class AreaSlugTests(unittest.TestCase):
         for row in pages["index"]["areas"]:
             self.assertEqual(pages[row["page"]]["name"], row["name"])
 
+class TopicsTests(unittest.TestCase):
+    def graph(self):
+        value = wiki_graph(areas=["ui"], notes={"insight:grid": "Keep the grid columns in one place",
+                                                 "insight:auth": "Refresh the session token before it expires",
+                                                 "insight:none": "A note about no file at all"})
+        value["edges"] = {}
+        for note, path in (("insight:grid", "web/grid.js"), ("insight:auth", "api/auth.py")):
+            value["edges"][f"{note}|about|file:{path}"] = {"src": note, "rel": "about", "dst": f"file:{path}"}
+        for path in ("web/grid.js", "web/cell.js", "api/auth.py", "api/token.py"):
+            value["nodes"][f"file:{path}"] = {"id": f"file:{path}", "type": "file", "label": path,
+                                              "stats": {"attempts": 2, "done": 1, "success": 0.5}}
+        value["communities"] = {"tick": 4, "groups": [
+            {"id": "group:aa11", "label": "web/grid.js", "hub": "file:web/grid.js", "size": 2, "cohesion": 0.8,
+             "members": ["file:web/grid.js", "file:web/cell.js"]},
+            {"id": "group:bb22", "label": "api/auth.py", "hub": "file:api/auth.py", "size": 2, "cohesion": 0.6,
+             "members": ["file:api/auth.py", "file:api/token.py"]}]}
+        return value
+
+    def test_each_module_group_becomes_a_topic_with_its_files_and_knowledge(self):
+        pages, _ = wiki.pages(self.graph(), None, "t1", "run-1")
+        topics = {row["id"]: row for row in pages["topics"]["groups"]}
+        self.assertEqual(topics["group:aa11"]["files"], "web/grid.js web/cell.js")
+        self.assertEqual(topics["group:aa11"]["knowledge"], ["insight:grid"])
+        self.assertEqual(topics["group:bb22"]["knowledge"], ["insight:auth"])
+        text = wiki.render(pages)["topics"]
+        self.assertIn("Keep the grid columns in one place", text)
+        self.assertIn("cohesion 0.8", text)
+        self.assertNotIn("A note about no file at all", text)
+
+    def test_a_capped_topics_page_says_how_many_it_leaves_out(self):
+        value = self.graph()
+        group = value["communities"]["groups"][0]
+        value["communities"]["groups"] = [dict(group, id=f"group:{i}") for i in range(wiki.TOPIC_ROWS + 3)]
+        pages, _ = wiki.pages(value, None, "t1", "run-1")
+        self.assertEqual(len(pages["topics"]["groups"]), wiki.TOPIC_ROWS)
+        self.assertEqual(pages["topics"]["total"], wiki.TOPIC_ROWS + 3)
+        # Topics are ordered by size, so the cap keeps the largest, not the strongest.
+        self.assertIn(f"Showing the largest {wiki.TOPIC_ROWS} of {wiki.TOPIC_ROWS + 3}", wiki.render(pages)["topics"])
+
+    def test_no_groups_yet_says_so(self):
+        pages, _ = wiki.pages(wiki_graph(areas=["ui"]), None, "t1", "run-1")
+        self.assertEqual(pages["topics"]["groups"], [])
+        self.assertIn("No topics yet", wiki.render(pages)["topics"])
+
+    def test_topic_notes_beyond_the_kind_cap_still_resolve(self):
+        value = self.graph()
+        for index in range(wiki.NOTES_PER_PAGE + 5):
+            key = f"insight:x{index:04d}"
+            value["nodes"][key] = {"id": key, "type": "insight", "kind": "technique", "score": 2, "summary": f"Strong note {index}"}
+        pages, _ = wiki.pages(value, None, "t1", "run-1")
+        self.assertIn("Keep the grid columns in one place", wiki.render(pages)["topics"])
+
 def wiki_graph(areas=(), notes=None):
     """A minimal in-memory graph with the fields the wiki reads."""
     nodes, edges = {}, {}

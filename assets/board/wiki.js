@@ -8,6 +8,7 @@ const WIKI_FIXED_PAGES = [
   ["knowledge", "Knowledge"],
   ["changes", "Changes"],
   ["dreams", "Dreams"],
+  ["topics", "Topics"],
   ["sessions", "Sessions"],
 ];
 // `1 note`, `2 notes`.
@@ -185,9 +186,9 @@ function wikiContradictions(rows) {
 }
 
 // A capped list says how much it leaves out; the graph view and its search hold the rest.
-function wikiCapped(shown, total) {
+function wikiCapped(shown, total, kept = "strongest") {
   return total > shown
-    ? [element("p", "focus-hint", `Showing the strongest ${countText(shown)} of ${countText(total)}; search the graph for the rest.`)]
+    ? [element("p", "focus-hint", `Showing the ${kept} ${countText(shown)} of ${countText(total)}; search the graph for the rest.`)]
     : [];
 }
 
@@ -309,17 +310,39 @@ function wikiAreaPage(page, pages) {
   ];
 }
 
+// The module groups dreaming discovered; their notes resolve like an area's.
+function wikiTopicsPage(page, pages) {
+  const rows = new Map(wikiAllNotes(pages).map((row) => [row.id, row]));
+  const intro = element("p", "", "Groups of files that change together or depend on each other, found by dreaming.");
+  if (!page.groups?.length)
+    return [intro, element("p", "focus-hint", "No topics yet: dreaming groups files once they change together or depend on each other.")];
+  return [
+    intro,
+    ...wikiCapped(page.groups.length, page.total, "largest"),
+    ...page.groups.map((topic) => {
+      const section = wikiSection(`${topic.label} · ${wikiPlural(topic.size, "file")} · cohesion ${topic.cohesion}`, [
+        element("small", "wiki-where", topic.files.split(" ").filter(Boolean).join(" · ")),
+        ...wikiCapped(topic.knowledge.length, topic.total),
+        ...wikiNoteRows(topic.knowledge.map((id) => rows.get(id)).filter(Boolean)),
+      ]);
+      section.classList.add("wiki-topic");
+      return section;
+    }),
+  ];
+}
+
 const WIKI_PAGE_RENDERERS = {
   index: wikiIndexPage,
   knowledge: wikiKnowledgePage,
   changes: wikiChangesPage,
   sessions: wikiSessionsPage,
   dreams: wikiDreamsPage,
+  topics: wikiTopicsPage,
 };
 
 function wikiPageContent(name, page, pages) {
   const render = WIKI_PAGE_RENDERERS[name];
-  return [element("h3", "", page.title || name), ...(render ? render(page) : wikiAreaPage(page, pages))];
+  return [element("h3", "", page.title || name), ...(render ? render(page, pages) : wikiAreaPage(page, pages))];
 }
 
 function bindWiki() {

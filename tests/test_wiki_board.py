@@ -120,7 +120,9 @@ class WikiCappedViewTests(unittest.TestCase):
     def test_capped_lists_say_how_many_they_leave_out(self):
         script = (ASSETS / "wiki.js").read_text()
         helper = script[script.index("function wikiCapped("):]
-        self.assertIn("Showing the strongest", helper[:helper.index("\n}")])
+        # Capped lists keep the strongest by default; the source pin moved with the `kept` word.
+        self.assertIn('kept = "strongest"', helper[:helper.index("\n}")])
+        self.assertIn("Showing the ${kept}", helper[:helper.index("\n}")])
         self.assertIn("wikiCapped(group.notes.length, group.total)", script)
         self.assertIn("wikiCapped((page.knowledge || []).length, page.total)", script)
         # Area pages resolve their ids against every row, including those beyond the kind caps.
@@ -145,6 +147,22 @@ class WikiAnnouncementTests(unittest.TestCase):
         self.assertIn('aria-live="polite"', count[:count.index(">")])
         script = (ASSETS / "wiki.js").read_text()
         self.assertIn('$("wiki-page").focus({ preventScroll: true });', script, "opening a page moves focus there")
+
+class WikiTopicsViewTests(unittest.TestCase):
+    def test_topics_are_listed_and_rendered(self):
+        script = (ASSETS / "wiki.js").read_text()
+        self.assertIn('["topics", "Topics"]', script)
+        self.assertIn("topics: wikiTopicsPage,", script)
+        renderer = script[script.index("function wikiTopicsPage("):]
+        renderer = renderer[:renderer.index("\n}")]
+        self.assertIn("wikiAllNotes(pages)", renderer, "topic notes resolve like area notes")
+        self.assertIn("No topics yet", renderer)
+        self.assertIn('wikiCapped(page.groups.length, page.total, "largest")', renderer)
+        # A topic is named after a file path: its heading keeps the path's case.
+        self.assertIn('section.classList.add("wiki-topic")', renderer)
+        css = (ASSETS / "board.css").read_text()
+        rule = css[css.index(".wiki-topic h4 {"):]
+        self.assertIn("text-transform: none;", rule[:rule.index("}")])
 
 class WikiStyleTests(unittest.TestCase):
     def rule(self, css, selector):

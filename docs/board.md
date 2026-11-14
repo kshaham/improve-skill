@@ -81,7 +81,8 @@ The board includes:
   areas, every note by kind with its verdict and where it applies, one page per area,
   **Changes** (what each session added, removed with the reason, and re-judged), and
   **Dreams** (inferred links, archived and forgotten knowledge, contradicting notes to settle,
-  proposals, gaps), and **Sessions** (each session's outcome, tasks, and knowledge recorded).
+  proposals, gaps), **Topics** (the module groups dreaming discovered, with their files and
+  knowledge), and **Sessions** (each session's outcome, tasks, and knowledge recorded).
   The overview lists the files that resist change; each note lists related notes, and any note
   opens in the graph with one click. **Filter notes** narrows the notes on a page to those
   containing every word you type (text, area, file, kind, or verdict). A list capped at its

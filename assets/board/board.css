@@ -3727,4 +3727,15 @@ summary:focus-visible {
   background: var(--surface);
   color: var(--ink);
 }
+.wiki-topic h4 {
+  color: var(--ink-2);
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.wiki-topic .wiki-where {
+  display: block;
+  margin-bottom: 8px;
+}
 /* End knowledge wiki */

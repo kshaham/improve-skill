@@ -37,6 +37,7 @@ AREA_NOTES = 60
 FILES_PER_AREA = 10
 ROWS_PER_CHANGE = 40
 SESSION_ROWS = 30
+TOPIC_ROWS = 20
 HOTSPOT_ROWS = 8
 HOTSPOT_SUCCESS = 0.5
 RELATED_PER_NOTE = 5
@@ -275,6 +276,22 @@ def resisting_files(graph):
         return []
 
 
+def topics_page(graph, rows, links):
+    """The module groups dreaming discovered (files that change together or depend on each
+    other), each with its files and the ids of the notes about them."""
+    found = (graph.get("communities") or {}).get("groups") or []
+    topics = []
+    for group in found[:TOPIC_ROWS]:
+        members = [member[5:] for member in group.get("members") or [] if str(member).startswith("file:")]
+        inside = set(members)
+        notes = [row["id"] for row in rows if links.get(row["id"], {}).get("files", set()) & inside]
+        topics.append({"id": str(group.get("id") or ""), "label": str(group.get("label") or ""),
+                       "size": group.get("size", len(members)), "cohesion": group.get("cohesion", 0),
+                       "files": " ".join(members[:FILES_PER_AREA]), "total": len(notes),
+                       "knowledge": notes[:AREA_NOTES]})
+    return {"title": "Topics", "total": len(found), "groups": topics}
+
+
 def knowledge_groups(rows):
     """Each kind shows its strongest notes; `total` says how many it has, so a capped page says so."""
     groups = []
@@ -297,6 +314,8 @@ def pages(graph, previous, built_at, run_id):
     session, sessions, now, before = session_changes(graph, previous, rows, built_at, run_id)
     areas, area_rows, file_count = area_pages(nodes, rows, by_file)
     groups = knowledge_groups(rows)
+    topics = topics_page(graph, rows, links)
+    topic_notes = [key for topic in topics["groups"] for key in topic["knowledge"]]
     result = {
         "index": {"title": "Knowledge wiki", "built_at": built_at, "run_id": run_id or "",
                   "revision": graph.get("revision", 0), "tick": graph.get("tick", 0),
@@ -309,10 +328,11 @@ def pages(graph, previous, built_at, run_id):
         "knowledge": {"title": "Knowledge", "groups": [group for group in groups if group["notes"]],
                       # Rows that area pages list but the kind caps leave off this page, so every id
                       # an area lists resolves; this page itself still shows only `groups`.
-                      "more": beyond_cap(groups, areas, rows)},
+                      "more": beyond_cap(groups, areas, rows, topic_notes)},
         "changes": {"title": "Changes", "sessions": list(reversed(sessions))},
         "dreams": dreams_page(graph, contradicting),
         "sessions": sessions_page(graph),
+        "topics": topics,
         **areas,
     }
     manifest = {"built_at": built_at, "run_id": run_id or "", "revision": graph.get("revision", 0),
@@ -349,16 +369,16 @@ def render(result):
     return {name: markdown(name, page, rows) for name, page in result.items()}
 
 
-def beyond_cap(groups, area_pages, rows):
+def beyond_cap(groups, area_pages, rows, extra=()):
     shown = {row["id"] for group in groups for row in group["notes"]}
-    wanted = {key for page in area_pages.values() for key in page["knowledge"]} - shown
+    wanted = ({key for page in area_pages.values() for key in page["knowledge"]} | set(extra)) - shown
     return [row for row in rows if row["id"] in wanted]
 
 
-def capped_line(shown, total):
-    """A capped list says how much it leaves out; the graph and `G search` hold the rest."""
+def capped_line(shown, total, kept="strongest"):
+    """A capped list says how much it leaves out, and which it kept; the graph holds the rest."""
     if total and total > shown:
-        return [f"Showing the strongest {shown} of {total}; search the graph for the rest.", ""]
+        return [f"Showing the {kept} {shown} of {total}; search the graph for the rest.", ""]
     return []
 
 
@@ -371,7 +391,7 @@ def md_index(page):
               f"{plural(counts['notes'], 'live note')} ({counts['proven']} proven, {counts['contested']} contested, "
               f"{counts['archived']} archived), {plural(counts['areas'], 'area')}, {plural(counts['files'], 'file')}.", "",
               "Pages: [Knowledge](knowledge.md) · [Changes](changes.md) · [Dreams](dreams.md) · "
-              "[Sessions](sessions.md)", "",
+              "[Topics](topics.md) · [Sessions](sessions.md)", "",
               "## Key knowledge", ""]
     lines += [f"- **{row['kind']}**: {md(row['text'])}" for row in page["key"]] or ["- None recorded yet."]
     lines += ["", "## Areas", ""]
@@ -455,6 +475,22 @@ def md_area(page, rows):
     return lines
 
 
+def md_topics(page, rows):
+    """Each module group dreaming discovered, with its files and the knowledge about them."""
+    lines = ["Groups of files that change together or depend on each other, found by dreaming.", ""]
+    # Groups come largest first (by file count), so the cap keeps the largest.
+    lines += capped_line(len(page["groups"]), page.get("total"), "largest")
+    for topic in page["groups"]:
+        lines += [f"## {md(topic['label'])} ({plural(topic['size'], 'file')}, cohesion {topic['cohesion']})", "",
+                  "Files: " + ", ".join(f"`{path}`" for path in topic["files"].split()), ""]
+        lines += capped_line(len(topic["knowledge"]), topic.get("total"))
+        lines += [note_line(rows[key]) for key in topic["knowledge"] if key in rows] or ["- No knowledge recorded."]
+        lines.append("")
+    if not page["groups"]:
+        lines.append("No topics yet: dreaming groups files once they change together or depend on each other.")
+    return lines
+
+
 MARKDOWN_PAGES = {"index": md_index, "knowledge": md_knowledge, "changes": md_changes,
                   "sessions": md_sessions, "dreams": md_dreams}
 
@@ -462,7 +498,10 @@ MARKDOWN_PAGES = {"index": md_index, "knowledge": md_knowledge, "changes": md_ch
 def markdown(name, page, rows=None):
     lines = [f"# {md(page.get('title', name))}", ""]
     render_page = MARKDOWN_PAGES.get(name)
-    lines += render_page(page) if render_page else md_area(page, rows or {})
+    if name == "topics":
+        lines += md_topics(page, rows or {})
+    else:
+        lines += render_page(page) if render_page else md_area(page, rows or {})
     return "\n".join(lines).rstrip() + "\n"
 
 

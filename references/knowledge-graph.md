@@ -242,6 +242,7 @@ source of truth: no cycle reads the wiki and nothing rebuilds it.
 | `areas/<area>.md` | an area's success rate, notes, and files (reached through the tasks that touched them) |
 | `changes.md` | per session: knowledge added, removed (archived, merged into another, or forgotten), and verdicts changed; the last 12 sessions |
 | `dreams.md` | the latest dream: inferred links, archived and forgotten knowledge, contradicting notes to settle, proposals, gaps |
+| `topics.md` | the module groups dreaming discovered (files that change together or depend on each other), each with its files and the knowledge about them; the 20 largest |
 | `sessions.md` | each recorded session, newest first: outcome, tasks done, rejected, and blocked, knowledge recorded (last 30); a run with no outcome reads "ended without an outcome" |
 | `wiki.toon` | every page as one TOON document; area pages list note ids, so it is about a quarter smaller than compact JSON |
 | `manifest.json` | the snapshot the next build compares against |
