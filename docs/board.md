@@ -76,6 +76,13 @@ The board includes:
   together, the code that depends on these files (tests marked), their imports and code
   notes, and the module group they belong to. The graph is kept across runs in
   `.improve/graph.db`. Knowledge export downloads the nodes and links currently shown.
+- **Knowledge wiki:** the **Graph | Wiki** switch on the Knowledge tab opens the wiki the
+  skill rebuilds from the graph when a session finishes: an overview with key knowledge and
+  areas, every note by kind with its verdict and where it applies, one page per area,
+  **Changes** (what each session added, removed with the reason, and re-judged), and
+  **Dreams** (inferred links, archived and forgotten knowledge, proposals, gaps). Pages are
+  listed beside the page on a desktop and in a scrolling row on a phone. Before the first
+  session ends there is no wiki yet, and the view says when it will appear.
 - **Run overview:** compare task totals by area, see high-priority queued work, pending
   requests, and how many completed tasks have recorded verification. Browse twenty saved
   activity events at a time, filter task/request events, and open the associated details.

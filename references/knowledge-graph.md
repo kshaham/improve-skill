@@ -227,6 +227,40 @@ or more with cohesion under 0.05) is split.
 - **At the final report,** record the one to three most useful notes. The supervisor then
   syncs and dreams automatically. In a foreground run, finish with `G sync --dream`.
 
+## Wiki
+
+`.improve/wiki/` is a readable digest of the graph, rebuilt **only when a session finishes**:
+by the supervisor's run-end dream, or by a foreground run's `G sync --dream` after the final
+report. Under the supervisor, `supervisor.json` decides whether the session has finished; an
+early outcome an agent writes to `run.json` does not count. During a run the graph stays the
+source of truth: no cycle reads the wiki and nothing rebuilds it.
+
+| File | Holds |
+| --- | --- |
+| `index.md` | counts, key knowledge, areas, what the last session changed |
+| `knowledge.md` | every live note by kind, with its verdict and the areas and files it applies to |
+| `areas/<area>.md` | an area's success rate, notes, and files (reached through the tasks that touched them) |
+| `changes.md` | per session: knowledge added, removed (archived, merged into another, or forgotten), and verdicts changed; the last 12 sessions |
+| `dreams.md` | the latest dream: inferred links, archived and forgotten knowledge, proposals, gaps |
+| `wiki.toon` | every page as one TOON document; area pages list note ids, so it is about a quarter smaller than compact JSON |
+| `manifest.json` | the snapshot the next build compares against |
+
+It grows and cleans itself up with the graph: new knowledge appears, knowledge the graph
+archives, merges, or forgets leaves the pages and is listed in the change log with the reason
+(the graph's history still holds it), and pages for areas that no longer exist are deleted. A
+rebuild in the same session replaces that session's entry; `--new-run` keeps the wiki.
+
+```sh
+G wiki                    # the index page as TOON (cheapest for an agent)
+G wiki knowledge          # any page: knowledge, changes, dreams, areas/NAME
+G wiki pages              # the page list
+G wiki changes --markdown # the Markdown file instead
+G wiki build              # rebuild by hand; refused (exit 2) while a run is live
+```
+
+No wiki yet exits `5`. A wiki problem never fails a sync or a run. The board shows it under
+**Knowledge > Wiki**.
+
 ## Maintenance (automatic)
 
 The daemon runs `sync` after every cycle (live tasks, gates, blockers, lessons), refines every

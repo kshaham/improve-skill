@@ -589,7 +589,8 @@ ledgers. Follow [references/knowledge-graph.md](references/knowledge-graph.md):
 The daemon syncs the graph after each cycle, refines it every 30 minutes, dreams every three
 hours (infers links, archives and forgets unused knowledge, proposes consolidations), and
 dreams again when the run ends. In a foreground run, run `sync` at checkpoints and
-`sync --dream` after the final report.
+`sync --dream` after the final report. That end-of-session dream also rebuilds the knowledge
+wiki (`.improve/wiki/`, `G wiki`); never rebuild or rely on it during a run.
 
 ## Cost, and where it goes
 
