@@ -98,7 +98,7 @@ git log --oneline "$baseline_commit..improve/$date"
 The board is a local web app served from `127.0.0.1`. It reads the run's ledgers directly,
 stays available after the run ends, and includes archived runs.
 
-![Local board showing active documentation tasks, working columns, and run controls](docs/screenshots/board.png)
+![Local board showing run controls and the working columns with queued board tasks and proposals](docs/screenshots/board.png)
 
 **Work in progress.** Four working columns or a compact worklist; sort and filter by
 priority; select up to fifty tasks for a bulk priority change; open any task for its
