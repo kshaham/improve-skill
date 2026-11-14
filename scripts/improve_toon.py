@@ -157,7 +157,7 @@ def needs_quotes(text, delimiter, root=False):
         return True
     if any(ord(char) < 0x20 for char in text) or text[0] in "-#":
         return True
-    return root and text.startswith("﻿")
+    return root and text.startswith("\ufeff")
 
 
 def encode_string(text, delimiter, root=False):
@@ -647,7 +647,7 @@ class Decoder:
                 text = bytes(text).decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise ToonDecodeError(f"input is not valid UTF-8: {exc.reason}") from exc
-        if text.startswith("﻿"):
+        if text.startswith("\ufeff"):
             text = text[1:]
         lines = []
         for number, raw in enumerate(text.split("\n"), 1):
