@@ -1142,6 +1142,7 @@ Graph exits 4 (ambiguous name) and 5 (no match) are answers, not failures.
                 self.log(f"knowledge graph refined: {report['nodes']} nodes, {report['merged']} merged, "
                          f"{report['faded']} faded, {report['stale_files']} stale files, "
                          f"{report.get('renamed', 0)} renamed")
+            self.report_wiki(result.get("wiki"))
             code = result.get("code") or {}
             if code.get("error"):
                 self.log(f"code layer not refreshed: {code['error']}")
@@ -1151,6 +1152,19 @@ Graph exits 4 (ambiguous name) and 5 (no match) are answers, not failures.
                          + (" (partial; continues next refine)" if code.get("partial") else ""))
         except Exception as exc:  # noqa: BLE001 - the graph is memory, not the work.
             self.log(f"could not update the knowledge graph: {type(exc).__name__}: {exc}")
+
+    def report_wiki(self, wiki):
+        """Say what the end-of-session dream did to the knowledge wiki; a failure or skip also
+        reaches the journal, since nothing retries it until the next session ends."""
+        if not wiki:
+            return
+        if wiki.get("pages"):
+            self.log(f"knowledge wiki rebuilt: {wiki['pages']} pages, {wiki.get('notes', 0)} notes, "
+                     f"{wiki.get('added', 0)} added, {wiki.get('removed', 0)} removed")
+            return
+        reason = wiki.get("error") or wiki.get("skipped") or "unknown reason"
+        self.log(f"knowledge wiki not rebuilt: {reason}")
+        self.journal(f"Knowledge wiki not rebuilt at the end of this session: {reason}.")
 
     def finalize(self):
         """A bounded report-only launch; retryable without granting more work time. An

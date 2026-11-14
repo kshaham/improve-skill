@@ -550,6 +550,23 @@ class DaemonTests(unittest.TestCase):
         self.assertEqual(sessions[0], first)
         self.assertEqual(len(sessions), 2, "the change log spans both runs")
 
+    def test_the_run_end_wiki_build_is_logged(self):
+        # A wiki error or skip at run end used to leave no trace anywhere.
+        self.assertEqual(self.invoke().returncode, 0)
+        log = (self.state / 'daemon.log').read_text()
+        self.assertIn('knowledge wiki rebuilt:', log)
+
+    def test_a_wiki_failure_at_run_end_reaches_the_journal(self):
+        calls = []
+        fake = type("Fake", (), {"log": lambda self, message: calls.append(("log", message)),
+                                 "journal": lambda self, message: calls.append(("journal", message))})()
+        runtime.Supervisor.report_wiki(fake, {"error": "OSError: disk full"})
+        self.assertIn(("log", "knowledge wiki not rebuilt: OSError: disk full"), calls)
+        self.assertTrue(any(kind == "journal" and "disk full" in message for kind, message in calls))
+        calls.clear()
+        runtime.Supervisor.report_wiki(fake, {"pages": 9, "notes": 3, "added": 1, "removed": 0})
+        self.assertEqual([kind for kind, _ in calls], ["log"], "a rebuild is logged, not journaled")
+
     def test_malformed_pause_state_halts_without_losing_recovery_state(self):
         self.seed_control(run_id='stable-run')
         path = self.state / 'pause.json'
