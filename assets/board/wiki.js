@@ -103,6 +103,13 @@ function openWikiPage(name) {
   $("wiki-page").focus({ preventScroll: true });
 }
 
+// Every note row the wiki carries: the knowledge page's groups, and the rows area pages list
+// beyond the kind caps.
+function wikiAllNotes(pages) {
+  const knowledge = pages.knowledge || {};
+  return [...(knowledge.groups || []).flatMap((group) => group.notes), ...(knowledge.more || [])];
+}
+
 // Open a note in the graph view, where its links, evidence, and curation live.
 function wikiGraphButton(id, text, className = "link-button") {
   const button = element("button", className, text);
@@ -123,7 +130,7 @@ function wikiNoteRows(rows) {
   rows = rows.filter((row) => wikiMatches(row));
   wikiShown += rows.length;
   if (!rows.length) return [element("p", "focus-hint", wikiFilter ? "No notes match the filter." : "None recorded.")];
-  const texts = new Map((wikiData?.pages?.knowledge?.groups || []).flatMap((group) => group.notes).map((row) => [row.id, row.text]));
+  const texts = new Map(wikiAllNotes(wikiData?.pages || {}).map((row) => [row.id, row.text]));
   const list = element("ul", "wiki-notes");
   for (const row of rows) {
     const item = element("li");
@@ -175,6 +182,13 @@ function wikiContradictions(rows) {
   return [list];
 }
 
+// A capped list says how much it leaves out; the graph view and its search hold the rest.
+function wikiCapped(shown, total) {
+  return total > shown
+    ? [element("p", "focus-hint", `Showing the strongest ${countText(shown)} of ${countText(total)}; search the graph for the rest.`)]
+    : [];
+}
+
 function wikiSection(title, children) {
   const section = element("section", "wiki-section");
   section.append(element("h4", "", title), ...children);
@@ -216,7 +230,8 @@ function wikiPageContent(name, page, pages) {
     for (const group of page.groups || []) {
       const before = wikiShown;
       const rows = wikiNoteRows(group.notes);
-      if (!wikiFilter || wikiShown > before) sections.push(wikiSection((KIND_LABELS[group.kind] || "Fact") + "s", rows));
+      if (!wikiFilter || wikiShown > before)
+        sections.push(wikiSection((KIND_LABELS[group.kind] || "Fact") + "s", [...wikiCapped(group.notes.length, group.total), ...rows]));
     }
     if (wikiFilter && !sections.length) sections.push(element("p", "focus-hint", "No notes match the filter."));
     return [heading, ...sections];
@@ -277,13 +292,16 @@ function wikiPageContent(name, page, pages) {
     ];
   }
   // An area page carries note ids; the rows live once, on the knowledge page.
-  const rows = new Map((pages.knowledge?.groups || []).flatMap((group) => group.notes).map((row) => [row.id, row]));
+  const rows = new Map(wikiAllNotes(pages).map((row) => [row.id, row]));
   const files = element("ul", "wiki-files");
   for (const row of page.files || []) files.append(element("li", "", `${row.path} · ${row.attempts} attempts`));
   return [
     heading,
     element("p", "", `${page.done || 0}/${page.attempts || 0} attempts verified${typeof page.success === "number" ? ` · success ${Math.round(page.success * 100)}%` : ""}`),
-    wikiSection("Knowledge", wikiNoteRows((page.knowledge || []).map((id) => rows.get(id)).filter(Boolean))),
+    wikiSection("Knowledge", [
+      ...wikiCapped((page.knowledge || []).length, page.total),
+      ...wikiNoteRows((page.knowledge || []).map((id) => rows.get(id)).filter(Boolean)),
+    ]),
     wikiSection("Files", [page.files?.length ? files : element("p", "focus-hint", "None recorded.")]),
   ];
 }

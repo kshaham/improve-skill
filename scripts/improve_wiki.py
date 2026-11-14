@@ -32,6 +32,8 @@ import improve_toon
 CHANGE_SESSIONS = 12
 KEY_NOTES = 8
 NOTES_PER_PAGE = 200
+# An area page lists fewer notes, so the rows it needs beyond the kind caps stay few.
+AREA_NOTES = 60
 FILES_PER_AREA = 10
 ROWS_PER_CHANGE = 40
 SESSION_ROWS = 30
@@ -204,17 +206,19 @@ def pages(graph, previous, built_at, run_id):
     for area in areas:
         name = area["label"]
         stats = area.get("stats") or {}
-        notes = [row for row in rows if name in row["areas"].split()][:NOTES_PER_PAGE]
+        in_notes = [row for row in rows if name in row["areas"].split()]
+        notes = in_notes[:AREA_NOTES]
         in_area = sorted((node for node in files if name in by_file.get(node["id"], ())),
                          key=lambda node: (-(node.get("stats") or {}).get("attempts", 0), node["id"]))
         area_files = [{"path": node["label"], "attempts": (node.get("stats") or {}).get("attempts", 0),
                        "success": (node.get("stats") or {}).get("success")} for node in in_area[:FILES_PER_AREA]]
         summary = {"name": name, "page": f"areas/{slug(name)}", "attempts": stats.get("attempts", 0),
                    "done": stats.get("done", 0), "rejected": stats.get("rejected", 0),
-                   "success": stats.get("success"), "notes": len(notes)}
+                   "success": stats.get("success"), "notes": len(in_notes)}
         area_rows.append(summary)
         # Note ids only: the rows live once, on the knowledge page, so the TOON document stays small.
-        area_pages[summary["page"]] = {"title": f"Area: {name}", **summary, "knowledge": [row["id"] for row in notes],
+        area_pages[summary["page"]] = {"title": f"Area: {name}", **summary, "total": len(in_notes),
+                                       "knowledge": [row["id"] for row in notes],
                                        "files": area_files}
 
     dream = graph.get("dream") or {}
@@ -258,8 +262,11 @@ def pages(graph, previous, built_at, run_id):
     except (KeyError, TypeError):
         resisting = []
 
-    groups = [{"kind": kind, "notes": [row for row in rows if row["kind"] == kind][:NOTES_PER_PAGE]}
-              for kind in KIND_ORDER + tuple(sorted({row["kind"] for row in rows} - set(KIND_ORDER)))]
+    # Each kind shows its strongest notes; `total` says how many it has, so a capped page says so.
+    groups = []
+    for kind in KIND_ORDER + tuple(sorted({row["kind"] for row in rows} - set(KIND_ORDER))):
+        of_kind = [row for row in rows if row["kind"] == kind]
+        groups.append({"kind": kind, "total": len(of_kind), "notes": of_kind[:NOTES_PER_PAGE]})
     result = {
         "index": {"title": "Knowledge wiki", "built_at": built_at, "run_id": run_id or "",
                   "revision": graph.get("revision", 0), "tick": graph.get("tick", 0),
@@ -268,7 +275,10 @@ def pages(graph, previous, built_at, run_id):
                              "contested": sum(1 for row in rows if row["verdict"] == "contested")},
                   "key": [{"id": row["id"], "kind": row["kind"], "text": row["text"]} for row in rows[:KEY_NOTES]],
                   "areas": area_rows, "hotspots": resisting[:HOTSPOT_ROWS], "last_session": session["counts"]},
-        "knowledge": {"title": "Knowledge", "groups": [group for group in groups if group["notes"]]},
+        "knowledge": {"title": "Knowledge", "groups": [group for group in groups if group["notes"]],
+                      # Rows that area pages list but the kind caps leave off this page, so every id
+                      # an area lists resolves; this page itself still shows only `groups`.
+                      "more": beyond_cap(groups, area_pages, rows)},
         "changes": {"title": "Changes", "sessions": list(reversed(sessions))},
         "dreams": dreams,
         "sessions": sessions_page,
@@ -297,8 +307,23 @@ def note_line(row):
 
 def render(result):
     """Every page as Markdown, keyed by page name; area pages resolve their note ids."""
-    rows = {row["id"]: row for group in result["knowledge"]["groups"] for row in group["notes"]}
+    knowledge = result["knowledge"]
+    rows = {row["id"]: row for group in knowledge["groups"] for row in group["notes"]}
+    rows.update((row["id"], row) for row in knowledge.get("more", []))
     return {name: markdown(name, page, rows) for name, page in result.items()}
+
+
+def beyond_cap(groups, area_pages, rows):
+    shown = {row["id"] for group in groups for row in group["notes"]}
+    wanted = {key for page in area_pages.values() for key in page["knowledge"]} - shown
+    return [row for row in rows if row["id"] in wanted]
+
+
+def capped_line(shown, total):
+    """A capped list says how much it leaves out; the graph and `G search` hold the rest."""
+    if total and total > shown:
+        return [f"Showing the strongest {shown} of {total}; search the graph for the rest.", ""]
+    return []
 
 
 def markdown(name, page, rows=None):
@@ -325,7 +350,8 @@ def markdown(name, page, rows=None):
                   "See [Changes](changes.md)."]
     elif name == "knowledge":
         for group in page["groups"]:
-            lines += [f"## {group['kind'].capitalize()}", ""] + [note_line(row) for row in group["notes"]] + [""]
+            lines += [f"## {group['kind'].capitalize()}", ""] + capped_line(len(group["notes"]), group.get("total"))
+            lines += [note_line(row) for row in group["notes"]] + [""]
         if not page["groups"]:
             lines.append("No knowledge recorded yet.")
     elif name == "changes":
@@ -360,6 +386,7 @@ def markdown(name, page, rows=None):
         lines += [f"{page['done']}/{page['attempts']} attempts verified"
                   + (f" (success {success:.2f})" if isinstance(success, (int, float)) else "") + ".", "",
                   "[Back to the index](../index.md)", "", "## Knowledge", ""]
+        lines += capped_line(len(page["knowledge"]), page.get("total"))
         lines += [note_line(rows[key]) for key in page["knowledge"] if key in (rows or {})] or [
             "- None recorded for this area."]
         lines += ["", "## Files", ""]

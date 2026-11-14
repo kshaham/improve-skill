@@ -115,6 +115,17 @@ class WikiFilterTests(unittest.TestCase):
         self.assertIn("The filter applies to notes; this page has none.", script)
         self.assertIn("wikiFilter && wikiTotal", script)
 
+class WikiCappedViewTests(unittest.TestCase):
+    def test_capped_lists_say_how_many_they_leave_out(self):
+        script = (ASSETS / "wiki.js").read_text()
+        helper = script[script.index("function wikiCapped("):]
+        self.assertIn("Showing the strongest", helper[:helper.index("\n}")])
+        self.assertIn("wikiCapped(group.notes.length, group.total)", script)
+        self.assertIn("wikiCapped((page.knowledge || []).length, page.total)", script)
+        # Area pages resolve their ids against every row, including those beyond the kind caps.
+        self.assertIn("...(knowledge.more || [])", script)
+        self.assertIn("const rows = new Map(wikiAllNotes(pages).map((row) => [row.id, row]));", script)
+
 class WikiStyleTests(unittest.TestCase):
     def rule(self, css, selector):
         start = css.index("\n" + selector + " {")

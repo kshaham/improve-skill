@@ -311,6 +311,56 @@ class DreamRelationsTests(unittest.TestCase):
         pages, _ = wiki.pages(value, None, "t1", "run-1")
         self.assertEqual(pages["dreams"]["contradictions"], [])
 
+class CappedPageTests(unittest.TestCase):
+    def test_a_capped_page_says_how_many_notes_it_leaves_out(self):
+        notes = {f"insight:{i:04d}": f"Knowledge number {i} for a large graph" for i in range(wiki.NOTES_PER_PAGE + 25)}
+        pages, _ = wiki.pages(wiki_graph(areas=["ui"], notes=notes), None, "t1", "run-1")
+        group = pages["knowledge"]["groups"][0]
+        self.assertEqual(len(group["notes"]), wiki.NOTES_PER_PAGE)
+        self.assertEqual(group["total"], wiki.NOTES_PER_PAGE + 25)
+        self.assertEqual(pages["areas/ui"]["total"], wiki.NOTES_PER_PAGE + 25)
+        text = wiki.render(pages)
+        self.assertIn(f"Showing the strongest {wiki.NOTES_PER_PAGE} of {wiki.NOTES_PER_PAGE + 25}", text["knowledge"])
+        self.assertIn(f"Showing the strongest {wiki.AREA_NOTES} of {wiki.NOTES_PER_PAGE + 25}", text["areas/ui"])
+
+    def test_every_note_an_area_lists_has_a_row(self):
+        # Area notes can rank below the kind cap of the knowledge page; they must still render.
+        cap = wiki.NOTES_PER_PAGE
+        notes = {f"insight:{i:04d}": f"Fact number {i} recorded for the wiki" for i in range(cap * 2)}
+        area_cap = wiki.AREA_NOTES
+        value = wiki_graph(areas=["ui", "low"], notes=notes)
+        value["edges"] = {}
+        for i in range(cap - area_cap // 2, cap + area_cap // 2):
+            key = f"insight:{i:04d}"
+            value["edges"][f"{key}|about|area:low"] = {"src": key, "rel": "about", "dst": "area:low"}
+        pages, _ = wiki.pages(value, None, "t1", "run-1")
+        listed = pages["areas/low"]["knowledge"]
+        self.assertEqual(len(listed), area_cap)
+        text = wiki.render(pages)["areas/low"]
+        for key in listed:
+            self.assertIn(notes[key], text)
+        self.assertNotIn("Showing the strongest", text, "nothing is left out of this area")
+        knowledge = wiki.render(pages)["knowledge"]
+        self.assertNotIn(notes[f"insight:{cap + 10:04d}"], knowledge, "the knowledge page keeps its cap")
+
+    def test_the_lookup_table_for_area_notes_stays_small(self):
+        # 2,000 facts over 10 areas, no overlap: the extra rows must stay bounded by the area cap.
+        notes = {f"insight:{i:05d}": f"Fact number {i} recorded for the wiki" for i in range(2000)}
+        value = wiki_graph(areas=[f"a{n}" for n in range(10)], notes=notes)
+        value["edges"] = {}
+        for i in range(2000):
+            key = f"insight:{i:05d}"
+            value["edges"][f"{key}|about|area:a{i % 10}"] = {"src": key, "rel": "about", "dst": f"area:a{i % 10}"}
+        pages, _ = wiki.pages(value, None, "t1", "run-1")
+        self.assertLessEqual(len(pages["knowledge"]["more"]), 10 * wiki.AREA_NOTES)
+        self.assertEqual(len(pages["areas/a3"]["knowledge"]), wiki.AREA_NOTES)
+        self.assertEqual(pages["areas/a3"]["total"], 200)
+        self.assertIn(f"Showing the strongest {wiki.AREA_NOTES} of 200", wiki.render(pages)["areas/a3"])
+
+    def test_an_uncapped_page_says_nothing_extra(self):
+        pages, _ = wiki.pages(wiki_graph(areas=["ui"], notes={"insight:a": "One small note for the wiki"}), None, "t", "r")
+        self.assertNotIn("Showing the strongest", "".join(wiki.render(pages).values()))
+
 def wiki_graph(areas=(), notes=None):
     """A minimal in-memory graph with the fields the wiki reads."""
     nodes, edges = {}, {}
