@@ -225,7 +225,9 @@ or more with cohesion under 0.05) is split.
   Only that proposal's members are consumed; pinned and user knowledge never is. Consumed
   notes stay in history, and their ids resolve to the new note, so old citations still count.
 - **At the final report,** record the one to three most useful notes. The supervisor then
-  syncs and dreams automatically. In a foreground run, finish with `G sync --dream`.
+  syncs and dreams automatically. In a foreground run, record the outcome with
+  `improve_ledger.py --repo R finish --outcome completed`, then finish with `G sync --dream`
+  (which also rebuilds the wiki; without the outcome it is skipped).
 
 ## Wiki
 
@@ -258,7 +260,7 @@ symlinks: the build, the board, and the CLI refuse them.
 
 ```sh
 G wiki                    # the index page as TOON (cheapest for an agent)
-G wiki knowledge          # any page: knowledge, changes, dreams, areas/NAME
+G wiki knowledge          # any page: knowledge, changes, dreams, topics, sessions, areas/NAME
 G wiki knowledge --budget 2000  # the strongest notes, across kinds, that fit 2,000 tokens
 G wiki pages              # the page list (sessions, and one page per area)
 G wiki changes --markdown # the Markdown file instead

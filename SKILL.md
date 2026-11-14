@@ -167,7 +167,8 @@ them; `--all-areas` shows them). Write state through the same helper:
 `run-set KEY=VALUE` (and `--json-field KEY=JSON`, in any order) for any run.json key, such as
 `focus`, `next_action`, or `discovery` (it refuses `started_at`, `deadline`, and `outcome`), `discovery-add --json '{...}'` for a discovery
 checkpoint, `set ID ...` for a task, and `add --json` for a new one. A foreground run records
-its outcome with `finish --outcome completed` (or `stopped by user`, `halted: REASON`).
+its outcome with `finish --outcome completed` (or `stopped by user`, `halted: REASON`) before
+its closing `sync --dream`.
 
 **TOON, the helpers' output format.** `key: value` lines; for a list of records one header
 `name[N]{field,field}:` followed by one comma-separated row per record; a field `f{a,b}`
@@ -469,8 +470,12 @@ final response.** Do not return from foreground work because the current batch i
 
 No dry-sweep sleep, no assumed scheduling tool, and no final report before expiry. At exit
 `10`, finish or revert the item in hand, record late finder results as unimplemented
-candidates, write the final summary, then (foreground) `improve_ledger.py finish --outcome
-completed` and `improve_graph.py sync --dream`, which rebuilds the knowledge wiki, and stop.
+candidates, write the final summary, then (foreground) record the outcome and dream, which
+rebuilds the knowledge wiki, and stop:
+
+    python3 <skill-directory>/scripts/improve_ledger.py --repo <repo> finish --outcome completed
+    python3 <skill-directory>/scripts/improve_graph.py --repo <repo> sync --dream
+
 Report the branch and review commands.
 
 ## Escalation - when the backlog runs dry
@@ -592,7 +597,7 @@ ledgers. Follow [references/knowledge-graph.md](references/knowledge-graph.md):
 The daemon syncs the graph after each cycle, refines it every 30 minutes, dreams every three
 hours (infers links, archives and forgets unused knowledge, proposes consolidations), and
 dreams again when the run ends. In a foreground run, run `sync` at checkpoints and, after the
-final report and `improve_ledger.py finish`, `sync --dream`. That end-of-session dream also rebuilds the knowledge
+final report and the ledger's `finish`, `sync --dream` (the two commands in step 6 above). That end-of-session dream also rebuilds the knowledge
 wiki (`.improve/wiki/`, `G wiki`); never rebuild or rely on it during a run.
 
 ## Cost, and where it goes

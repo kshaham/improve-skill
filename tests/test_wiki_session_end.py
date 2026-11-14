@@ -84,6 +84,18 @@ class ForegroundFinishTests(unittest.TestCase):
         self.assertEqual(json.loads((self.state / "run.json").read_text())["outcome"], "halted: earlier")
 
 
+class DocumentedStepsTests(unittest.TestCase):
+    def test_every_description_of_the_session_end_records_the_outcome_before_dreaming(self):
+        # An agent following any one of these must reach the wiki build; a page that says only
+        # `sync --dream` leaves the outcome unset and the wiki skipped.
+        for name in ("SKILL.md", "references/report-format.md", "references/knowledge-graph.md", "references/ledger.md"):
+            text = (ROOT / name).read_text()
+            self.assertIn("finish --outcome completed", text, name)
+            self.assertLess(text.index("finish --outcome completed"), text.rindex("sync --dream"), name)
+        skill = (ROOT / "SKILL.md").read_text()
+        self.assertIn("python3 <skill-directory>/scripts/improve_ledger.py --repo <repo> finish --outcome completed", skill)
+        self.assertIn("python3 <skill-directory>/scripts/improve_graph.py --repo <repo> sync --dream", skill)
+
 class NoSessionTests(unittest.TestCase):
     def test_with_no_run_at_all_no_session_has_finished(self):
         with tempfile.TemporaryDirectory() as tmp:

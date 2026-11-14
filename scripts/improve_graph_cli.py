@@ -269,8 +269,9 @@ def build_parser():
     command("diff", "what the latest dreams changed")
     page = command("wiki", "the knowledge wiki, rebuilt from the graph when a session finishes")
     page.add_argument("page", nargs="?", default="index",
-                      help="index (default), knowledge, changes, dreams, areas/NAME; `pages` lists them; "
-                           "`build` rebuilds the wiki once the session has finished")
+                      help="index (default), knowledge, changes, dreams, topics, sessions, areas/NAME; `pages` "
+                           "lists them; `build` rebuilds the wiki once the session has finished; --budget N fits "
+                           "the answer in N tokens")
     page.add_argument("--markdown", action="store_true", help="print the page's Markdown instead of TOON or JSON")
     out = command("report", "the graph as a Markdown report")
     out.add_argument("--out", help="write to this file instead of printing")
@@ -474,8 +475,8 @@ def wiki_command(args, repo):
         return result
     document = directory / "wiki.toon"
     if not document.is_file() or document.is_symlink():
-        raise NotFound("no wiki yet: it is built when an improve session finishes "
-                       "(the run-end dream, or `sync --dream` after a foreground run's final report)")
+        raise NotFound("no wiki yet: it is built when an improve session finishes (the run-end dream, "
+                       "or a foreground run's final report, `improve_ledger.py finish`, then `sync --dream`)")
     from improve_control import read_local
     # Bounded, and never through a symlinked file.
     pages = toon.loads(read_local(document, limit=4 * 1024 * 1024))["pages"]

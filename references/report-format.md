@@ -95,6 +95,12 @@ item in full, and the exact commands to review or discard:
 Use the recorded baseline rather than assuming the source branch was main. Discard commands
 are suggestions for the human after review; never run branch deletion automatically.
 
+After saving the report, a foreground run records its outcome and dreams, which rebuilds the
+knowledge wiki (the supervisor does both itself):
+
+    python3 <skill-directory>/scripts/improve_ledger.py --repo <repo> finish --outcome completed
+    python3 <skill-directory>/scripts/improve_graph.py --repo <repo> sync --dream
+
 
 ## Focus and continuity
 
