@@ -83,7 +83,9 @@ The board includes:
   **Dreams** (inferred links, archived and forgotten knowledge, contradicting notes to settle,
   proposals, gaps), and **Sessions** (each session's outcome, tasks, and knowledge recorded).
   The overview lists the files that resist change; each note lists related notes, and any note
-  opens in the graph with one click. Pages are
+  opens in the graph with one click. **Filter notes** narrows the notes on a page to those
+  containing every word you type (text, area, file, kind, or verdict). A list capped at its
+  strongest notes says how many it leaves out. Pages are
   listed beside the page on a desktop and in a scrolling row on a phone. Before the first
   session ends there is no wiki yet, and the view says when it will appear.
 - **Run overview:** compare task totals by area, see high-priority queued work, pending
