@@ -126,5 +126,15 @@ class BoardScriptTests(unittest.TestCase):
         self.assertIn("filter: drop-shadow(", rule)
         self.assertNotIn("stroke", rule, "selection and focus keep the stroke")
 
+    def test_graph_labels_hold_still_while_the_layout_moves(self):
+        # Recomputing crowding every frame hid a dragged node's label and made neighbours flicker.
+        source = (ASSETS / "graph.js").read_text()
+        position = source[source.index("function positionGraph()"):source.index("function animateGraph()")]
+        self.assertIn("if (!graphFrame) crowdGraphLabels(placed);", position)
+        tick = source[source.index("const tick = () => {"):]
+        tick = tick[:tick.index("};")]
+        self.assertLess(tick.index("if (moving) graphFrame = requestAnimationFrame(tick);"), tick.index("positionGraph();"),
+                        "the next frame is requested before positioning, so a moving layout skips crowding")
+
 if __name__ == "__main__":
     unittest.main()

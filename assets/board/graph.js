@@ -507,7 +507,9 @@ function positionGraph() {
     placed.set(id, screen);
   }
   sizeGraphNodes();
-  crowdGraphLabels(placed);
+  // Crowding is decided at rest (settled layout, zoom, pan): while the layout moves, labels keep
+  // their last state instead of flickering, and a dragged node keeps its label.
+  if (!graphFrame) crowdGraphLabels(placed);
   for (const { edge, line } of graphElements.edges) {
     const a = graphLayout.points.get(edge.src),
       b = graphLayout.points.get(edge.dst);
@@ -530,8 +532,8 @@ function animateGraph() {
     graphFrame = null;
     if (activeView !== "graph" || document.hidden) return;
     const moving = graphLayout.step() && graphLayout.step();
-    positionGraph();
     if (moving) graphFrame = requestAnimationFrame(tick);
+    positionGraph();
   };
   graphFrame = requestAnimationFrame(tick);
 }
