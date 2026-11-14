@@ -2823,18 +2823,20 @@ button.danger {
   pointer-events: all;
   cursor: pointer;
 }
+/* Rings are screen strokes: --node-r (set by the graph) caps each at 30% of the node radius, so a
+   small node keeps its own colour. */
 .graph-node circle {
   stroke: var(--canvas);
-  stroke-width: 1.5;
+  stroke-width: min(1.5px, calc(var(--node-r, 10px) * 0.3));
   transition: opacity 0.15s;
 }
 .graph-node.type-task circle {
   stroke: var(--status, var(--canvas));
-  stroke-width: 2.5;
+  stroke-width: min(2.5px, calc(var(--node-r, 10px) * 0.3));
 }
 .graph-node.pinned circle {
   stroke: var(--canvas-ink);
-  stroke-width: 2.5;
+  stroke-width: min(2.5px, calc(var(--node-r, 10px) * 0.3));
 }
 .graph-node.archived circle,
 .graph-node.stale circle {
@@ -2860,7 +2862,7 @@ button.danger {
 .graph-node.selected circle,
 .graph-node:focus-visible circle {
   stroke: var(--edge-highlight);
-  stroke-width: 3.5;
+  stroke-width: min(3.5px, calc(var(--node-r, 10px) * 0.3));
 }
 .graph-node.selected text {
   font-weight: 650;

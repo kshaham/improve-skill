@@ -128,7 +128,9 @@ function sizeGraphNodes() {
   graphElements.sizedAt = ratio;
   for (const [id, group] of graphElements.nodes) {
     const radius = graphNodeRadius(graphElements.ranks.get(id) ?? 0, ratio, graphElements.nodes.size);
-    group.querySelector("circle").setAttribute("r", radius.toFixed(1));
+    const circle = group.querySelector("circle");
+    circle.setAttribute("r", radius.toFixed(1));
+    circle.style.setProperty("--node-r", radius.toFixed(1) + "px");
     group.querySelector("text").setAttribute("x", (radius + 4).toFixed(1));
     const hit = graphElements.hits.get(id),
       reach = graphHitRadius(radius);
@@ -411,14 +413,16 @@ function renderLegend() {
 function positionGraph() {
   const viewport = $("graph-canvas").firstChild;
   if (!viewport) return;
-  viewport.setAttribute(
-    "transform",
-    `translate(${graphViewport.x.toFixed(1)} ${graphViewport.y.toFixed(1)}) scale(${graphViewport.scale.toFixed(3)})`,
-  );
-  const { scale, x, y } = graphViewport;
+  // Nodes are placed with the same rounded values as the edge transform and edge endpoints, so
+  // edges meet node centres exactly.
+  const scale = Number(graphViewport.scale.toFixed(3)),
+    x = Number(graphViewport.x.toFixed(1)),
+    y = Number(graphViewport.y.toFixed(1));
+  viewport.setAttribute("transform", `translate(${x} ${y}) scale(${scale})`);
   for (const [id, group] of graphElements.nodes) {
-    const point = graphLayout.points.get(id);
-    if (!point) continue;
+    const raw = graphLayout.points.get(id);
+    if (!raw) continue;
+    const point = { x: Number(raw.x.toFixed(1)), y: Number(raw.y.toFixed(1)) };
     const place = `translate(${(point.x * scale + x).toFixed(1)} ${(point.y * scale + y).toFixed(1)})`;
     group.setAttribute("transform", place);
     graphElements.hits.get(id)?.setAttribute("transform", place);

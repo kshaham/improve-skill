@@ -85,5 +85,23 @@ class BoardScriptTests(unittest.TestCase):
         self.assertIn("- GRAPH_LEGEND_ROOM", fit)
         self.assertIn("Math.max(Math.min(0.15, graphViewport.fit),", source)
 
+    def test_graph_rings_scale_with_small_nodes_and_edges_meet_centres(self):
+        # Rings are screen strokes; on a 2.5px node a 2.5px ring hid the node's own colour, so a
+        # blocked task read as a Blocker. Every ring is capped at 30% of the node radius.
+        css = (ASSETS / "board.css").read_text()
+        for selector, width in [(".graph-node circle {", "1.5px"), (".graph-node.type-task circle {", "2.5px"),
+                                (".graph-node.pinned circle {", "2.5px"), (".graph-node:focus-visible circle {", "3.5px")]:
+            rule = css[css.index(selector):]
+            rule = rule[:rule.index("}")]
+            self.assertIn(f"stroke-width: min({width}, calc(var(--node-r, 10px) * 0.3));", rule, selector)
+        source = (ASSETS / "graph.js").read_text()
+        self.assertIn('setProperty("--node-r", radius.toFixed(1) + "px")', source)
+        # Nodes use the same rounded viewport values as the edge transform, so edges meet centres.
+        position = source[source.index("function positionGraph()"):source.index("function animateGraph()")]
+        self.assertIn("const scale = Number(graphViewport.scale.toFixed(3)),", position)
+        # Edge endpoints are written to 0.1 layout units; node points are rounded the same way.
+        self.assertIn("const point = { x: Number(raw.x.toFixed(1)), y: Number(raw.y.toFixed(1)) };", position)
+        self.assertIn('line.setAttribute("x1", a.x.toFixed(1));', position)
+
 if __name__ == "__main__":
     unittest.main()
