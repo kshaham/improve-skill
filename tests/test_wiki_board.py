@@ -84,7 +84,8 @@ class WikiSessionsViewTests(unittest.TestCase):
     def test_sessions_and_hotspots_are_shown_on_the_board(self):
         script = (ASSETS / "wiki.js").read_text()
         self.assertIn('["sessions", "Sessions"]', script)
-        self.assertIn('if (name === "sessions")', script)
+        # The Sessions page has its own renderer (the source pin moved with the per-page split).
+        self.assertIn("sessions: wikiSessionsPage,", script)
         self.assertIn('wikiSection("Files that resist change"', script)
 
 class WikiRelationsViewTests(unittest.TestCase):

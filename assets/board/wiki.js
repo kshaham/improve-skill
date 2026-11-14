@@ -197,115 +197,129 @@ function wikiSection(title, children) {
   return section;
 }
 
-function wikiPageContent(name, page, pages) {
-  const heading = element("h3", "", page.title || name);
-  if (name === "index") {
-    const counts = page.counts || {};
-    const facts = element("p", "wiki-stamp", `Rebuilt ${relativeTime(page.built_at)} when session ${page.run_id || "?"} finished · graph revision ${page.revision}, dream tick ${page.tick}`);
-    const summary = element(
+function wikiIndexPage(page) {
+  const counts = page.counts || {};
+  const last = page.last_session || {};
+  const areas = element("ul", "wiki-areas");
+  for (const row of page.areas || []) {
+    const item = element("li");
+    const button = element("button", "link-button", row.name);
+    button.type = "button";
+    button.addEventListener("click", () => openWikiPage(row.page));
+    item.append(button, element("small", "", `${wikiPlural(row.notes, "note")} · ${row.done}/${row.attempts} verified`));
+    areas.append(item);
+  }
+  return [
+    element("p", "wiki-stamp", `Rebuilt ${relativeTime(page.built_at)} when session ${page.run_id || "?"} finished · graph revision ${page.revision}, dream tick ${page.tick}`),
+    element(
       "p",
       "",
       `${wikiPlural(counts.notes || 0, "live note")} (${counts.proven || 0} proven, ${counts.contested || 0} contested, ${counts.archived || 0} archived) across ${wikiPlural(counts.areas || 0, "area")} and ${wikiPlural(counts.files || 0, "file")}.`,
-    );
-    const last = page.last_session || {};
-    const areas = element("ul", "wiki-areas");
-    for (const row of page.areas || []) {
-      const item = element("li");
-      const button = element("button", "link-button", row.name);
-      button.type = "button";
-      button.addEventListener("click", () => openWikiPage(row.page));
-      item.append(button, element("small", "", `${wikiPlural(row.notes, "note")} · ${row.done}/${row.attempts} verified`));
-      areas.append(item);
-    }
-    return [
-      heading,
-      facts,
-      summary,
-      wikiSection("Key knowledge", wikiNoteRows(page.key || [])),
-      wikiSection("Areas", [page.areas?.length ? areas : element("p", "focus-hint", "None yet.")]),
-      wikiSection("Files that resist change", wikiHotspots(page.hotspots || [])),
-      wikiSection("Last session", [element("p", "", `${last.added || 0} added, ${last.removed || 0} removed, ${last.verdicts || 0} verdicts changed.`)]),
-    ];
+    ),
+    wikiSection("Key knowledge", wikiNoteRows(page.key || [])),
+    wikiSection("Areas", [page.areas?.length ? areas : element("p", "focus-hint", "None yet.")]),
+    wikiSection("Files that resist change", wikiHotspots(page.hotspots || [])),
+    wikiSection("Last session", [element("p", "", `${last.added || 0} added, ${last.removed || 0} removed, ${last.verdicts || 0} verdicts changed.`)]),
+  ];
+}
+
+function wikiKnowledgePage(page) {
+  const sections = [];
+  for (const group of page.groups || []) {
+    const before = wikiShown;
+    const rows = wikiNoteRows(group.notes);
+    if (!wikiFilter || wikiShown > before)
+      sections.push(wikiSection((KIND_LABELS[group.kind] || "Fact") + "s", [...wikiCapped(group.notes.length, group.total), ...rows]));
   }
-  if (name === "knowledge") {
-    const sections = [];
-    for (const group of page.groups || []) {
-      const before = wikiShown;
-      const rows = wikiNoteRows(group.notes);
-      if (!wikiFilter || wikiShown > before)
-        sections.push(wikiSection((KIND_LABELS[group.kind] || "Fact") + "s", [...wikiCapped(group.notes.length, group.total), ...rows]));
-    }
-    if (wikiFilter && !sections.length) sections.push(element("p", "focus-hint", "No notes match the filter."));
-    return [heading, ...sections];
-  }
-  if (name === "changes")
-    return [
-      heading,
-      ...(page.sessions || []).map((session) => {
-        const rows = [
-          ...session.added.map((row) => ["Added", row.text, "added"]),
-          ...session.removed.map((row) => [`Removed: ${row.reason}`, row.text, "removed"]),
-          ...session.verdicts.map((row) => [`Verdict ${row.from} → ${row.to}`, row.text, "verdict"]),
-        ];
-        const list = element("ul", "wiki-changes");
-        for (const [label, text, kind] of rows) {
-          const item = element("li", "change-" + kind);
-          item.append(element("strong", "", label), element("span", "wiki-text", text));
-          list.append(item);
-        }
-        const counts = session.counts || {};
-        return wikiSection(`Session ${session.run_id || "?"} · ${relativeTime(session.built_at)}`, [
-          element("p", "focus-hint", `${counts.added || 0} added, ${counts.removed || 0} removed, ${counts.verdicts || 0} verdicts changed${session.first ? " · first build" : ""}`),
-          rows.length ? list : element("p", "focus-hint", "No changes."),
-        ]);
-      }),
+  if (wikiFilter && !sections.length) sections.push(element("p", "focus-hint", "No notes match the filter."));
+  return sections;
+}
+
+function wikiChangesPage(page) {
+  return (page.sessions || []).map((session) => {
+    const rows = [
+      ...session.added.map((row) => ["Added", row.text, "added"]),
+      ...session.removed.map((row) => [`Removed: ${row.reason}`, row.text, "removed"]),
+      ...session.verdicts.map((row) => [`Verdict ${row.from} → ${row.to}`, row.text, "verdict"]),
     ];
-  if (name === "sessions") {
     const list = element("ul", "wiki-changes");
-    for (const row of page.runs || []) {
-      const item = element("li", row.outcome === "completed" ? "change-added" : row.outcome.startsWith("halted") ? "change-verdict" : "");
-      item.append(
-        element("strong", "", `${row.run_id} · ${row.outcome}`),
-        element("span", "wiki-text", `${row.done}/${row.tasks} done, ${row.rejected} rejected, ${row.blocked} blocked · ${wikiPlural(row.notes, "note")} recorded`),
-      );
+    for (const [label, text, kind] of rows) {
+      const item = element("li", "change-" + kind);
+      item.append(element("strong", "", label), element("span", "wiki-text", text));
       list.append(item);
     }
-    return [
-      heading,
-      element("p", "", "Each recorded improve session, newest first: what it attempted and the knowledge it recorded."),
-      page.runs?.length ? list : element("p", "focus-hint", "No session recorded yet."),
-    ];
+    const counts = session.counts || {};
+    return wikiSection(`Session ${session.run_id || "?"} · ${relativeTime(session.built_at)}`, [
+      element("p", "focus-hint", `${counts.added || 0} added, ${counts.removed || 0} removed, ${counts.verdicts || 0} verdicts changed${session.first ? " · first build" : ""}`),
+      rows.length ? list : element("p", "focus-hint", "No changes."),
+    ]);
+  });
+}
+
+function wikiSessionsPage(page) {
+  const list = element("ul", "wiki-changes");
+  for (const row of page.runs || []) {
+    const item = element("li", row.outcome === "completed" ? "change-added" : row.outcome.startsWith("halted") ? "change-verdict" : "");
+    item.append(
+      element("strong", "", `${row.run_id} · ${row.outcome}`),
+      element("span", "wiki-text", `${row.done}/${row.tasks} done, ${row.rejected} rejected, ${row.blocked} blocked · ${wikiPlural(row.notes, "note")} recorded`),
+    );
+    list.append(item);
   }
-  if (name === "dreams") {
-    const inferred = page.inferred || {};
-    const proposals = element("ul", "wiki-changes");
-    for (const row of page.proposals || []) {
-      const item = element("li");
-      item.append(element("strong", "", wikiPlural(row.members, "note")), element("span", "wiki-text", row.text || row.id));
-      proposals.append(item);
-    }
-    return [
-      heading,
-      element("p", "wiki-stamp", `Latest dream: tick ${page.tick}${page.at ? " · " + relativeTime(page.at) : ""}`),
-      element("p", "", `Inferred links: ${inferred.new || 0} new, ${inferred.kept || 0} kept, ${inferred.dropped || 0} dropped. Knowledge archived ${page.archived || 0}, forgotten ${page.forgotten || 0}. ${page.proven || 0} proven, ${page.contested || 0} contested.`),
-      wikiSection("Contradictions", wikiContradictions(page.contradictions || [])),
-      wikiSection("Consolidation proposals", [page.proposals?.length ? proposals : element("p", "focus-hint", "None.")]),
-      wikiSection("Knowledge gaps", page.gaps?.length ? [element("ul", "wiki-gaps")].map((list) => (list.append(...page.gaps.map((gap) => element("li", "", gap))), list)) : [element("p", "focus-hint", "None.")]),
-    ];
-  }
-  // An area page carries note ids; the rows live once, on the knowledge page.
-  const rows = new Map(wikiAllNotes(pages).map((row) => [row.id, row]));
-  const files = element("ul", "wiki-files");
-  for (const row of page.files || []) files.append(element("li", "", `${row.path} · ${wikiPlural(row.attempts, "attempt")}`));
   return [
-    heading,
+    element("p", "", "Each recorded improve session, newest first: what it attempted and the knowledge it recorded."),
+    page.runs?.length ? list : element("p", "focus-hint", "No session recorded yet."),
+  ];
+}
+
+function wikiList(className, texts, empty) {
+  if (!texts.length) return [element("p", "focus-hint", empty)];
+  const list = element("ul", className);
+  list.append(...texts.map((text) => element("li", "", text)));
+  return [list];
+}
+
+function wikiDreamsPage(page) {
+  const inferred = page.inferred || {};
+  const proposals = element("ul", "wiki-changes");
+  for (const row of page.proposals || []) {
+    const item = element("li");
+    item.append(element("strong", "", wikiPlural(row.members, "note")), element("span", "wiki-text", row.text || row.id));
+    proposals.append(item);
+  }
+  return [
+    element("p", "wiki-stamp", `Latest dream: tick ${page.tick}${page.at ? " · " + relativeTime(page.at) : ""}`),
+    element("p", "", `Inferred links: ${inferred.new || 0} new, ${inferred.kept || 0} kept, ${inferred.dropped || 0} dropped. Knowledge archived ${page.archived || 0}, forgotten ${page.forgotten || 0}. ${page.proven || 0} proven, ${page.contested || 0} contested.`),
+    wikiSection("Contradictions", wikiContradictions(page.contradictions || [])),
+    wikiSection("Consolidation proposals", [page.proposals?.length ? proposals : element("p", "focus-hint", "None.")]),
+    wikiSection("Knowledge gaps", wikiList("wiki-gaps", page.gaps || [], "None.")),
+  ];
+}
+
+// An area page carries note ids; the rows live on the knowledge page (and its `more` table).
+function wikiAreaPage(page, pages) {
+  const rows = new Map(wikiAllNotes(pages).map((row) => [row.id, row]));
+  return [
     element("p", "", `${page.done || 0}/${page.attempts || 0} attempts verified${typeof page.success === "number" ? ` · success ${Math.round(page.success * 100)}%` : ""}`),
     wikiSection("Knowledge", [
       ...wikiCapped((page.knowledge || []).length, page.total),
       ...wikiNoteRows((page.knowledge || []).map((id) => rows.get(id)).filter(Boolean)),
     ]),
-    wikiSection("Files", [page.files?.length ? files : element("p", "focus-hint", "None recorded.")]),
+    wikiSection("Files", wikiList("wiki-files", (page.files || []).map((row) => `${row.path} · ${wikiPlural(row.attempts, "attempt")}`), "None recorded.")),
   ];
+}
+
+const WIKI_PAGE_RENDERERS = {
+  index: wikiIndexPage,
+  knowledge: wikiKnowledgePage,
+  changes: wikiChangesPage,
+  sessions: wikiSessionsPage,
+  dreams: wikiDreamsPage,
+};
+
+function wikiPageContent(name, page, pages) {
+  const render = WIKI_PAGE_RENDERERS[name];
+  return [element("h3", "", page.title || name), ...(render ? render(page) : wikiAreaPage(page, pages))];
 }
 
 function bindWiki() {

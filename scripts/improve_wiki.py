@@ -164,19 +164,11 @@ def removal_reason(graph, node_id):
     return "forgotten (the graph's history keeps it)"
 
 
-def pages(graph, previous, built_at, run_id):
-    """Every page as plain data, and the manifest the next build compares against."""
-    nodes = graph["nodes"]
-    by_file = file_areas(graph)
-    links = note_links(graph, by_file)
-    live = sorted((node for node in nodes.values() if node["type"] == "insight" and not node.get("archived")),
-                  key=rank)
-    related, contradicting = note_relations(graph, {node["id"] for node in live})
-    rows = [note_row(node, links, related) for node in live]
-    archived = sum(1 for node in nodes.values() if node["type"] == "insight" and node.get("archived"))
-
-    # What this session changed, compared with the build before it. A second build for the
-    # same session replaces that session's entry and compares with the same base.
+def session_changes(graph, previous, rows, built_at, run_id):
+    """What this session changed, compared with the build before it: the session entry, the
+    bounded session list, and the snapshots (`now`, and the `before` it was compared with). A
+    second build for the same session replaces that session's entry and compares with the same
+    base."""
     previous = previous or None
     same = previous is not None and run_id and previous.get("run_id") == run_id and previous.get("sessions")
     before = (previous.get("base") if same else previous.get("notes")) if previous else {}
@@ -197,17 +189,19 @@ def pages(graph, previous, built_at, run_id):
     earlier = list((previous or {}).get("sessions") or [])
     if same:
         earlier = earlier[:-1]
-    sessions = earlier + [session]
-    sessions = sessions[-CHANGE_SESSIONS:]
+    sessions = (earlier + [session])[-CHANGE_SESSIONS:]
+    return session, sessions, now, before
 
+
+def area_pages(nodes, rows, by_file):
+    """One page per area (note ids, files that touched it) and the index's area rows."""
     areas = sorted((node for node in nodes.values() if node["type"] == "area"), key=lambda node: node["label"])
     files = [node for node in nodes.values() if node["type"] == "file" and not node.get("archived")]
-    area_pages, area_rows = {}, []
+    result, summaries = {}, []
     for area in areas:
         name = area["label"]
         stats = area.get("stats") or {}
         in_notes = [row for row in rows if name in row["areas"].split()]
-        notes = in_notes[:AREA_NOTES]
         in_area = sorted((node for node in files if name in by_file.get(node["id"], ())),
                          key=lambda node: (-(node.get("stats") or {}).get("attempts", 0), node["id"]))
         area_files = [{"path": node["label"], "attempts": (node.get("stats") or {}).get("attempts", 0),
@@ -215,74 +209,105 @@ def pages(graph, previous, built_at, run_id):
         summary = {"name": name, "page": f"areas/{slug(name)}", "attempts": stats.get("attempts", 0),
                    "done": stats.get("done", 0), "rejected": stats.get("rejected", 0),
                    "success": stats.get("success"), "notes": len(in_notes)}
-        area_rows.append(summary)
+        summaries.append(summary)
         # Note ids only: the rows live once, on the knowledge page, so the TOON document stays small.
-        area_pages[summary["page"]] = {"title": f"Area: {name}", **summary, "total": len(in_notes),
-                                       "knowledge": [row["id"] for row in notes],
-                                       "files": area_files}
+        result[summary["page"]] = {"title": f"Area: {name}", **summary, "total": len(in_notes),
+                                   "knowledge": [row["id"] for row in in_notes[:AREA_NOTES]],
+                                   "files": area_files}
+    return result, summaries, len(files)
 
+
+def dreams_page(graph, contradicting):
+    """The latest dream: what it inferred, archived, and forgot, its proposals and gaps, and the
+    notes that contradict each other."""
+    nodes = graph["nodes"]
     dream = graph.get("dream") or {}
     latest = (dream.get("history") or [{}])[-1]
     inferred = latest.get("inferred") or {}
-    dreams = {"title": "Dreams", "at": latest.get("at") or "", "tick": latest.get("tick", graph.get("tick", 0)),
-              "inferred": {"new": inferred.get("new", 0), "kept": inferred.get("kept", 0),
-                           "dropped": inferred.get("dropped", 0)},
-              "archived": latest.get("archived", 0), "forgotten": latest.get("forgotten", 0),
-              "proven": latest.get("proven", 0), "contested": latest.get("contested", 0),
-              "proposals": [{"id": row.get("id", ""), "members": len(row.get("members") or []),
-                             "text": clip(row.get("text") or row.get("summary") or "")}
-                            for row in (dream.get("proposals") or [])[:ROWS_PER_CHANGE]],
-              "contradictions": [{"a": left, "a_text": clip(nodes[left].get("summary") or nodes[left].get("label")),
-                                  "b": right, "b_text": clip(nodes[right].get("summary") or nodes[right].get("label")),
-                                  "confidence": round(confidence, 2)}
-                                 for left, right, confidence in contradicting[:ROWS_PER_CHANGE]],
-              "gaps": [clip(row if isinstance(row, str) else row.get("text") or row.get("label") or json.dumps(row))
-                       for row in (dream.get("gaps") or [])[:ROWS_PER_CHANGE]]}
+    text = lambda key: clip(nodes[key].get("summary") or nodes[key].get("label"))  # noqa: E731
+    return {"title": "Dreams", "at": latest.get("at") or "", "tick": latest.get("tick", graph.get("tick", 0)),
+            "inferred": {"new": inferred.get("new", 0), "kept": inferred.get("kept", 0),
+                         "dropped": inferred.get("dropped", 0)},
+            "archived": latest.get("archived", 0), "forgotten": latest.get("forgotten", 0),
+            "proven": latest.get("proven", 0), "contested": latest.get("contested", 0),
+            "proposals": [{"id": row.get("id", ""), "members": len(row.get("members") or []),
+                           "text": clip(row.get("text") or row.get("summary") or "")}
+                          for row in (dream.get("proposals") or [])[:ROWS_PER_CHANGE]],
+            "contradictions": [{"a": left, "a_text": text(left), "b": right, "b_text": text(right),
+                                "confidence": round(confidence, 2)}
+                               for left, right, confidence in contradicting[:ROWS_PER_CHANGE]],
+            "gaps": [clip(row if isinstance(row, str) else row.get("text") or row.get("label") or json.dumps(row))
+                     for row in (dream.get("gaps") or [])[:ROWS_PER_CHANGE]]}
 
-    # Each recorded session, newest first: what it attempted and the knowledge it recorded.
+
+def sessions_page(graph):
+    """Each recorded session, newest first: what it attempted and the knowledge it recorded."""
     recorded = {}
-    for node in nodes.values():
+    for node in graph["nodes"].values():
         if node["type"] == "insight" and node.get("run_id"):
             recorded[node["run_id"]] = recorded.get(node["run_id"], 0) + 1
     runs = sorted((row for row in graph.get("runs") or [] if isinstance(row, dict) and row.get("run_id")),
                   key=lambda row: (str(row.get("ingested_at") or row.get("first_ingested_at") or ""),
                                    row.get("seq", 0)), reverse=True)
-    sessions_page = {"title": "Sessions", "runs": [
+    return {"title": "Sessions", "runs": [
         # Built only after the current session finished, so a run with no outcome crashed or
         # was interrupted; it is never live.
         {"run_id": str(row["run_id"]), "outcome": str(row.get("outcome") or "ended without an outcome"),
          "tasks": row.get("tasks", 0), "done": row.get("done", 0), "rejected": row.get("rejected", 0),
          "blocked": row.get("blocked", 0), "notes": recorded.get(row["run_id"], 0),
          "at": str(row.get("ingested_at") or "")} for row in runs[:SESSION_ROWS]]}
+
+
+def resisting_files(graph):
+    """Files that keep failing: the graph's hotspots under HOTSPOT_SUCCESS."""
     try:
         from improve_graph import hotspots
-        resisting = [{"file": row["file"], "attempts": row.get("attempts", 0), "done": row.get("done", 0),
-                      "success": row.get("success", 0)}
-                     for row in hotspots(graph, HOTSPOT_ROWS * 3) if row.get("success", 1) < HOTSPOT_SUCCESS]
+        return [{"file": row["file"], "attempts": row.get("attempts", 0), "done": row.get("done", 0),
+                 "success": row.get("success", 0)}
+                for row in hotspots(graph, HOTSPOT_ROWS * 3) if row.get("success", 1) < HOTSPOT_SUCCESS]
     except (KeyError, TypeError):
-        resisting = []
+        return []
 
-    # Each kind shows its strongest notes; `total` says how many it has, so a capped page says so.
+
+def knowledge_groups(rows):
+    """Each kind shows its strongest notes; `total` says how many it has, so a capped page says so."""
     groups = []
     for kind in KIND_ORDER + tuple(sorted({row["kind"] for row in rows} - set(KIND_ORDER))):
         of_kind = [row for row in rows if row["kind"] == kind]
         groups.append({"kind": kind, "total": len(of_kind), "notes": of_kind[:NOTES_PER_PAGE]})
+    return groups
+
+
+def pages(graph, previous, built_at, run_id):
+    """Every page as plain data, and the manifest the next build compares against."""
+    nodes = graph["nodes"]
+    by_file = file_areas(graph)
+    links = note_links(graph, by_file)
+    live = sorted((node for node in nodes.values() if node["type"] == "insight" and not node.get("archived")),
+                  key=rank)
+    related, contradicting = note_relations(graph, {node["id"] for node in live})
+    rows = [note_row(node, links, related) for node in live]
+    archived = sum(1 for node in nodes.values() if node["type"] == "insight" and node.get("archived"))
+    session, sessions, now, before = session_changes(graph, previous, rows, built_at, run_id)
+    areas, area_rows, file_count = area_pages(nodes, rows, by_file)
+    groups = knowledge_groups(rows)
     result = {
         "index": {"title": "Knowledge wiki", "built_at": built_at, "run_id": run_id or "",
                   "revision": graph.get("revision", 0), "tick": graph.get("tick", 0),
-                  "counts": {"notes": len(rows), "archived": archived, "areas": len(areas), "files": len(files),
+                  "counts": {"notes": len(rows), "archived": archived, "areas": len(area_rows), "files": file_count,
                              "proven": sum(1 for row in rows if row["verdict"] == "proven"),
                              "contested": sum(1 for row in rows if row["verdict"] == "contested")},
                   "key": [{"id": row["id"], "kind": row["kind"], "text": row["text"]} for row in rows[:KEY_NOTES]],
-                  "areas": area_rows, "hotspots": resisting[:HOTSPOT_ROWS], "last_session": session["counts"]},
+                  "areas": area_rows, "hotspots": resisting_files(graph)[:HOTSPOT_ROWS],
+                  "last_session": session["counts"]},
         "knowledge": {"title": "Knowledge", "groups": [group for group in groups if group["notes"]],
                       # Rows that area pages list but the kind caps leave off this page, so every id
                       # an area lists resolves; this page itself still shows only `groups`.
-                      "more": beyond_cap(groups, area_pages, rows)},
+                      "more": beyond_cap(groups, areas, rows)},
         "changes": {"title": "Changes", "sessions": list(reversed(sessions))},
-        "dreams": dreams,
-        "sessions": sessions_page,
-        **area_pages,
+        "dreams": dreams_page(graph, contradicting),
+        "sessions": sessions_page(graph),
+        **areas,
     }
     manifest = {"built_at": built_at, "run_id": run_id or "", "revision": graph.get("revision", 0),
                 "notes": now, "base": before, "sessions": sessions, "pages": sorted(result)}
@@ -331,71 +356,107 @@ def capped_line(shown, total):
     return []
 
 
+def md_index(page):
+    """The overview: counts, key knowledge, areas, files that resist change, last session."""
+    lines = []
+    counts = page["counts"]
+    lines += [f"Built {page['built_at']} at the end of session `{page['run_id']}`, graph revision "
+              f"{page['revision']}, dream tick {page['tick']}. Rebuilt only when a session finishes.", "",
+              f"{plural(counts['notes'], 'live note')} ({counts['proven']} proven, {counts['contested']} contested, "
+              f"{counts['archived']} archived), {plural(counts['areas'], 'area')}, {plural(counts['files'], 'file')}.", "",
+              "Pages: [Knowledge](knowledge.md) · [Changes](changes.md) · [Dreams](dreams.md) · "
+              "[Sessions](sessions.md)", "",
+              "## Key knowledge", ""]
+    lines += [f"- **{row['kind']}**: {md(row['text'])}" for row in page["key"]] or ["- None recorded yet."]
+    lines += ["", "## Areas", ""]
+    lines += [f"- [{md(row['name'])}]({row['page']}.md): {plural(row['notes'], 'note')}, {row['done']}/"
+              f"{plural(row['attempts'], 'attempt')} verified" for row in page["areas"]] or ["- None yet."]
+    lines += ["", "## Files that resist change", ""]
+    lines += [f"- `{row['file']}`: {row['done']}/{plural(row['attempts'], 'attempt')} verified"
+              for row in page.get("hotspots", [])] or ["- None: no file keeps failing."]
+    last = page["last_session"]
+    lines += ["", "## Last session", "",
+              f"{last['added']} added, {last['removed']} removed, {last['verdicts']} verdicts changed. "
+              "See [Changes](changes.md)."]
+    return lines
+
+
+def md_knowledge(page):
+    """Every listed note, by kind."""
+    lines = []
+    for group in page["groups"]:
+        lines += [f"## {group['kind'].capitalize()}", ""] + capped_line(len(group["notes"]), group.get("total"))
+        lines += [note_line(row) for row in group["notes"]] + [""]
+    if not page["groups"]:
+        lines.append("No knowledge recorded yet.")
+    return lines
+
+
+def md_changes(page):
+    """Per session: knowledge added, removed with the reason, and verdicts changed."""
+    lines = []
+    for session in page["sessions"]:
+        counts = session["counts"]
+        lines += [f"## Session `{session['run_id']}`, built {session['built_at']}", "",
+                  f"{counts['added']} added, {counts['removed']} removed, {counts['verdicts']} verdicts changed."
+                  + (" First build of the wiki." if session.get("first") else ""), ""]
+        lines += [f"- Added: {md(row['text'])}" for row in session["added"]]
+        lines += [f"- Removed ({md(row['reason'])}): {md(row['text'])}" for row in session["removed"]]
+        lines += [f"- Verdict {row['from']} → {row['to']}: {md(row['text'])}" for row in session["verdicts"]]
+        lines.append("")
+    return lines
+
+
+def md_sessions(page):
+    """Each recorded session, newest first."""
+    lines = []
+    lines += ["Each recorded improve session, newest first: what it attempted and the knowledge it recorded.", ""]
+    lines += [f"- `{row['run_id']}` ({md(row['outcome'])}): {row['done']}/{row['tasks']} done, "
+              f"{row['rejected']} rejected, {row['blocked']} blocked; {plural(row['notes'], 'note')} recorded"
+              for row in page["runs"]] or ["- No session recorded yet."]
+    return lines
+
+
+def md_dreams(page):
+    """The latest dream, its proposals, contradictions, and gaps."""
+    lines = []
+    inferred = page["inferred"]
+    lines += [f"Latest dream: tick {page['tick']}" + (f", {page['at']}" if page["at"] else "") + ".", "",
+              f"- Inferred links: {inferred['new']} new, {inferred['kept']} kept, {inferred['dropped']} dropped",
+              f"- Knowledge archived {page['archived']}, forgotten {page['forgotten']}",
+              f"- Verdicts: {page['proven']} proven, {page['contested']} contested", "",
+              "## Consolidation proposals", ""]
+    lines += [f"- `{row['id']}` ({plural(row['members'], 'note')}): {md(row['text'])}" for row in page["proposals"]] or ["- None."]
+    lines += ["", "## Contradictions", "", "Notes that say opposite things; decide which holds and rate the other.", ""]
+    lines += [f"- {md(row['a_text'])} (`{row['a']}`) **contradicts** {md(row['b_text'])} (`{row['b']}`)"
+              for row in page.get("contradictions", [])] or ["- None."]
+    lines += ["", "## Knowledge gaps", ""] + ([f"- {md(row)}" for row in page["gaps"]] or ["- None."])
+    return lines
+
+
+def md_area(page, rows):
+    """One area: its notes (ids resolved against `rows`) and files."""
+    lines = []
+    success = page.get("success")
+    lines += [f"{page['done']}/{plural(page['attempts'], 'attempt')} verified"
+              + (f" (success {success:.2f})" if isinstance(success, (int, float)) else "") + ".", "",
+              "[Back to the index](../index.md)", "", "## Knowledge", ""]
+    lines += capped_line(len(page["knowledge"]), page.get("total"))
+    lines += [note_line(rows[key]) for key in page["knowledge"] if key in (rows or {})] or [
+        "- None recorded for this area."]
+    lines += ["", "## Files", ""]
+    lines += [f"- `{row['path']}`: {plural(row['attempts'], 'attempt')}" for row in page["files"]] or ["- None recorded."]
+    return lines
+
+
+MARKDOWN_PAGES = {"index": md_index, "knowledge": md_knowledge, "changes": md_changes,
+                  "sessions": md_sessions, "dreams": md_dreams}
+
+
 def markdown(name, page, rows=None):
     lines = [f"# {md(page.get('title', name))}", ""]
-    if name == "index":
-        counts = page["counts"]
-        lines += [f"Built {page['built_at']} at the end of session `{page['run_id']}`, graph revision "
-                  f"{page['revision']}, dream tick {page['tick']}. Rebuilt only when a session finishes.", "",
-                  f"{plural(counts['notes'], 'live note')} ({counts['proven']} proven, {counts['contested']} contested, "
-                  f"{counts['archived']} archived), {plural(counts['areas'], 'area')}, {plural(counts['files'], 'file')}.", "",
-                  "Pages: [Knowledge](knowledge.md) · [Changes](changes.md) · [Dreams](dreams.md) · "
-                  "[Sessions](sessions.md)", "",
-                  "## Key knowledge", ""]
-        lines += [f"- **{row['kind']}**: {md(row['text'])}" for row in page["key"]] or ["- None recorded yet."]
-        lines += ["", "## Areas", ""]
-        lines += [f"- [{md(row['name'])}]({row['page']}.md): {plural(row['notes'], 'note')}, {row['done']}/"
-                  f"{plural(row['attempts'], 'attempt')} verified" for row in page["areas"]] or ["- None yet."]
-        lines += ["", "## Files that resist change", ""]
-        lines += [f"- `{row['file']}`: {row['done']}/{plural(row['attempts'], 'attempt')} verified"
-                  for row in page.get("hotspots", [])] or ["- None: no file keeps failing."]
-        last = page["last_session"]
-        lines += ["", "## Last session", "",
-                  f"{last['added']} added, {last['removed']} removed, {last['verdicts']} verdicts changed. "
-                  "See [Changes](changes.md)."]
-    elif name == "knowledge":
-        for group in page["groups"]:
-            lines += [f"## {group['kind'].capitalize()}", ""] + capped_line(len(group["notes"]), group.get("total"))
-            lines += [note_line(row) for row in group["notes"]] + [""]
-        if not page["groups"]:
-            lines.append("No knowledge recorded yet.")
-    elif name == "changes":
-        for session in page["sessions"]:
-            counts = session["counts"]
-            lines += [f"## Session `{session['run_id']}`, built {session['built_at']}", "",
-                      f"{counts['added']} added, {counts['removed']} removed, {counts['verdicts']} verdicts changed."
-                      + (" First build of the wiki." if session.get("first") else ""), ""]
-            lines += [f"- Added: {md(row['text'])}" for row in session["added"]]
-            lines += [f"- Removed ({md(row['reason'])}): {md(row['text'])}" for row in session["removed"]]
-            lines += [f"- Verdict {row['from']} → {row['to']}: {md(row['text'])}" for row in session["verdicts"]]
-            lines.append("")
-    elif name == "sessions":
-        lines += ["Each recorded improve session, newest first: what it attempted and the knowledge it recorded.", ""]
-        lines += [f"- `{row['run_id']}` ({md(row['outcome'])}): {row['done']}/{row['tasks']} done, "
-                  f"{row['rejected']} rejected, {row['blocked']} blocked; {plural(row['notes'], 'note')} recorded"
-                  for row in page["runs"]] or ["- No session recorded yet."]
-    elif name == "dreams":
-        inferred = page["inferred"]
-        lines += [f"Latest dream: tick {page['tick']}" + (f", {page['at']}" if page["at"] else "") + ".", "",
-                  f"- Inferred links: {inferred['new']} new, {inferred['kept']} kept, {inferred['dropped']} dropped",
-                  f"- Knowledge archived {page['archived']}, forgotten {page['forgotten']}",
-                  f"- Verdicts: {page['proven']} proven, {page['contested']} contested", "",
-                  "## Consolidation proposals", ""]
-        lines += [f"- `{row['id']}` ({plural(row['members'], 'note')}): {md(row['text'])}" for row in page["proposals"]] or ["- None."]
-        lines += ["", "## Contradictions", "", "Notes that say opposite things; decide which holds and rate the other.", ""]
-        lines += [f"- {md(row['a_text'])} (`{row['a']}`) **contradicts** {md(row['b_text'])} (`{row['b']}`)"
-                  for row in page.get("contradictions", [])] or ["- None."]
-        lines += ["", "## Knowledge gaps", ""] + ([f"- {md(row)}" for row in page["gaps"]] or ["- None."])
-    else:
-        success = page.get("success")
-        lines += [f"{page['done']}/{plural(page['attempts'], 'attempt')} verified"
-                  + (f" (success {success:.2f})" if isinstance(success, (int, float)) else "") + ".", "",
-                  "[Back to the index](../index.md)", "", "## Knowledge", ""]
-        lines += capped_line(len(page["knowledge"]), page.get("total"))
-        lines += [note_line(rows[key]) for key in page["knowledge"] if key in (rows or {})] or [
-            "- None recorded for this area."]
-        lines += ["", "## Files", ""]
-        lines += [f"- `{row['path']}`: {plural(row['attempts'], 'attempt')}" for row in page["files"]] or ["- None recorded."]
+    render_page = MARKDOWN_PAGES.get(name)
+    lines += render_page(page) if render_page else md_area(page, rows or {})
     return "\n".join(lines).rstrip() + "\n"
 
 
