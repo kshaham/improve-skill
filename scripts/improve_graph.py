@@ -1109,11 +1109,24 @@ def sync(repo, include_history=None, refine_after=False, refine_interval=None, d
             report = refine(graph, repo) if refine_after or refine_due(graph, refine_interval) else None
         result = {"ingested": ingested, "refine": report, "dream": dreamed,
                   "nodes": len(graph["nodes"]), "edges": len(graph["edges"])}
+        if dream_after:
+            # The wiki is rebuilt only by the end-of-session dream, and only once the run has
+            # finished; it never changes while a run relies on the graph.
+            result["wiki"] = build_wiki(graph, repo)
         if retrieved:
             result["retrieved"] = retrieved
         if code:
             result["code"] = code
         return result
+
+
+def build_wiki(graph, repo):
+    """Rebuild `.improve/wiki` at the end of a session; a wiki problem never fails the sync."""
+    try:
+        import improve_wiki
+        return improve_wiki.build(graph, repo)
+    except Exception as exc:  # noqa: BLE001 - the wiki is derived output and best effort.
+        return {"error": f"{type(exc).__name__}: {exc}"}
 
 
 def refresh_code(graph, repo, seconds=None):
