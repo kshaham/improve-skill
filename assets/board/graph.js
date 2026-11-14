@@ -2,11 +2,11 @@
 // Knowledge view: the cross-run knowledge graph, its curation, and the
 // "what the graph knows" section of the task dialog.
 const GRAPH_TYPES = [
-  ["insight", "Knowledge", "#7355db"],
+  ["insight", "Knowledge", "#0e8159"],
   ["file", "Files", "#2f7fb8"],
-  ["task", "Tasks", "#2d8b66"],
+  ["task", "Tasks", "#b8476b"],
   ["area", "Areas", "#b37627"],
-  ["gate", "Gates", "#0f8a8a"],
+  ["gate", "Gates", "#0f7f99"],
   ["blocker", "Blockers", "#c2410c"],
   ["run", "Runs", "#8a8f9c"],
 ];

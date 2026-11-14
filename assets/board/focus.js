@@ -1,20 +1,20 @@
 "use strict";
 // Area focus: steer which categories the skill works on, from the board.
 const FOCUS_AREAS = [
-  ["features", "Features", "New or finished user-facing behavior", 262],
-  ["ui", "UI", "Layout, states, and visual polish", 292],
-  ["accessibility", "Accessibility", "Keyboard, contrast, screen readers", 200],
-  ["assets", "Assets", "Images, icons, fonts, media", 322],
-  ["performance", "Performance", "Speed, memory, and load time", 32],
-  ["gate-speed", "Gate speed", "Faster builds and test runs", 48],
-  ["security", "Security", "Vulnerabilities and privacy", 352],
-  ["resilience", "Resilience", "Errors, retries, and recovery", 12],
-  ["concurrency", "Concurrency", "Races, locking, async safety", 230],
-  ["quality", "Quality", "Bugs, dead code, clarity", 150],
-  ["coverage", "Coverage", "Missing and weak tests", 172],
-  ["contracts", "Contracts", "APIs, schemas, interfaces", 186],
-  ["docs", "Docs", "Guides, references, comments", 88],
-  ["general", "General", "Anything that fits no other area", 240],
+  ["features", "Features", "New or finished user-facing behavior", 206],
+  ["ui", "UI", "Layout, states, and visual polish", 340],
+  ["accessibility", "Accessibility", "Keyboard, contrast, screen readers", 194],
+  ["assets", "Assets", "Images, icons, fonts, media", 76],
+  ["performance", "Performance", "Speed, memory, and load time", 28],
+  ["gate-speed", "Gate speed", "Faster builds and test runs", 42],
+  ["security", "Security", "Vulnerabilities and privacy", 356],
+  ["resilience", "Resilience", "Errors, retries, and recovery", 14],
+  ["concurrency", "Concurrency", "Races, locking, async safety", 220],
+  ["quality", "Quality", "Bugs, dead code, clarity", 134],
+  ["coverage", "Coverage", "Missing and weak tests", 166],
+  ["contracts", "Contracts", "APIs, schemas, interfaces", 182],
+  ["docs", "Docs", "Guides, references, comments", 54],
+  ["general", "General", "Anything that fits no other area", 100],
 ];
 const FOCUS_COLLAPSED_KEY = "improve-board-focus-collapsed";
 const FOCUS_LEVEL_LABELS = { prefer: "Prefer", normal: "Normal", skip: "Skip" };
@@ -24,7 +24,7 @@ let focusSelection = {},
   focusSending = false;
 
 function areaHue(area) {
-  return FOCUS_AREAS.find((row) => row[0] === area)?.[3] ?? 240;
+  return FOCUS_AREAS.find((row) => row[0] === area)?.[3] ?? 100;
 }
 
 function focusSummary(areas = {}, themes = []) {
