@@ -127,7 +127,8 @@ hardening, scaling, accessibility, or SEO, pause, resume, and stop. Pending requ
 withdrawn. Drafts survive reloads; task links and views are bookmarkable.
 
 **Knowledge.** The Knowledge tab draws the cross-run graph: files, areas, tasks, gates,
-blockers, and recorded knowledge. Search it, pin or correct knowledge, add your own
+blockers, and recorded knowledge, on a deep-blue canvas. Show only the most important nodes or
+the most recently created, from the top 25 to the top 500. Search it, pin or correct knowledge, add your own
 decisions and conventions (the skill treats them as constraints), and watch it dream:
 inferring links with evidence, forgetting what went unused, and restoring on request. Notes
 whose code changed since, notes that contradict another, and blockers later work got past are

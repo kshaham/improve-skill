@@ -42,9 +42,13 @@ The board includes:
 - **What the skill has learned:** the Overview tab shows verified-success rates by area,
   the lessons the skill follows, and recurring blockers, built from every finished run.
 - **Knowledge graph:** the Knowledge tab draws what the skill has learned across runs:
-  files, areas, tasks, gates, blockers, and knowledge, and how they connect. Search it,
-  filter by node type, drag nodes, zoom, and select a node to see its links, success rate,
-  and evidence. Focus a node to show its neighborhood, or open a task node in the task
+  files, areas, tasks, gates, blockers, and knowledge, and how they connect, on a deep-blue
+  canvas in both themes. **Show** picks which nodes fill the view: **Balanced mix** (a share of
+  each type, then the strongest), **Most important** (pinned knowledge first, then the highest
+  scores), or **Recently created** (newest first), with a count from **Top 25** to **Top 500**;
+  a focused neighbourhood always shows up to 220 nodes. Search it, filter by node type, drag
+  nodes, zoom, and select a node to see its links, success rate, when it was created, and
+  evidence. Focus a node to show its neighborhood, or open a task node in the task
   dialog. Curate knowledge with **Pin** (shown every cycle), **Useful**, **Wrong**,
   **Archive**/**Restore**, and **+ Add knowledge** (a pitfall, technique, convention,
   decision, or fact, optionally about files or areas). The skill reads your changes at its
