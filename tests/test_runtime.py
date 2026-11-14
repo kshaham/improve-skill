@@ -539,6 +539,17 @@ class DaemonTests(unittest.TestCase):
             self.assertTrue((archive / name).is_file())
             self.assertFalse((self.state / name).exists())
 
+    def test_new_run_keeps_the_knowledge_wiki_with_the_graph(self):
+        # The wiki is cross-run memory: archiving it made every later session look like a first
+        # build, with a one-session change log.
+        self.assertEqual(self.invoke().returncode, 0)
+        manifest = self.state / 'wiki' / 'manifest.json'
+        first = json.loads(manifest.read_text())['run_id']  # built by the finished run's last dream
+        self.assertEqual(self.invoke('early', '--new-run').returncode, 0)
+        sessions = [row['run_id'] for row in json.loads(manifest.read_text())['sessions']]
+        self.assertEqual(sessions[0], first)
+        self.assertEqual(len(sessions), 2, "the change log spans both runs")
+
     def test_malformed_pause_state_halts_without_losing_recovery_state(self):
         self.seed_control(run_id='stable-run')
         path = self.state / 'pause.json'

@@ -1668,7 +1668,8 @@ def daemon(args):
                 # learning.json and the graph are the cross-run memory, and corpus/ holds
                 # improve-max characterization inputs that committed replay tests read; they
                 # stay with the repository.
-                keep = {"history", "daemon.lock", "learning.json", "learning.lock", "corpus",
+                # The knowledge wiki is derived from the graph and stays with it.
+                keep = {"history", "daemon.lock", "learning.json", "learning.lock", "corpus", "wiki",
                         *GRAPH_FILES, *SERVICE_FILES}
                 old = [p for p in state.iterdir() if p.name not in keep]
                 if old:
