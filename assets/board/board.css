@@ -241,7 +241,7 @@ a {
   color: var(--sidebar-accent);
 }
 .workspace-label {
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 1.9px;
   color: var(--sidebar-muted);
   margin-top: 48px;
@@ -349,7 +349,7 @@ main {
   padding: 36px 0 27px;
 }
 .eyebrow {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
   letter-spacing: 1.7px;
   color: var(--muted);
@@ -600,7 +600,7 @@ button {
   min-width: 22px;
   text-align: center;
   padding: 1px 5px;
-  font-size: 10px;
+  font-size: 11px;
 }
 .card-list {
   display: flex;
@@ -633,7 +633,7 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
   font-weight: 500;
   margin-bottom: 9px;
@@ -646,7 +646,7 @@ button {
 }
 .priority {
   margin-left: auto;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--accent-ink);
 }
 .task-card h3 {
@@ -675,7 +675,7 @@ button {
   gap: 8px;
   border-top: 1px solid var(--line);
   padding-top: 10px;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
 }
 .area-tag {
@@ -767,7 +767,7 @@ footer {
   justify-content: space-between;
   gap: 16px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   padding: 24px 0 30px;
 }
 dialog {
@@ -805,7 +805,7 @@ dialog h2 {
   margin-top: 20px;
 }
 .detail-section h3 {
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 1px;
   text-transform: uppercase;
   color: var(--muted);
@@ -914,7 +914,7 @@ dialog h2 {
     border-bottom: 1px solid var(--line);
   }
   .stat small {
-    font-size: 10px;
+    font-size: 11px;
   }
   .stat strong {
     font-size: 25px;
@@ -961,7 +961,7 @@ dialog h2 {
     gap: 4px;
   }
   .connection {
-    font-size: 10px;
+    font-size: 11px;
   }
   dialog {
     padding: 21px;
@@ -1358,7 +1358,7 @@ dialog h2 {
   padding: 11px 16px;
 }
 .row-head {
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.7px;
   color: var(--muted);
@@ -1405,7 +1405,7 @@ dialog h2 {
   display: block;
   max-width: 30%;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1414,7 +1414,7 @@ dialog h2 {
   justify-self: start;
   border-radius: 4px;
   padding: 3px 7px;
-  font-size: 10px;
+  font-size: 11px;
 }
 .row-outcome.done {
   background: var(--success-soft);
@@ -1516,7 +1516,7 @@ dialog h2 {
   }
   .row-date {
     grid-column: 2;
-    font-size: 10px;
+    font-size: 11px;
     text-align: right;
   }
   .row-id {
@@ -1688,11 +1688,11 @@ button.danger {
   text-overflow: ellipsis;
 }
 .request-kind {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
 }
 .request-badge {
-  font-size: 10px;
+  font-size: 11px;
   padding: 3px 7px;
   border-radius: 4px;
 }
@@ -1788,7 +1788,7 @@ button.danger {
     gap: 5px;
   }
   .view-count {
-    font-size: 10px;
+    font-size: 11px;
     padding: 2px 5px;
   }
   .request-item summary {
@@ -1808,7 +1808,7 @@ button.danger {
   position: absolute;
   top: -8px;
   right: 10px;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.04em;
   padding: 1px 7px;
@@ -1939,7 +1939,7 @@ button.danger {
 .focus-hint,
 .focus-count {
   clear: both;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--muted);
   margin: 2px 0 6px;
 }
@@ -1969,7 +1969,7 @@ button.danger {
 .focus-level {
   position: relative;
   text-align: center;
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--ink-2);
   cursor: pointer;
@@ -2441,7 +2441,7 @@ button.danger {
   border-radius: 999px;
   background: var(--red);
   color: white;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 17px;
 }
@@ -2464,7 +2464,7 @@ button.danger {
   flex: 0 0 auto;
 }
 .mobile .stat-action {
-  font-size: 10px;
+  font-size: 11px;
   min-height: 0;
   padding: 2px 0;
 }
@@ -2537,7 +2537,7 @@ button.danger {
   line-height: 1.3;
 }
 .category-hint {
-  font-size: 10.5px;
+  font-size: 11px;
   line-height: 1.4;
   color: var(--muted);
   margin-top: 3px;
@@ -3310,7 +3310,7 @@ summary:focus-visible {
 .knowledge-badge {
   display: inline-block;
   margin-left: 6px;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -3347,7 +3347,7 @@ summary:focus-visible {
 }
 .question-kind {
   flex: none;
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--muted);

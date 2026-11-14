@@ -250,5 +250,20 @@ class PhoneLayoutTests(unittest.TestCase):
         self.assertIn("white-space: nowrap;", label)
         self.assertGreaterEqual(float(re.search(r"font-size:\s*([0-9.]+)px", label).group(1)), 11)
 
+
+class TypeScaleTests(unittest.TestCase):
+    def test_no_board_text_is_smaller_than_11px(self):
+        # Card ids, priorities, card footers, row ids and dates, badges and counts were 9-10.5px.
+        # The heading dot is decorative. The phone nav labels stay at 10px: at 11px the seven-button
+        # bar stops fitting at 384-389px (a11y-0028 reworks the bar).
+        decorative = {".heading-dot", ".mobile-nav button"}
+        small = []
+        for selectors, body in re.findall(r"\n([^{}@]+)\{([^}]*)\}", CSS):
+            for size in re.findall(r"(?<![-\w])font-size:\s*([0-9.]+)px", body):
+                names = {part.strip() for part in selectors.split(",")}
+                if float(size) < 11 and not names <= decorative:
+                    small.append(f"{selectors.strip()[:50]}: {size}px")
+        self.assertEqual(small, [], "text below the 11px floor")
+
 if __name__ == "__main__":
     unittest.main()
