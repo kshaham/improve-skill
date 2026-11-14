@@ -186,6 +186,18 @@ class TokenTests(unittest.TestCase):
                 self.assertGreaterEqual(ratio, 4.5, f".{name} in {theme}: {ratio:.2f}:1")
         self.assertGreaterEqual(checked, 1, "the empty-state message sits on the canvas and must be checked")
 
+    def test_task_status_rings_reach_the_screen(self):
+        # graph.js set the ring as a stroke attribute, which any stylesheet rule outranks, so
+        # .graph-node circle painted every task ring in the canvas colour.
+        source = (BOARD / "graph.js").read_text()
+        self.assertIn('circle.style.setProperty("--status", STATUS_COLORS[node.status])', source)
+        self.assertNotIn('circle.setAttribute("stroke", STATUS_COLORS', source)
+        task = re.search(r"\n\.graph-node\.type-task circle\s*\{([^}]*)\}", CSS).group(1)
+        self.assertIn("stroke: var(--status, var(--canvas));", task)
+        # Pinned and selected rings still win: they come later at equal or higher specificity.
+        self.assertLess(CSS.index("\n.graph-node.type-task circle {"), CSS.index("\n.graph-node.pinned circle {"))
+        self.assertLess(CSS.index("\n.graph-node.type-task circle {"), CSS.index("\n.graph-node.selected circle,"))
+
     def test_every_graph_edge_stays_more_visible_than_the_grid(self):
         """Edges drawn in --line vanished into a dark canvas, fainter than its own grid dots."""
         rules = re.findall(r"\n(\.graph-edge[^{]*)\{([^}]*)\}", CSS)

@@ -262,7 +262,7 @@ function drawGraph() {
     const radius = 4 + 9 * Math.min(1.2, node.score || 0.2) + (node.type === "insight" ? 2 : 0);
     const circle = svg("circle", { r: radius.toFixed(1), fill: graphColor(node.type) });
     if (node.type === "task" && STATUS_COLORS[node.status])
-      circle.setAttribute("stroke", STATUS_COLORS[node.status]);
+      circle.style.setProperty("--status", STATUS_COLORS[node.status]);
     const label = svg("text", { x: (radius + 4).toFixed(1), y: "4" });
     label.textContent = shortLabel(node.label);
     const title = svg("title");

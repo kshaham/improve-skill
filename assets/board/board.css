@@ -2778,6 +2778,7 @@ button.danger {
   transition: opacity 0.15s;
 }
 .graph-node.type-task circle {
+  stroke: var(--status, var(--canvas));
   stroke-width: 2.5;
 }
 .graph-node.pinned circle {
