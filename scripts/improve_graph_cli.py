@@ -190,7 +190,7 @@ def build_parser():
                                      formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     parser.add_argument("--repo", required=True)
     toon.output_options(parser)
-    parser.add_argument("--budget", type=int, default=None, help="answer in at most this many tokens (context, search, node)")
+    parser.add_argument("--budget", type=int, default=None, help="answer in at most this many tokens (context, search, node, wiki)")
     shared = argparse.ArgumentParser(add_help=False)
     toon.output_options(shared, suppress=True)
     shared.add_argument("--budget", type=int, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
@@ -339,6 +339,16 @@ def main(argv=None):
             result = wiki_command(args, repo)
             if isinstance(result, str):
                 return write_out(result, None)
+            if args.budget:
+                # Only the flattened knowledge page carries a list of notes and their total.
+                listed = len(result["notes"]) if args.page == "knowledge" else 0
+                if args.page == "knowledge" and result.get("total", 0) > listed:
+                    # The wiki already keeps only the strongest notes of each kind; a budget cannot
+                    # bring the rest back, so say so before any budget note.
+                    print(f"[!] The wiki lists {listed} of {result['total']} notes (the strongest of each kind); "
+                          "`search` the graph for the rest")
+                print(budgeted(bounded(result, args), args.budget, draw))
+                return 0
         elif args.action == "history":
             result = graph_module.history(repo, args.limit, max(0, args.offset), args.type, args.query, args.all, args.id)
         elif args.action in improve_code_cli.ACTIONS:
@@ -472,7 +482,18 @@ def wiki_command(args, repo):
         raise NotFound(f"no wiki page {args.page!r}; `wiki pages` lists them")
     if args.markdown:
         return improve_wiki.render(pages)[args.page]
-    return pages[args.page]
+    page = pages[args.page]
+    if args.page == "knowledge":
+        # `more` only lets area pages resolve their ids inside the wiki document.
+        page = {key: value for key, value in page.items() if key != "more"}
+    if args.budget and args.page == "knowledge":
+        # One list, strongest first across kinds, so a budget drops the weakest notes first.
+        notes = [row for group in page.get("groups", []) for row in group["notes"]]
+        notes.sort(key=lambda row: (not row.get("pinned"), -float(row.get("score") or 0), row["id"]))
+        totals = {group["kind"]: group.get("total", len(group["notes"])) for group in page.get("groups", [])}
+        return {"title": page.get("title", "Knowledge"), "totals": totals, "total": sum(totals.values()),
+                "notes": notes}
+    return page
 
 
 def write_out(text, out):

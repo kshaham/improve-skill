@@ -254,7 +254,8 @@ rebuild in the same session replaces that session's entry; `--new-run` keeps the
 ```sh
 G wiki                    # the index page as TOON (cheapest for an agent)
 G wiki knowledge          # any page: knowledge, changes, dreams, areas/NAME
-G wiki pages              # the page list
+G wiki knowledge --budget 2000  # the strongest notes, across kinds, that fit 2,000 tokens
+G wiki pages              # the page list (sessions, and one page per area)
 G wiki changes --markdown # the Markdown file instead
 G wiki build              # rebuild by hand; refused (exit 2) while a run is live
 ```
