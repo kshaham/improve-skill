@@ -8,6 +8,7 @@ const WIKI_FIXED_PAGES = [
   ["knowledge", "Knowledge"],
   ["changes", "Changes"],
   ["dreams", "Dreams"],
+  ["sessions", "Sessions"],
 ];
 let wikiData = null,
   wikiPage = "index",
@@ -110,6 +111,17 @@ function wikiNoteRows(rows) {
   return [list];
 }
 
+function wikiHotspots(rows) {
+  if (!rows.length) return [element("p", "focus-hint", "None: no file keeps failing.")];
+  const list = element("ul", "wiki-areas");
+  for (const row of rows) {
+    const item = element("li");
+    item.append(element("span", "wiki-path", row.file), element("small", "", `${row.done}/${row.attempts} verified`));
+    list.append(item);
+  }
+  return [list];
+}
+
 function wikiSection(title, children) {
   const section = element("section", "wiki-section");
   section.append(element("h4", "", title), ...children);
@@ -142,6 +154,7 @@ function wikiPageContent(name, page, pages) {
       summary,
       wikiSection("Key knowledge", wikiNoteRows(page.key || [])),
       wikiSection("Areas", [page.areas?.length ? areas : element("p", "focus-hint", "None yet.")]),
+      wikiSection("Files that resist change", wikiHotspots(page.hotspots || [])),
       wikiSection("Last session", [element("p", "", `${last.added || 0} added, ${last.removed || 0} removed, ${last.verdicts || 0} verdicts changed.`)]),
     ];
   }
@@ -169,6 +182,22 @@ function wikiPageContent(name, page, pages) {
         ]);
       }),
     ];
+  if (name === "sessions") {
+    const list = element("ul", "wiki-changes");
+    for (const row of page.runs || []) {
+      const item = element("li", row.outcome === "completed" ? "change-added" : row.outcome.startsWith("halted") ? "change-verdict" : "");
+      item.append(
+        element("strong", "", `${row.run_id} · ${row.outcome}`),
+        element("span", "wiki-text", `${row.done}/${row.tasks} done, ${row.rejected} rejected, ${row.blocked} blocked · ${row.notes} notes recorded`),
+      );
+      list.append(item);
+    }
+    return [
+      heading,
+      element("p", "", "Each recorded improve session, newest first: what it attempted and the knowledge it recorded."),
+      page.runs?.length ? list : element("p", "focus-hint", "No session recorded yet."),
+    ];
+  }
   if (name === "dreams") {
     const inferred = page.inferred || {};
     const proposals = element("ul", "wiki-changes");

@@ -34,6 +34,9 @@ KEY_NOTES = 8
 NOTES_PER_PAGE = 200
 FILES_PER_AREA = 10
 ROWS_PER_CHANGE = 40
+SESSION_ROWS = 30
+HOTSPOT_ROWS = 8
+HOTSPOT_SUCCESS = 0.5
 TEXT_LIMIT = 300
 KIND_ORDER = ("decision", "convention", "pitfall", "technique", "lesson", "fact")
 
@@ -201,6 +204,29 @@ def pages(graph, previous, built_at, run_id):
               "gaps": [clip(row if isinstance(row, str) else row.get("text") or row.get("label") or json.dumps(row))
                        for row in (dream.get("gaps") or [])[:ROWS_PER_CHANGE]]}
 
+    # Each recorded session, newest first: what it attempted and the knowledge it recorded.
+    recorded = {}
+    for node in nodes.values():
+        if node["type"] == "insight" and node.get("run_id"):
+            recorded[node["run_id"]] = recorded.get(node["run_id"], 0) + 1
+    runs = sorted((row for row in graph.get("runs") or [] if isinstance(row, dict) and row.get("run_id")),
+                  key=lambda row: (str(row.get("ingested_at") or row.get("first_ingested_at") or ""),
+                                   row.get("seq", 0)), reverse=True)
+    sessions_page = {"title": "Sessions", "runs": [
+        # Built only after the current session finished, so a run with no outcome crashed or
+        # was interrupted; it is never live.
+        {"run_id": str(row["run_id"]), "outcome": str(row.get("outcome") or "ended without an outcome"),
+         "tasks": row.get("tasks", 0), "done": row.get("done", 0), "rejected": row.get("rejected", 0),
+         "blocked": row.get("blocked", 0), "notes": recorded.get(row["run_id"], 0),
+         "at": str(row.get("ingested_at") or "")} for row in runs[:SESSION_ROWS]]}
+    try:
+        from improve_graph import hotspots
+        resisting = [{"file": row["file"], "attempts": row.get("attempts", 0), "done": row.get("done", 0),
+                      "success": row.get("success", 0)}
+                     for row in hotspots(graph, HOTSPOT_ROWS * 3) if row.get("success", 1) < HOTSPOT_SUCCESS]
+    except (KeyError, TypeError):
+        resisting = []
+
     groups = [{"kind": kind, "notes": [row for row in rows if row["kind"] == kind][:NOTES_PER_PAGE]}
               for kind in KIND_ORDER + tuple(sorted({row["kind"] for row in rows} - set(KIND_ORDER)))]
     result = {
@@ -210,10 +236,11 @@ def pages(graph, previous, built_at, run_id):
                              "proven": sum(1 for row in rows if row["verdict"] == "proven"),
                              "contested": sum(1 for row in rows if row["verdict"] == "contested")},
                   "key": [{"id": row["id"], "kind": row["kind"], "text": row["text"]} for row in rows[:KEY_NOTES]],
-                  "areas": area_rows, "last_session": session["counts"]},
+                  "areas": area_rows, "hotspots": resisting[:HOTSPOT_ROWS], "last_session": session["counts"]},
         "knowledge": {"title": "Knowledge", "groups": [group for group in groups if group["notes"]]},
         "changes": {"title": "Changes", "sessions": list(reversed(sessions))},
         "dreams": dreams,
+        "sessions": sessions_page,
         **area_pages,
     }
     manifest = {"built_at": built_at, "run_id": run_id or "", "revision": graph.get("revision", 0),
@@ -250,12 +277,16 @@ def markdown(name, page, rows=None):
                   f"{page['revision']}, dream tick {page['tick']}. Rebuilt only when a session finishes.", "",
                   f"{counts['notes']} live notes ({counts['proven']} proven, {counts['contested']} contested, "
                   f"{counts['archived']} archived), {counts['areas']} areas, {counts['files']} files.", "",
-                  "Pages: [Knowledge](knowledge.md) · [Changes](changes.md) · [Dreams](dreams.md)", "",
+                  "Pages: [Knowledge](knowledge.md) · [Changes](changes.md) · [Dreams](dreams.md) · "
+                  "[Sessions](sessions.md)", "",
                   "## Key knowledge", ""]
         lines += [f"- **{row['kind']}**: {md(row['text'])}" for row in page["key"]] or ["- None recorded yet."]
         lines += ["", "## Areas", ""]
         lines += [f"- [{md(row['name'])}]({row['page']}.md): {row['notes']} notes, {row['done']}/{row['attempts']} "
                   f"attempts verified" for row in page["areas"]] or ["- None yet."]
+        lines += ["", "## Files that resist change", ""]
+        lines += [f"- `{row['file']}`: {row['done']}/{row['attempts']} attempts verified"
+                  for row in page.get("hotspots", [])] or ["- None: no file keeps failing."]
         last = page["last_session"]
         lines += ["", "## Last session", "",
                   f"{last['added']} added, {last['removed']} removed, {last['verdicts']} verdicts changed. "
@@ -275,6 +306,11 @@ def markdown(name, page, rows=None):
             lines += [f"- Removed ({md(row['reason'])}): {md(row['text'])}" for row in session["removed"]]
             lines += [f"- Verdict {row['from']} → {row['to']}: {md(row['text'])}" for row in session["verdicts"]]
             lines.append("")
+    elif name == "sessions":
+        lines += ["Each recorded improve session, newest first: what it attempted and the knowledge it recorded.", ""]
+        lines += [f"- `{row['run_id']}` ({md(row['outcome'])}): {row['done']}/{row['tasks']} done, "
+                  f"{row['rejected']} rejected, {row['blocked']} blocked; {row['notes']} notes recorded"
+                  for row in page["runs"]] or ["- No session recorded yet."]
     elif name == "dreams":
         inferred = page["inferred"]
         lines += [f"Latest dream: tick {page['tick']}" + (f", {page['at']}" if page["at"] else "") + ".", "",

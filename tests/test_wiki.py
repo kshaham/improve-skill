@@ -216,6 +216,54 @@ class AreaPageTests(unittest.TestCase):
         self.assertEqual(pages["areas/ui"]["knowledge"], ["insight:n1"], "area pages carry ids, not copies")
         self.assertEqual(pages["index"]["areas"][1]["notes"], 1, "the index counts the area's notes")
 
+class SessionsAndHotspotsTests(unittest.TestCase):
+    def test_the_sessions_page_lists_each_run_newest_first_with_what_it_learned(self):
+        value = wiki_graph(areas=["ui"], notes={"insight:a": "Keyed rows keep focus when the list refreshes",
+                                                 "insight:b": "Retry the upload twice before reporting failure"})
+        value["nodes"]["insight:a"]["run_id"] = "run-2"
+        value["runs"] = [{"run_id": "run-1", "outcome": "completed", "tasks": 5, "done": 3, "rejected": 2,
+                          "blocked": 0, "ingested_at": "2026-11-13T10:00:00Z"},
+                         {"run_id": "run-2", "outcome": "halted: gate failed", "tasks": 4, "done": 1, "rejected": 1,
+                          "blocked": 2, "ingested_at": "2026-11-14T10:00:00Z"}]
+        pages, _ = wiki.pages(value, None, "t1", "run-2")
+        rows = pages["sessions"]["runs"]
+        self.assertEqual([row["run_id"] for row in rows], ["run-2", "run-1"])
+        self.assertEqual(rows[0]["notes"], 1)
+        self.assertEqual(rows[0]["outcome"], "halted: gate failed")
+        text = wiki.render(pages)["sessions"]
+        self.assertIn("run-2", text)
+        self.assertIn("1/4 done", text)
+        self.assertIn("Sessions", wiki.render(pages)["index"])
+
+    def test_a_run_without_an_outcome_is_not_called_live(self):
+        # The wiki is only built once the current session has finished, so a run with no outcome
+        # crashed or was interrupted; it must not read "live" in every later build.
+        value = wiki_graph()
+        value["runs"] = [{"run_id": "crashed", "outcome": None, "tasks": 3, "done": 1}]
+        pages, _ = wiki.pages(value, None, "t1", "later")
+        self.assertEqual(pages["sessions"]["runs"][0]["outcome"], "ended without an outcome")
+        self.assertNotIn("live", wiki.render(pages)["sessions"])
+
+    def test_the_sessions_page_is_bounded(self):
+        value = wiki_graph()
+        value["runs"] = [{"run_id": f"run-{i}", "tasks": 1, "done": 1} for i in range(wiki.SESSION_ROWS + 10)]
+        pages, _ = wiki.pages(value, None, "t1", "x")
+        self.assertEqual(len(pages["sessions"]["runs"]), wiki.SESSION_ROWS)
+
+    def test_the_index_lists_files_that_resist_change(self):
+        value = wiki_graph(areas=["ui"])
+        value["nodes"]["file:web/hard.js"] = {"id": "file:web/hard.js", "type": "file", "label": "web/hard.js",
+                                              "stats": {"attempts": 9, "done": 1, "rejected": 6, "blocked": 2,
+                                                        "open": 0, "success": 0.12}}
+        value["nodes"]["file:web/easy.js"] = {"id": "file:web/easy.js", "type": "file", "label": "web/easy.js",
+                                              "stats": {"attempts": 9, "done": 9, "rejected": 0, "blocked": 0,
+                                                        "open": 0, "success": 0.95}}
+        pages, _ = wiki.pages(value, None, "t1", "run-1")
+        files = [row["file"] for row in pages["index"]["hotspots"]]
+        self.assertIn("web/hard.js", files)
+        self.assertNotIn("web/easy.js", files)
+        self.assertIn("web/hard.js", wiki.render(pages)["index"])
+
 def wiki_graph(areas=(), notes=None):
     """A minimal in-memory graph with the fields the wiki reads."""
     nodes, edges = {}, {}

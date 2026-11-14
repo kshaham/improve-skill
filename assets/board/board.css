@@ -3611,6 +3611,11 @@ summary:focus-visible {
   border-radius: var(--radius-sm);
   background: var(--surface-2);
 }
+.wiki-path {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
 .wiki-areas small,
 .wiki-files li {
   color: var(--muted);

@@ -80,6 +80,13 @@ class WikiModeTests(unittest.TestCase):
         self.assertIn('if (graphFrame || activeView !== "graph" || wikiMode) return;', graph_js)
         self.assertIn('if (activeView !== "graph" || wikiMode || document.hidden) return;', graph_js)
 
+class WikiSessionsViewTests(unittest.TestCase):
+    def test_sessions_and_hotspots_are_shown_on_the_board(self):
+        script = (ASSETS / "wiki.js").read_text()
+        self.assertIn('["sessions", "Sessions"]', script)
+        self.assertIn('if (name === "sessions")', script)
+        self.assertIn('wikiSection("Files that resist change"', script)
+
 class WikiStyleTests(unittest.TestCase):
     def rule(self, css, selector):
         start = css.index("\n" + selector + " {")
