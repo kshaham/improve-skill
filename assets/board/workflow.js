@@ -120,6 +120,7 @@ function readViewLocation() {
   const node = activeView === "graph" ? pendingView.get("node")?.slice(0, 400) : null;
   if (node && node !== graphSelected) {
     graphSelected = graphFocus = node;
+    showGraphMode();
     graphFitPending = true;
     loadNodeDetail(node, true);
   }

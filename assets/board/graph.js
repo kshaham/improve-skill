@@ -529,7 +529,7 @@ function positionGraph() {
 }
 
 function animateGraph() {
-  if (graphFrame || activeView !== "graph") return;
+  if (graphFrame || activeView !== "graph" || wikiMode) return;
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
     for (let index = 0; index < 400 && graphLayout.step(); index++);
     positionGraph();
@@ -537,7 +537,7 @@ function animateGraph() {
   }
   const tick = () => {
     graphFrame = null;
-    if (activeView !== "graph" || document.hidden) return;
+    if (activeView !== "graph" || wikiMode || document.hidden) return;
     const moving = graphLayout.step() && graphLayout.step();
     if (moving) graphFrame = requestAnimationFrame(tick);
     positionGraph();
@@ -983,6 +983,7 @@ function openGraphNode(id) {
   graphSelected = id;
   graphFocus = id;
   graphFitPending = true;
+  showGraphMode();
   selectView("graph");
   loadNodeDetail(id, true);
 }

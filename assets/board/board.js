@@ -596,7 +596,7 @@ function renderCards() {
       $("history-list").replaceChildren();
       historySignature = "";
       if (activeView === "overview") renderOverview();
-      else if (activeView === "graph") renderGraphView();
+      else if (activeView === "graph" && !wikiMode) renderGraphView();
       else renderRequests();
     }
   }
@@ -1034,4 +1034,5 @@ initControls();
 initHealth();
 initWorkflow();
 initGraph();
+bindWiki();
 refresh();

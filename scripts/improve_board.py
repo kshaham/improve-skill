@@ -609,6 +609,27 @@ def query_int(value, name, low, high):
     return max(low, min(int(value), high))
 
 
+WIKI_LIMIT = 4 * 1024 * 1024
+
+
+def wiki_view(repo):
+    """The wiki the skill rebuilds from the graph when a session finishes, as page data. Before
+    the first session ends there is none: an empty answer, not an error."""
+    import improve_toon
+    empty = {"built_at": None, "pages": {}}
+    try:
+        text = read_local(Path(repo) / ".improve" / "wiki" / "wiki.toon", limit=WIKI_LIMIT)
+    except StateError as exc:
+        return {**empty, "error": str(exc)}
+    if text is None:
+        return empty
+    document = improve_toon.loads(text if isinstance(text, str) else text.decode("utf-8"))
+    pages = document.get("pages") if isinstance(document, dict) else None
+    if not isinstance(pages, dict):
+        return {**empty, "error": "the wiki document has no pages"}
+    return {"built_at": document.get("built_at"), "pages": pages}
+
+
 GRAPH_GET_PATHS = ("/api/graph", "/api/graph/node", "/api/graph/context", "/api/graph/history",
                    "/api/graph/questions")
 QUESTION_LIMIT = 12
@@ -956,6 +977,13 @@ class BoardHandler(BaseHTTPRequestHandler):
                 return self.reply(400, error_payload(exc))
             except Exception as exc:
                 return self.internal_error("reading the report", exc)
+        if target.path == "/api/wiki":
+            try:
+                return self.reply(200, wiki_view(self.server.repo))
+            except (StateError, OSError, ValueError) as exc:
+                return self.reply(400, error_payload(exc))
+            except Exception as exc:
+                return self.internal_error("wiki read", exc)
         if target.path in GRAPH_GET_PATHS:
             try:
                 query = parse_qs(target.query, max_num_fields=40)
@@ -999,6 +1027,7 @@ class BoardHandler(BaseHTTPRequestHandler):
                   "/overview.js": ("overview.js", "text/javascript; charset=utf-8"),
                   "/graph.js": ("graph.js", "text/javascript; charset=utf-8"),
                   "/graph-layout.js": ("graph-layout.js", "text/javascript; charset=utf-8"),
+                  "/wiki.js": ("wiki.js", "text/javascript; charset=utf-8"),
                   "/board.css": ("board.css", "text/css; charset=utf-8")}
         if target.path in assets:
             name, mime = assets[target.path]

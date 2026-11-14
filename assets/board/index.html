@@ -23,6 +23,7 @@
     <script src="/overview.js" defer></script>
     <script src="/graph-layout.js" defer></script>
     <script src="/graph.js" defer></script>
+    <script src="/wiki.js" defer></script>
     <script src="/health.js" defer></script>
     <script src="/board.js" defer></script>
   </head>
@@ -541,6 +542,12 @@
           <div><span>Runs recorded</span><strong id="graph-runs">0</strong></div>
           <div><span>Last refined</span><strong id="graph-refined">Never</strong></div>
         </div>
+        <div class="knowledge-switch" role="group" aria-label="Knowledge views">
+          <button id="knowledge-graph-mode" type="button" aria-pressed="true">Graph</button
+          ><button id="knowledge-wiki-mode" type="button" aria-pressed="false">Wiki</button>
+          <span class="knowledge-switch-hint">The wiki is rebuilt from the graph when a session finishes.</span>
+        </div>
+        <div id="graph-panel">
         <div class="graph-toolbar">
           <label class="graph-search"
             >Search<input
@@ -607,6 +614,11 @@
         <div class="learning-columns graph-lists graph-questions">
           <div><h4>Knowledge gaps</h4><ul id="graph-gaps"></ul></div>
           <div><h4>Questions worth asking</h4><ul id="graph-questions"></ul></div>
+        </div>
+        </div>
+        <div id="wiki-panel" class="wiki-panel" hidden>
+          <nav id="wiki-pages" class="wiki-pages" aria-label="Wiki pages"></nav>
+          <article id="wiki-page" class="wiki-page" tabindex="-1" aria-live="polite"></article>
         </div>
       </section>
       <section id="discovery-section" class="discovery-section" hidden>
