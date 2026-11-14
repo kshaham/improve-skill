@@ -2190,8 +2190,17 @@ def brief(graph, script, repo_arg, max_chars=1800, repo=None):
     return short if len(short) <= max_chars else f"Knowledge graph: {len(nodes)} nodes."[:max_chars]
 
 
-def board_view(graph, limit=250, focus=None, depth=1, query=None, types=None, include_archived=False):
-    """A bounded subgraph for the board: the strongest nodes, a node's neighborhood, or search hits."""
+BOARD_ORDERS = ("balanced", "important", "recent")
+
+
+def board_view(graph, limit=250, focus=None, depth=1, query=None, types=None, include_archived=False,
+               order=None):
+    """A bounded subgraph for the board: the strongest nodes, a node's neighborhood, or search hits.
+    `order` picks which nodes fill the limit: `balanced` (a fair share of each type, then the
+    strongest), `important` (pins, then the highest scores), or `recent` (newest first)."""
+    order = order or "balanced"
+    if order not in BOARD_ORDERS:
+        raise GraphError("order must be balanced, important, or recent")
     nodes = graph["nodes"]
     limit = max(10, min(int(limit), 800))
     chosen = []
@@ -2200,7 +2209,7 @@ def board_view(graph, limit=250, focus=None, depth=1, query=None, types=None, in
         if focus not in nodes:
             raise GraphError("that node is no longer in the graph")
         adj, seen, frontier = adjacency(graph), {focus}, [focus]
-        order = [focus]  # Breadth-first order with sorted ties: the same answer under any hash seed.
+        walk = [focus]  # Breadth-first order with sorted ties: the same answer under any hash seed.
         for _ in range(max(1, min(int(depth), 3))):
             following = []
             for current in frontier:
@@ -2208,10 +2217,10 @@ def board_view(graph, limit=250, focus=None, depth=1, query=None, types=None, in
                                                                                item[1])):
                     if other not in seen and len(seen) < limit:
                         seen.add(other)
-                        order.append(other)
+                        walk.append(other)
                         following.append(other)
             frontier = following
-        chosen = order
+        chosen = walk
     else:
         pool = [node for node in nodes.values() if (include_archived or not node.get("archived"))
                 and (not types or node["type"] in types)]
@@ -2220,7 +2229,8 @@ def board_view(graph, limit=250, focus=None, depth=1, query=None, types=None, in
             adj = adjacency(graph)
             near = {other for hit in hits for _, other in adj.get(hit, [])}
             pool = [node for node in pool if node["id"] in hits or node["id"] in near]
-        chosen = balanced(pool, limit)
+        chosen = (balanced(pool, limit) if order == "balanced" else strongest(pool, limit) if order == "important"
+                  else newest(pool, limit))
     selected = set(chosen)
     edges = [{"src": edge["src"], "rel": edge["rel"], "dst": edge["dst"], "weight": edge.get("weight", 1),
               **({"inferred": True, "confidence": edge.get("confidence")} if edge.get("inferred") else {})}
@@ -2233,7 +2243,7 @@ def board_view(graph, limit=250, focus=None, depth=1, query=None, types=None, in
             "runs": graph["runs"][-12:], "refine": graph["refine"].get("history", [])[-8:],
             "dreams": graph["dream"].get("history", [])[-8:], "proposals": graph["dream"].get("proposals", []),
             "gaps": graph["dream"].get("gaps", []), "dropped": graph["dream"].get("dropped", [])[-20:],
-            "hotspots": hotspots(graph, 8), "focus": focus, "truncated": len(chosen) < len(nodes)}
+            "hotspots": hotspots(graph, 8), "focus": focus, "order": order, "truncated": len(chosen) < len(nodes)}
 
 
 def balanced(pool, limit):
@@ -2256,6 +2266,20 @@ def balanced(pool, limit):
             picked.add(node["id"])
             ordered.append(node)
     return [node["id"] for node in sorted(ordered, key=rank)]
+
+
+def strongest(pool, limit):
+    """The `limit` most important nodes: every pin first, then by score, with no per-type shares."""
+    ranked = sorted(pool, key=lambda node: (not node.get("pinned"), -float(node.get("score", 0)), node["id"]))
+    return [node["id"] for node in ranked[:limit]]
+
+
+def newest(pool, limit):
+    """The `limit` most recently created nodes; a node with no creation time sorts last."""
+    dated = sorted((node for node in pool if node.get("created_at")),
+                   key=lambda node: (str(node["created_at"]), float(node.get("score", 0)), node["id"]), reverse=True)
+    undated = sorted((node for node in pool if not node.get("created_at")), key=lambda node: node["id"])
+    return [node["id"] for node in (dated + undated)[:limit]]
 
 
 def projected_edges(graph, selected, fanout=8):

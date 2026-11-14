@@ -117,9 +117,25 @@ function renderGraphBadge() {
   $("graph-count").title = summary ? `${summary.nodes} nodes from ${summary.runs} runs` : "";
 }
 
+// The ordering filter and how many nodes to show; a bookmark with an unknown value falls back.
+const GRAPH_ORDERS = ["balanced", "important", "recent"],
+  GRAPH_SHOW = ["25", "50", "100", "220", "500"];
+
+function graphOrder() {
+  const value = $("graph-order").value;
+  return GRAPH_ORDERS.includes(value) ? value : "balanced";
+}
+
+function graphShow() {
+  const value = $("graph-show").value;
+  return GRAPH_SHOW.includes(value) ? Number(value) : GRAPH_LIMIT;
+}
+
 function graphQueryKey() {
   return JSON.stringify({
     focus: graphFocus,
+    order: graphOrder(),
+    show: graphShow(),
     q: $("graph-query").value.trim(),
     types: [...graphTypes].sort(),
     archived: $("graph-archived").checked,
@@ -148,12 +164,14 @@ async function loadGraph() {
   graphLoading = true;
   const key = graphQueryKey(),
     query = JSON.parse(key);
-  const params = new URLSearchParams({ limit: String(GRAPH_LIMIT) });
+  // Top N shapes the overview; a focused neighbourhood keeps its full size.
+  const params = new URLSearchParams({ limit: String(query.focus ? GRAPH_LIMIT : query.show) });
   if (query.focus) {
     params.set("focus", query.focus);
     params.set("depth", "2");
   } else {
     params.set("types", query.types.join(","));
+    params.set("order", query.order);
     if (query.q) params.set("q", query.q);
   }
   if (query.archived) params.set("archived", "1");
@@ -176,9 +194,13 @@ async function loadGraph() {
         ? `Showing the neighborhood of “${shortLabel(data.nodes.find((node) => node.id === data.focus)?.label, 60)}”.`
         : query.q
           ? `${data.nodes.length} nodes match “${query.q}” or link to a match.`
-          : data.truncated
-            ? `Showing the ${data.nodes.length} strongest nodes. Search or select a node to see more.`
-            : "",
+          : query.order === "important"
+            ? `Showing the ${data.nodes.length} most important nodes, pinned knowledge first.`
+            : query.order === "recent"
+              ? `Showing the ${data.nodes.length} most recently created nodes, newest first.`
+              : data.truncated
+                ? `Showing the ${data.nodes.length} strongest nodes. Search or select a node to see more.`
+                : "",
     );
     if (graphSelected) loadNodeDetail(graphSelected, false);
   } catch (error) {
@@ -430,6 +452,7 @@ function renderNodeDetail({ node, links }) {
   detailFact(facts, "Archived because", node.archived);
   // Pins and user knowledge boost the score past 1; show it as a bounded relevance.
   detailFact(facts, "Relevance", node.score != null ? Math.min(100, Math.round(node.score * 100)) + "%" : null);
+  detailFact(facts, "Created", node.created_at ? relativeTime(node.created_at) : null);
   detailFact(facts, "Id", node.id);
   parts.push(facts);
   if (Array.isArray(node.merged_from) && node.merged_from.length) {
@@ -520,7 +543,15 @@ function renderGraphLists() {
   $("graph-top").replaceChildren(
     ...(insights.length
       ? insights.map((node) => button(`${KIND_LABELS[node.kind] || "Fact"}: ${node.summary || node.label}`, node.id))
-      : [element("li", "focus-hint", "No knowledge recorded yet.")]),
+      : [
+          element(
+            "li",
+            "focus-hint",
+            snapshot?.graph?.insights
+              ? "No knowledge in this view. Choose Balanced mix, or turn on Knowledge, to see the strongest notes."
+              : "No knowledge recorded yet.",
+          ),
+        ]),
   );
   $("graph-hotspots").replaceChildren(
     ...(graphData.hotspots?.length
@@ -664,6 +695,7 @@ async function rejectGraphLink(src, rel, dst, selected) {
 function resetGraphScope() {
   userScopeChange();
   graphFocus = null;
+  $("graph-order").value = "balanced";
   graphFitPending = true;
   $("graph-query").value = "";
   renderGraphView();
@@ -922,6 +954,13 @@ function initGraph() {
       renderGraphView();
     }, 250);
   });
+  for (const id of ["graph-order", "graph-show"])
+    $(id).addEventListener("change", () => {
+      userScopeChange();
+      graphFocus = null;
+      graphFitPending = true;
+      renderGraphView();
+    });
   $("graph-archived").addEventListener("change", () => {
     userScopeChange();
     renderGraphView();

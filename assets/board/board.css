@@ -2655,6 +2655,20 @@ button.danger {
   flex: 1 1 220px;
   max-width: 360px;
 }
+.graph-order {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.graph-order select {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 7px 10px;
+  background: var(--surface);
+  color: var(--ink);
+}
 .graph-search input {
   flex: 1;
   min-width: 0;

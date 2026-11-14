@@ -549,6 +549,20 @@
               maxlength="200"
               placeholder="Knowledge, files, tasks, blockers…"
           /></label>
+          <label class="graph-order"
+            >Show<select id="graph-order" aria-describedby="graph-status">
+              <option value="balanced">Balanced mix</option>
+              <option value="important">Most important</option>
+              <option value="recent">Recently created</option>
+            </select
+            ><select id="graph-show" aria-label="How many nodes to show">
+              <option value="25">Top 25</option>
+              <option value="50">Top 50</option>
+              <option value="100">Top 100</option>
+              <option value="220" selected>Top 220</option>
+              <option value="500">Top 500</option>
+            </select></label
+          >
           <div id="graph-types" class="graph-types" role="group" aria-label="Node types"></div>
           <label class="graph-check"
             ><input id="graph-archived" type="checkbox" /> Show archived</label

@@ -621,11 +621,14 @@ def graph_get(repo, path, query):
     first = lambda name, fallback=None: (query_values(query, name) or [fallback])[0]
     if path == "/api/graph":
         types = [kind for kind in first("types", "").split(",") if kind in improve_graph.TYPES]
+        order = first("order", "balanced")
+        if order not in improve_graph.BOARD_ORDERS:
+            raise StateError("order must be balanced, important, or recent")
         # board_view clamps the limit to its own 10..800 range; the parse only refuses junk.
         view = improve_graph.board_view(graph, limit=query_int(first("limit", "250"), "limit", -1000, 100000),
                                         focus=first("focus"), depth=query_int(first("depth", "1"), "depth", 1, 3),
                                         query=first("q"), types=types or None,
-                                        include_archived=first("archived") == "1")
+                                        include_archived=first("archived") == "1", order=order)
         return {key: value for key, value in view.items() if key not in UNUSED_GRAPH_VIEW_KEYS}
     if path == "/api/graph/node":
         # With the repository, insight details carry `code_changed` (files edited since the
