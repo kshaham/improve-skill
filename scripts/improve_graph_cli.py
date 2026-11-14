@@ -464,6 +464,8 @@ def wiki_command(args, repo):
     """Read a wiki page (TOON by default), list the pages, or rebuild it after a session."""
     import improve_wiki
     directory = repo / ".improve" / "wiki"
+    if directory.is_symlink() or directory.parent.is_symlink():
+        raise StateError("the wiki and state folders must not be symlinks")
     if args.page == "build":
         with locked(repo) as graph:
             result = improve_wiki.build(graph, repo)
@@ -474,7 +476,9 @@ def wiki_command(args, repo):
     if not document.is_file() or document.is_symlink():
         raise NotFound("no wiki yet: it is built when an improve session finishes "
                        "(the run-end dream, or `sync --dream` after a foreground run's final report)")
-    pages = toon.loads(document.read_text())["pages"]
+    from improve_control import read_local
+    # Bounded, and never through a symlinked file.
+    pages = toon.loads(read_local(document, limit=4 * 1024 * 1024))["pages"]
     if args.page == "pages":
         return [{"page": name, "title": page.get("title", name)} for name, page in pages.items()]
     # Only a page the wiki built can be read: the name never becomes a free path.

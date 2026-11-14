@@ -523,8 +523,10 @@ def atomic_text(path, text):
 def write(directory, result, manifest):
     """Write every page, the TOON document, and the manifest; delete pages that no longer exist."""
     directory = Path(directory)
-    if directory.is_symlink():
-        raise WikiError("the wiki directory must not be a symlink")
+    # Refuse before writing anything: a symlinked folder would put pages outside .improve.
+    for folder in (directory, directory / "areas"):
+        if folder.is_symlink():
+            raise WikiError(f"the wiki folder {folder.name} must not be a symlink")
     for name, text in render(result).items():
         atomic_text(directory / f"{name}.md", text)
     atomic_text(directory / "wiki.toon", improve_toon.dumps({"built_at": manifest["built_at"], "pages": result}))

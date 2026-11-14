@@ -1,5 +1,7 @@
 """The board's Wiki view: /api/wiki serves the wiki built at session end; the page renders it."""
 import json
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -42,6 +44,35 @@ class WikiEndpointTests(unittest.TestCase):
         (self.repo / ".improve" / "wiki" / "wiki.toon").symlink_to(target)
         self.assertEqual(improve_board.wiki_view(self.repo)["pages"], {})
 
+
+class WikiFolderLinkTests(unittest.TestCase):
+    def test_a_symlinked_wiki_folder_is_not_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(tmp, ["src/app.py"])
+            elsewhere = Path(tmp) / "elsewhere"
+            elsewhere.mkdir()
+            (elsewhere / "wiki.toon").write_text("built_at: x\npages:\n  index:\n    title: leaked\n")
+            (repo / ".improve" / "wiki").symlink_to(elsewhere, target_is_directory=True)
+            self.assertEqual(improve_board.wiki_view(repo)["pages"], {})
+            result = subprocess.run([sys.executable, str(ROOT / "scripts" / "improve_graph.py"), "--repo", str(repo),
+                                     "wiki", "index"], capture_output=True, text=True, timeout=60)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("leaked", result.stdout)
+
+    def test_a_symlinked_state_folder_is_not_read(self):
+        # Every other state helper refuses a symlinked .improve; the wiki readers do too.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(tmp, ["src/app.py"])
+            elsewhere = Path(tmp) / "elsewhere"
+            (elsewhere / "wiki").mkdir(parents=True)
+            (elsewhere / "wiki" / "wiki.toon").write_text("built_at: x\npages:\n  index:\n    title: leaked\n")
+            (repo / ".improve").rmdir()
+            (repo / ".improve").symlink_to(elsewhere, target_is_directory=True)
+            self.assertEqual(improve_board.wiki_view(repo)["pages"], {})
+            result = subprocess.run([sys.executable, str(ROOT / "scripts" / "improve_graph.py"), "--repo", str(repo),
+                                     "wiki", "index"], capture_output=True, text=True, timeout=60)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("leaked", result.stdout)
 
 class WikiPageSourceTests(unittest.TestCase):
     def test_the_route_and_script_are_wired(self):

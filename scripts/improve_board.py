@@ -618,8 +618,12 @@ def wiki_view(repo):
     the first session ends there is none: an empty answer, not an error."""
     import improve_toon
     empty = {"built_at": None, "pages": {}}
+    folder = Path(repo) / ".improve" / "wiki"
+    # read_local refuses a symlinked file, not a symlinked folder above it.
+    if folder.is_symlink() or folder.parent.is_symlink():
+        return {**empty, "error": "the wiki folder must not be a symlink"}
     try:
-        text = read_local(Path(repo) / ".improve" / "wiki" / "wiki.toon", limit=WIKI_LIMIT)
+        text = read_local(folder / "wiki.toon", limit=WIKI_LIMIT)
     except StateError as exc:
         return {**empty, "error": str(exc)}
     if text is None:

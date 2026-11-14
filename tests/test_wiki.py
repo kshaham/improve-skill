@@ -169,6 +169,17 @@ class GrowAndCleanTests(unittest.TestCase):
         self.assertTrue((self.wiki / "notes-by-hand.txt").exists(), "a file the wiki did not create stays")
         self.assertTrue((self.wiki / "index.md").exists())
 
+    def test_a_symlinked_areas_folder_is_never_written_through(self):
+        elsewhere = Path(self.tmp.name) / "elsewhere"
+        elsewhere.mkdir()
+        self.wiki.mkdir(parents=True)
+        (self.wiki / "areas").symlink_to(elsewhere, target_is_directory=True)
+        pages, manifest = wiki.pages(wiki_graph(areas=["ui"]), None, "t1", "run-1")
+        with self.assertRaises(wiki.WikiError):
+            wiki.write(self.wiki, pages, manifest)
+        self.assertEqual(list(elsewhere.iterdir()), [], "nothing was written outside .improve")
+        self.assertFalse((self.wiki / "index.md").exists(), "refused before writing any page")
+
     def test_the_change_log_is_bounded(self):
         manifest = None
         for index in range(wiki.CHANGE_SESSIONS + 5):
