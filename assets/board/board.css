@@ -3602,6 +3602,10 @@ summary:focus-visible {
   text-align: left;
   font: inherit;
   cursor: pointer;
+  /* It opens the note in the graph: look tappable at rest, not only on hover. */
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-underline-offset: 3px;
 }
 .wiki-open:hover {
   color: var(--accent-ink);
@@ -3737,5 +3741,12 @@ summary:focus-visible {
 .wiki-topic .wiki-where {
   display: block;
   margin-bottom: 8px;
+}
+.wiki-page:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.mobile .knowledge-switch button {
+  min-height: 44px;
 }
 /* End knowledge wiki */

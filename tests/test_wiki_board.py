@@ -260,6 +260,34 @@ class WikiLiveBoardTests(unittest.TestCase):
         switch = script[script.index("function setKnowledgeMode(wiki) {"):]
         self.assertIn("renderCards();", switch[:switch.index("\n}")])
 
+class WikiPhoneAndReaderTests(unittest.TestCase):
+    def test_the_page_row_keeps_the_current_page_in_view(self):
+        script = (ASSETS / "wiki.js").read_text()
+        render = script[script.index("function renderWiki() {"):]
+        render = render[:render.index("\n}")]
+        self.assertIn('list.scrollLeft = current.offsetLeft', render)
+
+    def test_a_page_opens_at_its_top_and_is_named_by_its_title(self):
+        script = (ASSETS / "wiki.js").read_text()
+        opener = script[script.index("function openWikiPage(name) {"):]
+        opener = opener[:opener.index("\n}")]
+        self.assertIn('$("wiki-page").getBoundingClientRect().top', opener)
+        self.assertIn('document.querySelector(".run-strip")', opener, "the phone's sticky run strip does not cover the title")
+        self.assertIn('element("h3", "", page.title || name)', script)
+        self.assertIn('heading.id = "wiki-page-title";', script)
+        page = (ASSETS / "index.html").read_text()
+        article = page[page.index('<article id="wiki-page"'):]
+        self.assertIn('aria-labelledby="wiki-page-title"', article[:article.index(">")])
+        css = (ASSETS / "board.css").read_text()
+        self.assertIn(".wiki-page:focus-visible {", css)
+
+    def test_phone_targets_and_tappable_notes(self):
+        css = (ASSETS / "board.css").read_text()
+        rule = css[css.index(".mobile .knowledge-switch button {"):]
+        self.assertIn("min-height: 44px;", rule[:rule.index("}")])
+        note = css[css.index("\n.wiki-open {"):]
+        self.assertIn("text-decoration: underline;", note[:note.index("}")])
+
 class WikiStyleTests(unittest.TestCase):
     def rule(self, css, selector):
         start = css.index("\n" + selector + " {")

@@ -125,6 +125,9 @@ function renderWiki() {
     list.append(item);
   }
   $("wiki-pages").replaceChildren(list);
+  // On a phone the page list is a sideways scroller: keep the current page in view.
+  const current = list.querySelector('[aria-current="page"]');
+  if (current && list.scrollWidth > list.clientWidth) list.scrollLeft = current.offsetLeft - 16;
   wikiShown = wikiTotal = 0;
   $("wiki-page").replaceChildren(...wikiPageContent(wikiPage, pages[wikiPage], pages));
   wikiOnScreen = wikiPage;
@@ -141,6 +144,12 @@ function openWikiPage(name) {
   renderWiki();
   writeViewLocation();
   $("wiki-page").focus({ preventScroll: true });
+  // A page opened from far down another page starts at its own top, just below the sticky run
+  // strip a phone keeps at the top of the screen.
+  const strip = document.querySelector(".run-strip");
+  const covered = strip && getComputedStyle(strip).position === "sticky" ? strip.getBoundingClientRect().bottom : 0;
+  const top = $("wiki-page").getBoundingClientRect().top;
+  if (top < Math.max(covered, 0)) window.scrollBy(0, top - covered - 8);
 }
 
 // Every note row the wiki carries: the knowledge page's groups, and the rows area pages list
@@ -379,7 +388,10 @@ const WIKI_PAGE_RENDERERS = {
 
 function wikiPageContent(name, page, pages) {
   const render = wikiOwn(WIKI_PAGE_RENDERERS, name) ? WIKI_PAGE_RENDERERS[name] : null;
-  return [element("h3", "", page.title || name), ...(render ? render(page, pages) : wikiAreaPage(page, pages))];
+  const heading = element("h3", "", page.title || name);
+  // The article is named by this title, so a screen reader announces the page that opened.
+  heading.id = "wiki-page-title";
+  return [heading, ...(render ? render(page, pages) : wikiAreaPage(page, pages))];
 }
 
 function bindWiki() {
