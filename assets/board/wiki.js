@@ -10,6 +10,9 @@ const WIKI_FIXED_PAGES = [
   ["dreams", "Dreams"],
   ["sessions", "Sessions"],
 ];
+let wikiFilter = "",
+  wikiShown = 0,
+  wikiTotal = 0;
 let wikiData = null,
   wikiPage = "index",
   wikiLoading = false,
@@ -84,7 +87,14 @@ function renderWiki() {
     list.append(item);
   }
   $("wiki-pages").replaceChildren(list);
+  wikiShown = wikiTotal = 0;
   $("wiki-page").replaceChildren(...wikiPageContent(wikiPage, pages[wikiPage], pages));
+  $("wiki-filter-count").textContent =
+    wikiFilter && wikiTotal
+      ? `${countText(wikiShown)} of ${countText(wikiTotal)} notes on this page match`
+      : wikiFilter
+        ? "The filter applies to notes; this page has none."
+        : "";
 }
 
 function openWikiPage(name) {
@@ -101,8 +111,18 @@ function wikiGraphButton(id, text, className = "link-button") {
   return button;
 }
 
+// A note matches the filter when every word appears in its text, areas, files, or kind.
+function wikiMatches(row) {
+  if (!wikiFilter) return true;
+  const haystack = [row.text, row.areas, row.files, row.kind, row.verdict].join(" ").toLowerCase();
+  return wikiFilter.split(/\s+/).every((word) => haystack.includes(word));
+}
+
 function wikiNoteRows(rows) {
-  if (!rows.length) return [element("p", "focus-hint", "None recorded.")];
+  wikiTotal += rows.length;
+  rows = rows.filter((row) => wikiMatches(row));
+  wikiShown += rows.length;
+  if (!rows.length) return [element("p", "focus-hint", wikiFilter ? "No notes match the filter." : "None recorded.")];
   const texts = new Map((wikiData?.pages?.knowledge?.groups || []).flatMap((group) => group.notes).map((row) => [row.id, row.text]));
   const list = element("ul", "wiki-notes");
   for (const row of rows) {
@@ -191,8 +211,16 @@ function wikiPageContent(name, page, pages) {
       wikiSection("Last session", [element("p", "", `${last.added || 0} added, ${last.removed || 0} removed, ${last.verdicts || 0} verdicts changed.`)]),
     ];
   }
-  if (name === "knowledge")
-    return [heading, ...(page.groups || []).map((group) => wikiSection((KIND_LABELS[group.kind] || "Fact") + "s", wikiNoteRows(group.notes)))];
+  if (name === "knowledge") {
+    const sections = [];
+    for (const group of page.groups || []) {
+      const before = wikiShown;
+      const rows = wikiNoteRows(group.notes);
+      if (!wikiFilter || wikiShown > before) sections.push(wikiSection((KIND_LABELS[group.kind] || "Fact") + "s", rows));
+    }
+    if (wikiFilter && !sections.length) sections.push(element("p", "focus-hint", "No notes match the filter."));
+    return [heading, ...sections];
+  }
   if (name === "changes")
     return [
       heading,
@@ -261,6 +289,10 @@ function wikiPageContent(name, page, pages) {
 }
 
 function bindWiki() {
+  $("wiki-filter").addEventListener("input", () => {
+    wikiFilter = $("wiki-filter").value.trim().toLowerCase().slice(0, 120);
+    if (wikiData) renderWiki();
+  });
   $("knowledge-graph-mode").addEventListener("click", () => setKnowledgeMode(false));
   $("knowledge-wiki-mode").addEventListener("click", () => setKnowledgeMode(true));
 }

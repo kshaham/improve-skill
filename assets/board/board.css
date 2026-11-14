@@ -3698,4 +3698,33 @@ summary:focus-visible {
     position: static;
   }
 }
+.wiki-main {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.wiki-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.wiki-filter {
+  display: flex;
+  flex: 1 1 260px;
+  align-items: center;
+  gap: 8px;
+  max-width: 420px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.wiki-filter input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+}
 /* End knowledge wiki */

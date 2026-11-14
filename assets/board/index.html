@@ -618,7 +618,20 @@
         </div>
         <div id="wiki-panel" class="wiki-panel" hidden>
           <nav id="wiki-pages" class="wiki-pages" aria-label="Wiki pages"></nav>
-          <article id="wiki-page" class="wiki-page" tabindex="-1" aria-live="polite"></article>
+          <div class="wiki-main">
+            <div class="wiki-filter-row">
+              <label class="wiki-filter"
+                >Filter notes<input
+                  id="wiki-filter"
+                  type="search"
+                  maxlength="120"
+                  placeholder="Words, an area, or a file…"
+                  aria-describedby="wiki-filter-count"
+              /></label>
+              <span id="wiki-filter-count" class="focus-hint" aria-live="polite"></span>
+            </div>
+            <article id="wiki-page" class="wiki-page" tabindex="-1" aria-live="polite"></article>
+          </div>
         </div>
       </section>
       <section id="discovery-section" class="discovery-section" hidden>

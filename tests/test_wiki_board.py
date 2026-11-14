@@ -96,6 +96,25 @@ class WikiRelationsViewTests(unittest.TestCase):
         self.assertIn('wikiSection("Contradictions", wikiContradictions(page.contradictions || []))', script)
         self.assertIn('element("small", "wiki-related", "Related: ")', script)
 
+class WikiFilterTests(unittest.TestCase):
+    def test_a_filter_narrows_notes_by_text_area_or_file(self):
+        page = (ASSETS / "index.html").read_text()
+        self.assertIn('id="wiki-filter"', page)
+        self.assertIn('type="search"', page[page.index('id="wiki-filter"') - 200:page.index('id="wiki-filter"') + 200])
+        script = (ASSETS / "wiki.js").read_text()
+        matcher = script[script.index("function wikiMatches("):]
+        matcher = matcher[:matcher.index("\n}")]
+        for field in ("row.text", "row.areas", "row.files"):
+            self.assertIn(field, matcher)
+        self.assertIn("wikiMatches(row)", script[script.index("function wikiNoteRows("):])
+        self.assertIn('$("wiki-filter").addEventListener("input"', script)
+        self.assertIn('id="wiki-filter-count"', page)
+        # While filtering, kinds with no match are left out rather than shown empty.
+        self.assertIn("if (!wikiFilter || wikiShown > before)", script)
+        # Pages without notes (changes, sessions, dreams) must not claim "0 of 0 notes match".
+        self.assertIn("The filter applies to notes; this page has none.", script)
+        self.assertIn("wikiFilter && wikiTotal", script)
+
 class WikiStyleTests(unittest.TestCase):
     def rule(self, css, selector):
         start = css.index("\n" + selector + " {")
