@@ -136,5 +136,13 @@ class BoardScriptTests(unittest.TestCase):
         self.assertLess(tick.index("if (moving) graphFrame = requestAnimationFrame(tick);"), tick.index("positionGraph();"),
                         "the next frame is requested before positioning, so a moving layout skips crowding")
 
+    def test_a_redrawn_graph_decides_label_crowding_at_once(self):
+        # A redraw while the old animation still runs built groups without label-crowded, and
+        # crowding waited about two seconds for the layout to settle.
+        source = (ASSETS / "graph.js").read_text()
+        draw = source[source.index("function drawGraph()"):source.index("function renderLegend()")]
+        self.assertIn("graphCrowdNow = true;\n  positionGraph();", draw)
+        self.assertIn("if (graphCrowdNow) {\n    graphCrowdNow = false;\n    crowdGraphLabels(placed);", source)
+
 if __name__ == "__main__":
     unittest.main()

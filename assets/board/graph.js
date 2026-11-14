@@ -57,6 +57,7 @@ let graphData = null,
   graphNoteRetry = null,
   graphPendingTask = null,
   graphKeepStatus = false,
+  graphCrowdNow = false,
   taskKnowledgeKey = "",
   questionsKey = "",
   graphTypes = new Set(GRAPH_DEFAULT_TYPES);
@@ -471,6 +472,8 @@ function drawGraph() {
   renderLegend();
   markSelection();
   if (graphFitPending) fitGraph();
+  // New groups need their crowding decided now, even if an earlier animation is still running.
+  graphCrowdNow = true;
   positionGraph();
   animateGraph();
 }
@@ -509,7 +512,11 @@ function positionGraph() {
   sizeGraphNodes();
   // Crowding is decided at rest (settled layout, zoom, pan): while the layout moves, labels keep
   // their last state instead of flickering, and a dragged node keeps its label.
-  if (!graphFrame) crowdGraphLabels(placed);
+  // A fresh draw decides at once, even while an earlier animation is still running.
+  if (graphCrowdNow) {
+    graphCrowdNow = false;
+    crowdGraphLabels(placed);
+  } else if (!graphFrame) crowdGraphLabels(placed);
   for (const { edge, line } of graphElements.edges) {
     const a = graphLayout.points.get(edge.src),
       b = graphLayout.points.get(edge.dst);
