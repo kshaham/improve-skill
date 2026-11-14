@@ -137,6 +137,78 @@ class TokenTests(unittest.TestCase):
         offenders = [line.strip() for line in body.splitlines() if literal.search(line)]
         self.assertEqual(offenders, [], "text colours that bypass the theme tokens")
 
+    def test_graph_canvas_and_labels_follow_the_theme(self):
+        """The graph was a white panel with tiny unreadable labels; the user asked for a blue canvas."""
+        def rule(selector):
+            start = CSS.index("\n" + selector + " {") + 1
+            return CSS[start:CSS.index("\n}", start)]
+        self.assertNotRegex(rule(".graph-canvas-wrap"), r"\bwhite\b|#fff", "canvas background is fixed white")
+        self.assertIn("var(--canvas)", rule(".graph-canvas-wrap"))
+        for selector in (".graph-node circle", ".graph-node text"):
+            self.assertIn("stroke: var(--canvas);", rule(selector), selector)
+        self.assertIn("fill: var(--canvas-ink);", rule(".graph-node text"))
+        for selector in (".graph-edge.highlight", ".graph-edge.inferred.highlight"):
+            self.assertIn("stroke: var(--edge-highlight);", rule(selector), selector)
+        self.assertIn("stroke: var(--edge-highlight);", rule(".graph-node.selected circle,\n.graph-node:focus-visible circle"))
+        light, dark, _ = token_blocks()
+        for theme, tokens in (("light", light), ("dark", dark)):
+            with self.subTest(theme=theme):
+                hue, saturation, lightness = hue_saturation_lightness(hex_rgb(tokens["--canvas"]))
+                self.assertTrue(200 <= hue < 225 and saturation >= 0.4 and lightness <= 0.25,
+                                f"canvas should be a deep blue, got hue {hue:.0f} sat {saturation:.2f} light {lightness:.2f}")
+                highlight = contrast(hex_rgb(tokens["--edge-highlight"]), hex_rgb(tokens["--canvas"]))
+                self.assertGreaterEqual(highlight, 4.5, f"selection highlight {highlight:.2f}:1")
+                ratio = contrast(hex_rgb(tokens["--canvas-ink"]), hex_rgb(tokens["--canvas"]))
+                self.assertGreaterEqual(ratio, 4.5, f"graph labels {ratio:.2f}:1")
+                dots = contrast(hex_rgb(tokens["--canvas-dot"]), hex_rgb(tokens["--canvas"]))
+                self.assertTrue(1.2 <= dots <= 3, f"grid dots {dots:.2f}:1 should be visible but quiet")
+
+    def test_text_drawn_inside_the_graph_canvas_is_readable_on_it(self):
+        """Overlays inside the canvas without their own background draw straight on the blue."""
+        html = (BOARD / "index.html").read_text()
+        start = html.index('class="graph-canvas-wrap"')
+        inside = html[start:html.index('<aside id="graph-detail"', start)]
+        classes = sorted(set(re.findall(r'class="([a-z-]+)"', inside)) - {"graph-canvas-wrap"})
+        self.assertGreaterEqual(len(classes), 3, classes)
+        light, dark, _ = token_blocks()
+        checked = 0
+        for name in classes:
+            match = re.search(r"\n\." + re.escape(name) + r"\s*\{([^}]*)\}", CSS)
+            if not match or re.search(r"(?<![-\w])background", match.group(1)):
+                continue
+            colour = re.search(r"(?<![-\w])color:\s*var\((--[a-z0-9-]+)\)", match.group(1))
+            if not colour:
+                continue
+            checked += 1
+            self.assertIn(colour.group(1), ("--canvas-ink", "--canvas-muted"), f".{name} text is drawn on the canvas")
+            for theme, tokens in (("light", light), ("dark", dark)):
+                ratio = contrast(hex_rgb(tokens[colour.group(1)]), hex_rgb(tokens["--canvas"]))
+                self.assertGreaterEqual(ratio, 4.5, f".{name} in {theme}: {ratio:.2f}:1")
+        self.assertGreaterEqual(checked, 1, "the empty-state message sits on the canvas and must be checked")
+
+    def test_every_graph_edge_stays_more_visible_than_the_grid(self):
+        """Edges drawn in --line vanished into a dark canvas, fainter than its own grid dots."""
+        rules = re.findall(r"\n(\.graph-edge[^{]*)\{([^}]*)\}", CSS)
+        strokes = {}
+        for selector, body in rules:
+            stroke = re.search(r"(?<![-\w])stroke:\s*([^;]+);", body)
+            if stroke and ".highlight" not in selector:
+                strokes[selector.strip()] = stroke.group(1).strip()
+        self.assertIn(".graph-edge.rel-via_task", strokes)
+        self.assertGreaterEqual(len(strokes), 5, strokes)
+        light, dark, _ = token_blocks()
+        for theme, tokens in (("light", light), ("dark", dark)):
+            canvas = hex_rgb(tokens["--canvas"])
+            dots = contrast(hex_rgb(tokens["--canvas-dot"]), canvas)
+            for selector, value in strokes.items():
+                with self.subTest(theme=theme, edge=selector):
+                    token = re.fullmatch(r"var\((--[a-z0-9-]+)\)", value)
+                    self.assertIsNotNone(token, f"{selector} stroke {value} is not a theme token")
+                    colour = hex_rgb(tokens[token.group(1)])
+                    seen = tuple(round(0.7 * c + 0.3 * b) for c, b in zip(colour, canvas))
+                    ratio = contrast(seen, canvas)
+                    self.assertGreaterEqual(ratio, max(1.8, dots + 0.4), f"{ratio:.2f}:1 against grid dots {dots:.2f}:1")
+
     def test_text_tokens_keep_aa_contrast_in_both_themes(self):
         pairs = [("--ink", "--surface", 7), ("--ink-2", "--surface", 4.5), ("--muted", "--surface", 4.5),
                  ("--muted", "--page", 4.5), ("--muted", "--surface-2", 4.5), ("--accent-ink", "--surface", 4.5),
