@@ -87,6 +87,8 @@ const key = [...graphKeyNodes(withFiles, graphPercentiles(withFiles))];
 assert.deepEqual(key, ["k39", "k38", "k37", "k36"]);
 const many = Array.from({ length: 200 }, (_, index) => ({ id: "m" + index, type: "insight", score: index / 200 }));
 assert.equal(graphKeyNodes(many, graphPercentiles(many)).size, 8, "at most eight key notes");
+const topFile = [...notes, { id: "lead-file", type: "file", score: 1 }, { id: "low-file", type: "file", score: 0 }];
+assert.ok(!graphKeyNodes(topFile, graphPercentiles(topFile)).has("lead-file"), "a top-ranked file is never key");
 const tied = Array.from({ length: 20 }, (_, index) => ({ id: "t" + index, type: "insight", score: 0.67 }));
 assert.equal(graphKeyNodes(tied, graphPercentiles(tied)).size, 0, "equal notes: none stands out");
 
