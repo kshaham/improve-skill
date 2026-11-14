@@ -134,6 +134,18 @@ class WikiWordingTests(unittest.TestCase):
         self.assertNotRegex(script, r"\$\{row\.notes\} notes")
         self.assertNotIn("attempts verified", script, "attempts go through wikiPlural")
 
+class WikiAnnouncementTests(unittest.TestCase):
+    def test_the_page_is_not_a_live_region_but_the_filter_count_is(self):
+        # A live page would be read out in full on every filter keystroke.
+        page = (ASSETS / "index.html").read_text()
+        article = page[page.index('<article id="wiki-page"'):]
+        article = article[:article.index(">")]
+        self.assertNotIn("aria-live", article)
+        count = page[page.index('id="wiki-filter-count"') - 20:]
+        self.assertIn('aria-live="polite"', count[:count.index(">")])
+        script = (ASSETS / "wiki.js").read_text()
+        self.assertIn('$("wiki-page").focus({ preventScroll: true });', script, "opening a page moves focus there")
+
 class WikiStyleTests(unittest.TestCase):
     def rule(self, css, selector):
         start = css.index("\n" + selector + " {")
