@@ -10,7 +10,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from graph_support import graph, make_repo
+from graph_support import budget, graph, make_repo
 
 import improve_toon
 import improve_wiki as wiki
@@ -447,6 +447,24 @@ class TopicsTests(unittest.TestCase):
             value["nodes"][key] = {"id": key, "type": "insight", "kind": "technique", "score": 2, "summary": f"Strong note {index}"}
         pages, _ = wiki.pages(value, None, "t1", "run-1")
         self.assertIn("Keep the grid columns in one place", wiki.render(pages)["topics"])
+
+class ScaleTests(unittest.TestCase):
+    def test_a_large_graph_builds_quickly_and_stays_small(self):
+        import time
+        notes = {f"insight:{i:05d}": f"Knowledge number {i} about the board view {i % 9}" for i in range(5000)}
+        value = wiki_graph(areas=[f"area{i}" for i in range(20)], notes=notes)
+        value["communities"] = {"groups": [{"id": f"group:{g}", "label": f"web/{g}.js", "size": 30, "cohesion": 0.2,
+                                            "members": [f"file:web/{g}-{m}.js" for m in range(30)]}
+                                           for g in range(60)]}
+        started = time.perf_counter()
+        pages, manifest = wiki.pages(value, None, "t1", "run-1")
+        pages, manifest = wiki.pages(value, manifest, "t2", "run-2")
+        rendered = wiki.render(pages)
+        document = improve_toon.dumps({"pages": pages})
+        elapsed = time.perf_counter() - started
+        self.assertLess(elapsed, budget(2), f"two builds and a render took {elapsed:.2f} s")
+        self.assertLess(len(document), 1_500_000, "the TOON document stays bounded")
+        self.assertLess(sum(len(text) for text in rendered.values()), 1_500_000)
 
 def wiki_graph(areas=(), notes=None):
     """A minimal in-memory graph with the fields the wiki reads."""
