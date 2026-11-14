@@ -46,6 +46,12 @@ class StateError(ValueError):
     pass
 
 
+def skill_file(skill):
+    """The instructions a cycle follows. improve-max ships separately and installs as max/ beside this skill."""
+    root = Path(__file__).resolve().parent.parent
+    return root / ("max/SKILL.md" if skill == "improve-max" else "SKILL.md")
+
+
 def limit_hit(output):
     """Whether a cycle ended on an account usage limit, judged by the end of its output only."""
     return bool(LIMIT_PATTERN.search(output[-LIMIT_TAIL_CHARS:]))
@@ -918,7 +924,7 @@ class Supervisor:
     def prompt(self, final=False):
         remaining = max(0, self.deadline_epoch() - int(time.time()))
         root = Path(__file__).resolve().parent.parent
-        skill_path = root / ("max/SKILL.md" if self.args.skill == "improve-max" else "SKILL.md")
+        skill_path = skill_file(self.args.skill)
         prefix = "$" if self.engine == "codex" else "/"
         repo = shlex.quote(str(self.repo))
         graph = f"python3 {shlex.quote(str(Path(__file__).with_name('improve_graph.py')))} --repo {repo}"
@@ -1595,6 +1601,8 @@ def daemon(args):
         else:
             print("not running")
         return 0
+    if args.skill == "improve-max" and not skill_file(args.skill).is_file():
+        raise StateError(f"improve-max is not installed: it is a separate package and {skill_file(args.skill)} is missing")
     # A live run keeps its recorded deadline, so its relaunch (by hand or by the watchdog after
     # a `--resume --supervise` launch) needs no duration.
     if not args.duration and not (args.resume or args.finalize) and (args.new_run or live_run(state) is None):

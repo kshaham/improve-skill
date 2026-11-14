@@ -18,6 +18,9 @@ import unittest
 SLOW = os.environ.get("IMPROVE_TEST_SLOW") == "1"
 slow = unittest.skipUnless(SLOW, "set IMPROVE_TEST_SLOW=1 to run soak, scale, and performance tests")
 SPEED = float(os.environ.get("IMPROVE_TEST_SPEED_FACTOR", "1") or "1")
+# improve-max ships separately and installs as max/ beside this skill; its daemon tests need it.
+MAX_INSTALLED = (Path(__file__).resolve().parents[1] / "max/SKILL.md").is_file()
+requires_max = unittest.skipUnless(MAX_INSTALLED, "improve-max is a separate package; install it as max/ to run this")
 
 
 def budget(seconds):

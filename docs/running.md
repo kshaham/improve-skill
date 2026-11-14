@@ -40,8 +40,8 @@ preflight succeeded. The daemon's detailed log is `.improve/daemon.log`.
 
 Requires **Python 3.9+, Git, and the selected assistant's authenticated CLI** on macOS/Linux;
 no jq or GNU timeout is needed. The skill passes `--engine codex` when running in Codex,
-or `--engine claude` when running in Claude Code. Both `improve` and `improve-max` use the
-same routing. The location of the installed script does not determine the engine.
+or `--engine claude` when running in Claude Code. The separately distributed `improve-max`
+package uses the same routing. The location of the installed script does not determine the engine.
 
 With `--engine auto` (the default), a new run detects Codex from `CODEX_THREAD_ID` or
 `CODEX_CI`, and Claude Code from `CLAUDECODE` or `CLAUDE_CODE_ENTRYPOINT`. A plain shell
@@ -168,7 +168,7 @@ launch would do about it.
 | `--model NAME`                     | Save an explicit model for the run; otherwise use the initial environment or CLI default                                                |
 | `--intake FILE`                    | JSON with all ten answers; required before new improvement work                                                                         |
 | `--no-board` / `--board-port PORT` | Skip automatic board startup, or select its local port; `0` chooses a free port                                                         |
-| `--skill improve-max --args "..."` | Select the max variant and its parameters; repeat these on recovery                                                                     |
+| `--skill improve-max --args "..."` | Select the max variant (a separate package) and its parameters; repeat these on recovery                                                |
 | `--new-run`                        | Archive old state; requires a new duration and completed intake                                                                         |
 | `--resume`                         | Continue a recovered halt/stop with the original deadline and saved settings                                                            |
 | `--finalize`                       | Retry an ended run's pending report, without new improvement work                                                                       |
