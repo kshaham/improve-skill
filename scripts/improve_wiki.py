@@ -481,13 +481,22 @@ def write(directory, result, manifest):
         raise WikiError("the wiki directory must not be a symlink")
     for name, text in render(result).items():
         atomic_text(directory / f"{name}.md", text)
-    areas = directory / "areas"
-    if areas.is_dir() and not areas.is_symlink():
-        for path in areas.glob("*.md"):
-            if f"areas/{path.stem}" not in result:
-                path.unlink()
     atomic_text(directory / "wiki.toon", improve_toon.dumps({"built_at": manifest["built_at"], "pages": result}))
     atomic_text(directory / "manifest.json", json.dumps(manifest, indent=1, ensure_ascii=False) + "\n")
+    clean_up(directory, result)
+
+
+def clean_up(directory, result):
+    """The wiki folder is the wiki's own: remove every `.md` page this build did not write and
+    every `.wiki-*` temp file a crashed write left behind. Files of any other kind are left
+    alone. Unlinking never follows a symlink."""
+    for folder, prefix in ((directory, ""), (directory / "areas", "areas/")):
+        if not folder.is_dir() or folder.is_symlink():
+            continue
+        for path in folder.iterdir():
+            stale_page = path.suffix == ".md" and f"{prefix}{path.stem}" not in result
+            if (stale_page or path.name.startswith(".wiki-")) and (path.is_symlink() or path.is_file()):
+                path.unlink()
 
 
 def read_manifest(directory):

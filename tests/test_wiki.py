@@ -155,6 +155,20 @@ class GrowAndCleanTests(unittest.TestCase):
         self.assertEqual(first["counts"]["added"], 9)
         self.assertEqual(first["added"], [], "a first build is not a list of changes")
 
+    def test_stale_pages_and_leftover_temp_files_are_removed(self):
+        pages, manifest = wiki.pages(wiki_graph(areas=["ui"]), None, "t1", "run-1")
+        wiki.write(self.wiki, pages, manifest)
+        (self.wiki / "glossary.md").write_text("# A page an older version built\n")
+        (self.wiki / ".wiki-abc123").write_text("half written")
+        (self.wiki / "areas" / ".wiki-def456").write_text("half written")
+        (self.wiki / "notes-by-hand.txt").write_text("not the wiki's")
+        wiki.write(self.wiki, pages, manifest)
+        self.assertFalse((self.wiki / "glossary.md").exists())
+        self.assertFalse((self.wiki / ".wiki-abc123").exists())
+        self.assertFalse((self.wiki / "areas" / ".wiki-def456").exists())
+        self.assertTrue((self.wiki / "notes-by-hand.txt").exists(), "a file the wiki did not create stays")
+        self.assertTrue((self.wiki / "index.md").exists())
+
     def test_the_change_log_is_bounded(self):
         manifest = None
         for index in range(wiki.CHANGE_SESSIONS + 5):
