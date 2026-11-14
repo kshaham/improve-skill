@@ -118,6 +118,21 @@ function graphEdgeWidth(weight) {
   return Math.min(2.4, 0.7 + 0.35 * (Number.isFinite(weight) ? Math.max(0, weight) : 1));
 }
 
+// Key knowledge: notes ranked in the top tenth of knowledge, at most eight, strongest first. When
+// every note ties, none stands out, so none is key.
+const GRAPH_KEY_RANK = 0.9,
+  GRAPH_KEY_LIMIT = 8;
+
+function graphKeyNodes(nodes, ranks) {
+  return new Set(
+    nodes
+      .filter((node) => node.type === "insight" && (ranks.get(node.id) ?? 0) >= GRAPH_KEY_RANK)
+      .sort((a, b) => ranks.get(b.id) - ranks.get(a.id) || String(a.id).localeCompare(String(b.id)))
+      .slice(0, GRAPH_KEY_LIMIT)
+      .map((node) => node.id),
+  );
+}
+
 // A small node is hard to click or tap: every node has a hit area at least 16px across.
 function graphHitRadius(radius) {
   return Math.max(radius, GRAPH_HIT_RADIUS);
@@ -385,12 +400,14 @@ function drawGraph() {
   graphLayout.update(nodes, graphData.edges);
   if (graphLayout.alpha === 1)
     for (let index = 0; index < GRAPH_WARMUP_STEPS; index++) graphLayout.step();
+  const ranks = graphPercentiles(nodes),
+    key = graphKeyNodes(nodes, ranks);
+  // Key knowledge is labelled first, then the strongest of the rest, up to GRAPH_LABELS.
   const labelled = new Set(
-    [...nodes]
+    [...new Set([...key, ...[...nodes]
       .filter((node) => !["task", "run"].includes(node.type))
       .sort((a, b) => (b.score || 0) - (a.score || 0))
-      .slice(0, GRAPH_LABELS)
-      .map((node) => node.id),
+      .map((node) => node.id)])].slice(0, GRAPH_LABELS),
   );
   const viewport = svg("g", { class: "graph-viewport" }),
     edgeLayer = svg("g", { class: "graph-edges" }),
@@ -400,7 +417,7 @@ function drawGraph() {
   nodeLayer.append(hitLayer);
   graphElements.hits = new Map();
   graphElements.nodes = new Map();
-  graphElements.ranks = graphPercentiles(nodes);
+  graphElements.ranks = ranks;
   graphElements.labelled = [...labelled];
   graphElements.labelWidths = new Map();
   graphElements.sizedAt = null;
@@ -424,7 +441,8 @@ function drawGraph() {
         (node.archived ? " archived" : "") +
         (node.pinned ? " pinned" : "") +
         (node.stale ? " stale" : "") +
-        (labelled.has(node.id) ? " labelled" : ""),
+        (labelled.has(node.id) ? " labelled" : "") +
+        (key.has(node.id) ? " key" : ""),
       tabindex: "0",
       role: "button",
       "aria-label": `${graphTypeLabel(node)}: ${node.label}`,
@@ -459,13 +477,13 @@ function drawGraph() {
 
 function renderLegend() {
   const present = new Set(graphData.nodes.map((node) => node.type));
-  $("graph-legend").replaceChildren(
-    ...GRAPH_TYPES.filter(([type]) => present.has(type)).map(([type, label, color]) => {
-      const item = element("span", "", label);
-      item.style.setProperty("--swatch", color);
-      return item;
-    }),
-  );
+  const items = GRAPH_TYPES.filter(([type]) => present.has(type)).map(([type, label, color]) => {
+    const item = element("span", "", label);
+    item.style.setProperty("--swatch", color);
+    return item;
+  });
+  if ($("graph-canvas").querySelector(".graph-node.key")) items.push(element("span", "legend-key", "Key knowledge"));
+  $("graph-legend").replaceChildren(...items);
 }
 
 function positionGraph() {

@@ -115,5 +115,16 @@ class BoardScriptTests(unittest.TestCase):
             css,
         )
 
+    def test_key_knowledge_glows_without_an_extra_circle(self):
+        source = (ASSETS / "graph.js").read_text()
+        self.assertIn('(key.has(node.id) ? " key" : "")', source)
+        self.assertIn("new Set([...key, ...", source, "key notes are labelled first")
+        self.assertIn('"Key knowledge"', source[source.index("function renderLegend()"):])
+        css = (ASSETS / "board.css").read_text()
+        rule = css[css.index(".graph-node.key circle {"):]
+        rule = rule[:rule.index("}")]
+        self.assertIn("filter: drop-shadow(", rule)
+        self.assertNotIn("stroke", rule, "selection and focus keep the stroke")
+
 if __name__ == "__main__":
     unittest.main()

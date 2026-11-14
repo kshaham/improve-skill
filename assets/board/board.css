@@ -12,6 +12,7 @@
   --surface: #ffffff;
   --surface-2: #f1f5f3;
   --surface-3: #e8eeeb;
+  --key-glow: #f2c14e;
   --accent: #0e8159;
   --accent-strong: #0a6646;
   --accent-ink: #0a6646;
@@ -127,6 +128,7 @@
     --edge-cochange: #7fb6e6;
     --edge-blocker: #e7a37f;
     --edge-highlight: #5fe0a6;
+    --key-glow: #f2c14e;
   }
 }
 :root[data-theme="dark"] {
@@ -191,6 +193,7 @@
   --edge-cochange: #7fb6e6;
   --edge-blocker: #e7a37f;
   --edge-highlight: #5fe0a6;
+  --key-glow: #f2c14e;
 }
 * {
   box-sizing: border-box;
@@ -2837,6 +2840,14 @@ button.danger {
 .graph-node.pinned circle {
   stroke: var(--canvas-ink);
   stroke-width: min(2.5px, calc(var(--node-r, 10px) * 0.3));
+}
+/* Key knowledge glows; selection and focus keep the stroke for themselves. */
+.graph-node.key circle {
+  filter: drop-shadow(0 0 3px var(--key-glow)) drop-shadow(0 0 7px var(--key-glow));
+}
+.graph-legend .legend-key::before {
+  background: var(--swatch, #0e8159);
+  box-shadow: 0 0 0 1px var(--key-glow), 0 0 5px var(--key-glow);
 }
 .graph-node.archived circle,
 .graph-node.stale circle {

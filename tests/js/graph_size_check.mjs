@@ -11,10 +11,10 @@ const context = vm.createContext({ console, Math, document: {}, window: {}, matc
 vm.runInContext(readFileSync(process.argv[2], "utf8"), context);
 vm.runInContext(
   readFileSync(process.argv[3], "utf8") +
-    "\n;this.graphPercentiles = graphPercentiles; this.graphNodeRadius = graphNodeRadius; this.graphEdgeWidth = graphEdgeWidth; this.graphHitRadius = graphHitRadius;",
+    "\n;this.graphPercentiles = graphPercentiles; this.graphNodeRadius = graphNodeRadius; this.graphEdgeWidth = graphEdgeWidth; this.graphHitRadius = graphHitRadius; this.graphKeyNodes = graphKeyNodes;",
   context,
 );
-const { graphPercentiles, graphNodeRadius, graphEdgeWidth, graphHitRadius } = context;
+const { graphPercentiles, graphNodeRadius, graphEdgeWidth, graphHitRadius, graphKeyNodes } = context;
 assert.equal(typeof graphPercentiles, "function");
 assert.equal(typeof graphNodeRadius, "function");
 
@@ -78,5 +78,16 @@ assert.ok(graphEdgeWidth(5) > graphEdgeWidth(1), "heavier edges draw wider");
 // large node's hit area is its own circle.
 assert.equal(graphHitRadius(2.5), 8);
 assert.equal(graphHitRadius(14), 14);
+
+// Key knowledge: the notes ranked in the top tenth of knowledge, at most eight, strongest first.
+// Files never count, and when every note ties no note stands out, so none is key.
+const notes = Array.from({ length: 40 }, (_, index) => ({ id: "k" + index, type: "insight", score: index / 40 }));
+const withFiles = [...notes, ...Array.from({ length: 50 }, (_, index) => ({ id: "f" + index, type: "file", score: 0.99 }))];
+const key = [...graphKeyNodes(withFiles, graphPercentiles(withFiles))];
+assert.deepEqual(key, ["k39", "k38", "k37", "k36"]);
+const many = Array.from({ length: 200 }, (_, index) => ({ id: "m" + index, type: "insight", score: index / 200 }));
+assert.equal(graphKeyNodes(many, graphPercentiles(many)).size, 8, "at most eight key notes");
+const tied = Array.from({ length: 20 }, (_, index) => ({ id: "t" + index, type: "insight", score: 0.67 }));
+assert.equal(graphKeyNodes(tied, graphPercentiles(tied)).size, 0, "equal notes: none stands out");
 
 console.log("graph size checks passed");
