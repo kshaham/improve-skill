@@ -319,7 +319,8 @@ function graphQueryKey() {
   });
 }
 
-function renderGraphView() {
+// The Knowledge tab's header counts, shown above both the graph and the wiki.
+function renderKnowledgeMetrics() {
   const summary = snapshot?.graph;
   $("graph-total").textContent = summary
     ? `${countText(summary.nodes)} · ${countText(summary.edges)}`
@@ -327,6 +328,11 @@ function renderGraphView() {
   $("graph-insights").textContent = countText(summary?.insights || 0);
   $("graph-runs").textContent = countText(summary?.runs || 0);
   $("graph-refined").textContent = relativeTime(summary?.last_refine);
+}
+
+function renderGraphView() {
+  const summary = snapshot?.graph;
+  renderKnowledgeMetrics();
   $("visible-count").textContent = graphData
     ? `${countText(graphData.nodes.length)} of ${countText(graphData.total_nodes)} nodes shown`
     : "Loading knowledge…";

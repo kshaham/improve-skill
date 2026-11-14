@@ -21,6 +21,7 @@ let wikiFilter = "",
 let wikiData = null,
   wikiPage = "index",
   wikiOnScreen = null,
+  wikiRevision = null,
   wikiLoading = false,
   wikiMode = false;
 
@@ -35,11 +36,9 @@ function applyKnowledgeMode(wiki) {
 function setKnowledgeMode(wiki) {
   applyKnowledgeMode(wiki);
   writeViewLocation();
-  if (wiki) loadWiki();
-  else {
-    graphFitPending = true;
-    renderGraphView();
-  }
+  if (!wiki) graphFitPending = true;
+  // The same path as a refresh: the export label and title follow, and the shown mode renders.
+  renderCards();
 }
 
 // A link to a graph node always shows the graph; the caller renders it.
@@ -49,18 +48,41 @@ function showGraphMode() {
   graphFitPending = true;
 }
 
-// The wiki changes only when a session finishes, so a board refresh loads it once.
+// The wiki changes only when a session finishes, in the same sync that bumps the graph's
+// revision: an open board reloads it then, and otherwise renders what it has.
 function renderWikiView() {
+  renderKnowledgeMetrics();
+  const revision = snapshot?.graph?.revision;
   if (!wikiData) loadWiki();
+  else if (revision != null && revision !== wikiRevision) loadWiki();
   else if (wikiOnScreen !== wikiPage) renderWiki();
+}
+
+function exportWiki() {
+  if (!wikiData?.pages?.index) return;
+  const url = URL.createObjectURL(
+    new Blob([JSON.stringify({ repo: snapshot?.repo, exported_at: new Date().toISOString(), ...wikiData }, null, 2)], {
+      type: "application/json",
+    }),
+  );
+  const link = element("a");
+  link.href = url;
+  link.download = "improve-knowledge-wiki.json";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 async function loadWiki() {
   if (wikiLoading) return;
   wikiLoading = true;
+  wikiRevision = snapshot?.graph?.revision ?? null;
   try {
-    wikiData = await boardJSON("/api/wiki");
-    renderWiki();
+    const fresh = await boardJSON("/api/wiki");
+    // Graph writes during a session bump the revision but leave the wiki as it was: keep the
+    // page, and the reader's focus and selection, unless the document changed.
+    const unchanged = Boolean(wikiData) && fresh.built_at === wikiData.built_at && wikiOnScreen === wikiPage;
+    wikiData = fresh;
+    if (!unchanged) renderWiki();
   } catch (error) {
     $("wiki-page").replaceChildren(element("p", "form-error", "The wiki could not load. " + error.message));
   } finally {

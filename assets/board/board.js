@@ -542,11 +542,11 @@ function renderCards() {
       : activeView === "overview"
         ? "Export overview ↗"
         : activeView === "graph"
-          ? "Export graph ↗"
+          ? wikiMode ? "Export wiki ↗" : "Export graph ↗"
           : "Export tasks ↗";
   $("export").title =
     activeView === "graph"
-      ? "Export the nodes and links currently shown"
+      ? wikiMode ? "Export every wiki page as JSON" : "Export the nodes and links currently shown"
       : activeView === "overview"
       ? "Export area totals and all matching recorded activity"
       : activeView === "requests"
@@ -984,7 +984,7 @@ $("task-dialog").addEventListener("close", () => {
 $("export").addEventListener("click", () => {
   if (!snapshot) return;
   if (activeView === "overview") return exportOverview();
-  if (activeView === "graph") return exportGraph();
+  if (activeView === "graph") return wikiMode ? exportWiki() : exportGraph();
   const blob = new Blob(
     [
       JSON.stringify(

@@ -228,6 +228,38 @@ class WikiLocationTests(unittest.TestCase):
         fallback = script[script.index("if (!wikiOwn(pages, wikiPage)) {"):]
         self.assertIn("writeViewLocation();", fallback[:fallback.index("}")])
 
+class WikiLiveBoardTests(unittest.TestCase):
+    def test_an_open_board_reloads_the_wiki_when_a_session_ends(self):
+        # The run-end build happens in the same sync that bumps the graph revision.
+        script = (ASSETS / "wiki.js").read_text()
+        view = script[script.index("function renderWikiView() {"):]
+        view = view[:view.index("\n}")]
+        self.assertIn("snapshot?.graph?.revision", view)
+        self.assertIn("wikiRevision", view)
+        loader = script[script.index("async function loadWiki() {"):]
+        self.assertIn("wikiRevision = snapshot?.graph?.revision", loader[:loader.index("\n}")])
+        # Every graph write during a session bumps the revision; the wiki changes only at session
+        # end, so an unchanged document keeps the page (and keyboard focus) as it is.
+        self.assertIn("fresh.built_at === wikiData.built_at && wikiOnScreen === wikiPage", loader[:loader.index("\n}")])
+        self.assertIn("if (!unchanged) renderWiki();", loader[:loader.index("\n}")])
+        self.assertNotIn("wikiData = null", view)
+
+    def test_metrics_and_export_follow_the_wiki(self):
+        graph_js = (ASSETS / "graph.js").read_text()
+        self.assertIn("function renderKnowledgeMetrics() {", graph_js)
+        self.assertIn("renderKnowledgeMetrics();", graph_js[graph_js.index("function renderGraphView() {"):])
+        script = (ASSETS / "wiki.js").read_text()
+        view = script[script.index("function renderWikiView() {"):]
+        self.assertIn("renderKnowledgeMetrics();", view[:view.index("\n}")])
+        self.assertIn("function exportWiki() {", script)
+        board = (ASSETS / "board.js").read_text()
+        self.assertIn('if (activeView === "graph") return wikiMode ? exportWiki() : exportGraph();', board)
+        self.assertIn('wikiMode ? "Export wiki ↗" : "Export graph ↗"', board)
+        self.assertIn('wikiMode ? "Export every wiki page as JSON" : "Export the nodes and links currently shown"', board)
+        # Switching modes re-renders through renderCards, so the export label and title follow at once.
+        switch = script[script.index("function setKnowledgeMode(wiki) {"):]
+        self.assertIn("renderCards();", switch[:switch.index("\n}")])
+
 class WikiStyleTests(unittest.TestCase):
     def rule(self, css, selector):
         start = css.index("\n" + selector + " {")
