@@ -262,6 +262,7 @@ symlinks: the build, the board, and the CLI refuse them.
 G wiki                    # the index page as TOON (cheapest for an agent)
 G wiki knowledge          # any page: knowledge, changes, dreams, topics, sessions, areas/NAME
 G wiki knowledge --budget 2000  # the strongest notes, across kinds, that fit 2,000 tokens
+G wiki topics --budget 1000     # notes go, weakest first, before any topic is left out
 G wiki pages              # the page list (sessions, and one page per area)
 G wiki changes --markdown # the Markdown file instead
 G wiki build              # rebuild by hand; refused (exit 2) until a session has finished
