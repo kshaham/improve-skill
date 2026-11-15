@@ -100,6 +100,8 @@ def budgeted(result, budget, draw, order=None):
     """Graphify's token-budgeted answer: drop the lowest-ranked rows of the longest lists until
     the rendering fits, then say exactly what was left out and what budget shows it all.
     `order` names lists to empty one after another instead (rows that others refer to last).
+    Each list keeps its top row (an empty answer reads as "nothing found"); only lists that an
+    `order` cuts before its last one may empty.
 
     Each row's cost is estimated once (its share of the rendered size, scaled from its JSON
     size), the cut is planned from those estimates, and the result is rendered only a few
@@ -121,7 +123,7 @@ def budgeted(result, budget, draw, order=None):
             break
         saved = 0.0
         while saved < overshoot:
-            lists = [(key, rows) for key, rows in row_lists(trimmed) if rows]
+            lists = cuttable(trimmed, order)
             if not lists:
                 break
             ordered = [item for name in (order or ()) for item in lists if item[0] == name]
@@ -129,13 +131,21 @@ def budgeted(result, budget, draw, order=None):
             saved += scale * (len(json.dumps(rows[-1], separators=(",", ":"))) + 1)
             cut(trimmed, key)
         text = draw(trimmed)
-        if not any(rows for _, rows in row_lists(trimmed)):
+        if not cuttable(trimmed, order):
             break
     shown = sum(len(rows) for _, rows in row_lists(trimmed))
     needed = math.ceil(len(full) / CHARS_PER_TOKEN) + 20
     note = (f"[!] TRUNCATED: showing {shown} of {total} rows (highest ranked kept); --budget {needed} shows everything"
             if shown < total else f"[!] Complete answer is over budget ({math.ceil(len(text) / CHARS_PER_TOKEN)} tokens)")
+    if "\u2026[+" in text:
+        note += "; cells ending in \u2026[+N] are shortened (--full shows them)"
     return note + "\n" + text
+
+
+def cuttable(result, order):
+    """Lists that may lose a row: any with two or more, or one an `order` empties before its last."""
+    early = set((order or ())[:-1])
+    return [(key, rows) for key, rows in row_lists(result) if len(rows) > 1 or (rows and key in early)]
 
 
 def print_context(result):

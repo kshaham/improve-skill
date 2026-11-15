@@ -152,6 +152,30 @@ class BudgetTests(HelperCase):
         self.assertFalse(again.stdout.startswith("[!]"))
         self.assertEqual(again.stdout, full.stdout)
 
+    def test_should_keep_the_top_row_however_small_the_budget(self):
+        # An empty list reads as "nothing found"; the strongest row over budget is the honest answer.
+        rows = [{"id": f"insight:{index}", "summary": f"Note {index} " + "x" * 60} for index in range(6)]
+        text = graph_cli.budgeted(rows, 5, graph_cli.render)
+        header, _, body = text.partition("\n")
+        self.assertTrue(header.startswith("[!] TRUNCATED: showing 1 of 6 rows"), header)
+        self.assertIn("insight:0", body)
+        self.assertNotIn("insight:1", body)
+        result = {"title": "Topics", "groups": [{"id": "group:a"}, {"id": "group:b"}],
+                  "notes": [{"topic": "group:b", "id": "insight:9", "text": "x" * 80}]}
+        text = graph_cli.budgeted(result, 3, graph_cli.render, order=("notes", "groups"))
+        self.assertIn("group:a", text, "the last list in a cut order keeps its top row")
+        self.assertNotIn("insight:9", text, "earlier lists in the order may empty")
+
+    def test_should_say_when_width_also_shortened_text(self):
+        with graph.locked(self.repo) as value:
+            for index in range(6):
+                graph.add_insight(value, f"Cache note {index}: flush the {index} writer queue before reading " + "y" * 120,
+                                  "fact", about=["file:src/a.py"], repo=self.repo)
+        cut = run("improve_graph.py", self.repo, "search", "cache writer queue", "--budget", "60", "--width", "40")
+        self.assertEqual(cut.returncode, 0, cut.stderr)
+        first = cut.stdout.partition("\n")[0]
+        self.assertIn("--full", first, "the note says how to see shortened cells")
+
     def test_should_never_cut_context_seeds(self):
         result = {"seeds": ["file:a", "file:b"], "insights": [{"id": str(index), "summary": "x" * 50} for index in range(9)]}
         text = graph_cli.budgeted(result, 30, graph_cli.render)

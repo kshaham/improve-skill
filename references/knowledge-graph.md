@@ -134,7 +134,8 @@ the read lock and one about the write lock stay apart); connectives such as "bec
    Long text cells are cut at `--width` characters (160) and end in `…[+N]` (N characters
    cut); ids and paths never are; `--full` shows everything. `context`, `search`, and `node`
    take `--budget TOKENS`: the lowest-ranked rows go first and the first line says how many
-   were left out and which budget shows everything. A `context` answer whose code section
+   were left out and which budget shows everything. Each list keeps its top row however small
+   the budget, so an empty list always means nothing was found. A `context` answer whose code section
    says `stale` was built from an index older than the latest commit; the next sync
    refreshes it.
 
