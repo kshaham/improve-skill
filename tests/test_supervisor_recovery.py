@@ -206,7 +206,7 @@ class PromptTests(SupervisorFixture):
         self.assertIn("SKILL.md", prompt)
         self.assertIn("…[+N]", prompt)
         self.assertIn("After real work or discovery, persist cycle + 1", prompt)
-        self.assertEqual(runtime.VERSION, "1.17.0")
+        self.assertEqual(runtime.VERSION, "1.18.0")
 
     def test_late_improve_max_prompt_keeps_the_run_its_terms(self):
         self.assertIn("still the same improve-max run", self.supervisor("improve-max", remaining=3600).prompt())
