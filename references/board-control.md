@@ -35,7 +35,7 @@ unimplemented work; it must not extend the deadline.
 | `guidance` | Update the saved focus/constraints and next action, recording the request UUID and the user's intent in the journal. Carry that guidance into subsequent cycles. |
 | `priority` | Find the current task by its exact `task_key`; for a bet use `bets.jsonl`. Record `user_priority` as `high`, `normal`, or `low`, and rank accordingly within the user's scope and focus plan. Do not overwrite severity or fabricate supporting evidence. |
 | `note` | Append `{request_id: "<UUID>", text: "<user text>", at: "<UTC timestamp>"}` to the target's `user_notes`, only if that UUID is absent. Notes can annotate finished current tasks/bets; preserve status, evidence, verification, measurements, and rejection reasons. Acknowledge after saving. |
-| `focus` | `areas` maps task areas to `prefer` or `skip` (omitted areas are normal; an empty map resets to balanced). Optional `themes` lists improvement categories chosen from board tiles (see `references/categories.md`). Replace `run.json.focus.board_areas` with `{prefer: [...], skip: [...], themes: [...], request_id: "<UUID>", at: "<UTC timestamp>"}` and journal the change. Rank `prefer` areas ahead of unmarked areas after `user_priority`; do not start new tasks or finder lanes in `skip` areas, and leave existing ready work there queued rather than rejected. A later focus request fully replaces an earlier one. Focus cannot add areas excluded at intake, widen authorization, or suppress a confirmed critical in-scope vulnerability; say so in the acknowledgment when it applies. |
+| `focus` | `areas` maps task areas to `prefer` or `skip` (omitted areas are normal; an empty map resets to balanced). Optional `themes` lists improvement categories chosen from board tiles (see `references/categories.md`). Optional `agents` (a whole number from 1 to 10) is the board's **Work in parallel** switch: see "Parallel agents" below. Replace `run.json.focus.board_areas` with `{prefer: [...], skip: [...], themes: [...], agents: N, request_id: "<UUID>", at: "<UTC timestamp>"}` (leave `agents` out when the request has none) and journal the change. Rank `prefer` areas ahead of unmarked areas after `user_priority`; do not start new tasks or finder lanes in `skip` areas, and leave existing ready work there queued rather than rejected. A later focus request fully replaces an earlier one. Focus cannot add areas excluded at intake, widen authorization, or suppress a confirmed critical in-scope vulnerability; say so in the acknowledgment when it applies. |
 | `retry` | The user says a blocked task's blocker is gone (`task_key`, `expected_status: blocked`; `text` may say what changed). Re-check the blocker; if it is cleared, set the task back to `ready` with a `reopens`-style note recording the request UUID and keep its original evidence; if it is still blocked, decline with what is still missing. Never retry without confirming the blocker changed. |
 | `withdraw` | The user cancelled a pending request (`target_id`). The helper already hides the target from `pending`; acknowledge the withdrawal as `applied` after confirming nothing from the target was applied, or `declined` with what had already been done. A request the skill already answered cannot be withdrawn. |
 | `decision` | Verify that the named item still awaits that decision. An approved ordinary proposal becomes eligible `ready` work; a declined proposal becomes `rejected` with the user's reason. For improve-max, preserve its required characterization/spike gates; approval does not mean a bet has landed or passed measurement. |
@@ -131,3 +131,31 @@ Every browser mutation requires a same-origin session capability and the current
 identity. Old tabs cannot control a replacement run. The browser capability is separate
 from the CLI-only service stop token. Reports are rendered as text and can be downloaded;
 the board never executes report or request content as code.
+
+## Parallel agents
+
+A focus request with `agents: N` means the user ticked **Work in parallel** on the board and
+set the slider to N. It is their explicit request to use helpers: in Claude Code, subagents or
+one workflow of at most N agents (the board switch is the opt-in that workflows need); in
+Codex, its subagents when the host has them. It lasts until a later focus request, which
+replaces it; a request with no `agents` field turns it off, and then you decide for yourself
+when a helper is worth it, as before.
+
+While it is on:
+
+- **Use helpers where they are safe:** refill finders (N replaces the default cap of four),
+  profiling and measurement, and independent counter-scenario review. Give each helper a
+  distinct, read-only assignment and the evidence rules in `finder-briefs.md`.
+- **Never run more than N at once,** counting every subagent and every agent inside a
+  workflow. Finish or collect helpers before a daemon cycle ends; none carry over.
+- **Helpers never edit.** Fixes stay as SKILL.md describes them: one item at a time, in the
+  main session, each behind its gate. A helper that finds a fix describes it with evidence;
+  you make the change.
+- **Nothing else widens.** Helpers follow the run's scope, exclusions, and authorization;
+  a helper's finding is a candidate until you confirm it against the code.
+- **No helpers available?** Run the same assignments yourself, one after another, and say
+  so in the acknowledgment note.
+
+Acknowledge the request as `applied` with the number you will use, for example "Using up to
+5 parallel agents for discovery and review." Report helper use in the hourly report's
+discovery line; do not count helper activity as progress.

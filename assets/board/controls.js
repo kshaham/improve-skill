@@ -134,6 +134,7 @@ function renderControls() {
     (row) => row.status === "pending",
   ).length;
   $("requests-count").textContent = countText(pending);
+  positionTabIndicator(); // The count changes the tab's width.
   $("requests-tab").title =
     countText(pending) + " pending requests in selected runs";
   prepareDrafts();
@@ -221,7 +222,7 @@ function renderRequests() {
           "",
           row.title ||
             row.task_title ||
-            (row.type === "focus" ? focusSummary(row.areas, row.themes) : row.text),
+            (row.type === "focus" ? focusSummary(row.areas, row.themes, row.agents) : row.text),
         ),
       );
       summary.append(

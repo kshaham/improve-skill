@@ -129,7 +129,7 @@ function attachDictation(id) {
 
 function describeIntent(intent) {
   if (!intent || intent.type === "empty") return "Speak or type a command.";
-  if (intent.type === "focus") return focusSummary(intent.areas, intent.themes);
+  if (intent.type === "focus") return focusSummary(intent.areas, intent.themes, savedFocus().agents);
   if (intent.type === "task")
     return `${intent.title} · ${intent.area} · ${intent.priority} priority`;
   if (intent.type === "control")
@@ -275,8 +275,11 @@ function voicePayload(intent) {
   const payload = { type: intent.type, run_id, text: (intent.text || "").slice(0, 8000) };
   if (intent.type === "task")
     Object.assign(payload, { title: intent.title, area: intent.area, priority: intent.priority });
-  if (intent.type === "focus")
+  if (intent.type === "focus") {
     Object.assign(payload, { areas: intent.areas, themes: intent.themes || [], text: (intent.text || "").slice(0, 2000) });
+    // A focus request replaces the last one, so a spoken change keeps the parallel-agents choice.
+    if (savedFocus().agents) payload.agents = savedFocus().agents;
+  }
   return ["/api/requests", payload];
 }
 

@@ -5,7 +5,8 @@ file, area, gate, blocker, and piece of knowledge, how they connect, and the lin
 dreaming inferred from the evidence. It survives `--new-run` archival. Read it before work
 so you do not repeat a failed approach, and write to it when you learn something a future
 run would need. Nothing removed from it is lost: every removed node is kept in a history
-and can be restored.
+and can be restored. The graph and its wiki belong to this repository alone: knowledge is
+never read from, or written to, another repository's graph, and each board shows only its own.
 
 The helper is standard-library Python (SQLite). Below, `G` stands for:
 

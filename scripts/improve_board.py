@@ -29,13 +29,16 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
 from improve_runtime import StateError, atomic_json, epoch, git, lock_active, read_json, recorded_timing, repo_lock, stamp
+import improve_boards
 import improve_control
-from improve_control import AREAS, THEMES, operator_lock, pause_requested, queue_request, queue_submission, read_local, request_view, request_view_at, require_run, set_pause
+from improve_control import AREAS, THEMES, agent_count, operator_lock, pause_requested, queue_request, queue_submission, read_local, request_view, request_view_at, require_run, set_pause
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets/board"
 SERVICE_FILES = {"board.json", "board.lock", "board.log", "operator.lock"}
 SNAPSHOT_EXTRAS = ("learning", "graph")
 DEFAULT_PORT = 8765
+# How long a board trusts what it last learned about the other boards on this machine.
+BOARDS_TTL_SECONDS = 5
 # The parse cache holds at least this many files, and grows with the number of run
 # directories so that an unchanged "All runs" poll re-parses nothing (LRU beyond that).
 FILE_CACHE_LIMIT = 64
@@ -319,6 +322,7 @@ def focus_summary(focus):
     themes = board.get("themes") if isinstance(board, dict) else None
     return {"areas": areas,
             "themes": [theme for theme in THEMES if isinstance(themes, list) and theme in themes],
+            "agents": agent_count(board.get("agents")) if isinstance(board, dict) else 0,
             "request_id": board.get("request_id") if isinstance(board, dict) else None,
             "applied_at": board.get("at") if isinstance(board, dict) else None,
             "excluded": [text_value(item)[:200] for item in excluded[:20]] if isinstance(excluded, list) else []}
@@ -833,6 +837,21 @@ def board_status(repo):
         return {"running": False}
 
 
+def other_boards(server):
+    """The other codebases' boards, and the one to lead to, refreshed every few seconds. This
+    board serves only its own repository; a fault here only hides the links."""
+    cached = getattr(server, "boards_cache", None)
+    if cached and time.monotonic() - cached[0] < BOARDS_TTL_SECONDS:
+        return cached[1]
+    try:
+        improve_boards.record(server.repo, server.server_port, server.instance)
+        value = improve_boards.view(server.repo, usual_address=server.server_port == preferred_port())
+    except Exception:  # The registry is a convenience; the board itself must keep answering.
+        value = {"others": [], "active": None, "follow": False}
+    server.boards_cache = (time.monotonic(), value)
+    return value
+
+
 class BoardServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -909,6 +928,7 @@ class BoardHandler(BaseHTTPRequestHandler):
         except Exception as exc:  # Never drop the connection; report the fault as JSON.
             return self.internal_error("board snapshot", exc)
         self.server.snapshot_built_at = time.monotonic()
+        snapshot["boards"] = other_boards(self.server)
         etag = snapshot_etag(snapshot)
         if etag_matches(self.headers.get("If-None-Match"), etag):
             return self.reply_not_modified(etag)
@@ -1019,11 +1039,14 @@ class BoardHandler(BaseHTTPRequestHandler):
         assets = {"/": ("index.html", "text/html; charset=utf-8"),
                   "/board.js": ("board.js", "text/javascript; charset=utf-8"),
                   "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
+                  "/motion.js": ("motion.js", "text/javascript; charset=utf-8"),
+                  "/boards.js": ("boards.js", "text/javascript; charset=utf-8"),
                   "/health.js": ("health.js", "text/javascript; charset=utf-8"),
                   "/controls.js": ("controls.js", "text/javascript; charset=utf-8"),
                   "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),
                   "/drafts.js": ("drafts.js", "text/javascript; charset=utf-8"),
                   "/triage.js": ("triage.js", "text/javascript; charset=utf-8"),
+                  "/agents.js": ("agents.js", "text/javascript; charset=utf-8"),
                   "/focus.js": ("focus.js", "text/javascript; charset=utf-8"),
                   "/categories.js": ("categories.js", "text/javascript; charset=utf-8"),
                   "/voice-intent.js": ("voice-intent.js", "text/javascript; charset=utf-8"),
@@ -1165,6 +1188,7 @@ def serve(repo, port=None, allowed_hosts=()):
                     allowed_hosts=sorted(server.allowed_hosts),
                     phone_urls=[f"https://{host}" for host in sorted(server.allowed_hosts)])
         atomic_json(state / "board.json", info)
+        improve_boards.record(repo, server.server_port, server.instance)
         def stop(*_):
             threading.Thread(target=server.shutdown, daemon=True).start()
         for sig in (signal.SIGTERM, signal.SIGINT):
@@ -1173,6 +1197,7 @@ def serve(repo, port=None, allowed_hosts=()):
         try:
             server.serve_forever(poll_interval=0.2)
         finally:
+            improve_boards.forget(repo, server.instance)
             server.server_close()
 
 

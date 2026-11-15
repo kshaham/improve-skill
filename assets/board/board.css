@@ -3,21 +3,21 @@
    which tests/test_board_theme.py checks, along with the two dark blocks staying identical. */
 :root {
   color-scheme: light;
-  --ink: #17201b;
-  --ink-2: #3d4943;
-  --muted: #5c6962;
-  --line: #e1e6e3;
-  --soft: #c3ccc7;
-  --page: #f6f8f7;
+  --ink: #161c18;
+  --ink-2: #3a433d;
+  --muted: #5b635d;
+  --line: #e5e2da;
+  --soft: #c8c3b8;
+  --page: #f7f6f2;
   --surface: #ffffff;
-  --surface-2: #f1f5f3;
-  --surface-3: #e8eeeb;
+  --surface-2: #f2f0ea;
+  --surface-3: #e9e6de;
   --key-glow: #f2c14e;
-  --accent: #0e8159;
-  --accent-strong: #0a6646;
-  --accent-ink: #0a6646;
-  --accent-soft: #e2f3eb;
-  --accent-line: #a9dcc4;
+  --accent: #0c7c57;
+  --accent-strong: #0a6747;
+  --accent-ink: #0a6747;
+  --accent-soft: #e1f3ea;
+  --accent-line: #a8dac3;
   --on-accent: #ffffff;
   --focus-ring: #2f9e72;
   --edge-accent: #3fbf86;
@@ -35,10 +35,10 @@
   --blue: #3a7fc0;
   --info-ink: #285f92;
   --info-soft: #e8f1fa;
-  --neutral-ink: #4a5550;
-  --neutral-soft: #edf1ef;
-  --sidebar: #0d1813;
-  --sidebar-2: #16241d;
+  --neutral-ink: #4a524c;
+  --neutral-soft: #eeece6;
+  --sidebar: #0b1410;
+  --sidebar-2: #142019;
   --sidebar-ink: #e7efea;
   --sidebar-muted: #97aaa0;
   --sidebar-accent: #4fd69a;
@@ -47,15 +47,16 @@
   --chip-ink-s: 52%;
   --chip-ink-l: 27%;
   --tile-l: 97%;
-  --radius-xs: 5px;
-  --radius-sm: 7px;
-  --radius: 9px;
-  --radius-lg: 12px;
-  --shadow-1: 0 1px 2px rgb(8 20 14 / 0.05), 0 1px 1px rgb(8 20 14 / 0.03);
-  --shadow-2: 0 10px 24px -10px rgb(8 20 14 / 0.22), 0 2px 4px rgb(8 20 14 / 0.05);
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --shadow-1: 0 1px 2px rgb(20 24 20 / 0.05), 0 1px 1px rgb(20 24 20 / 0.03);
+  --shadow-2: 0 14px 30px -14px rgb(20 24 20 / 0.22), 0 3px 8px -2px rgb(20 24 20 / 0.06);
   --shadow-3: 0 24px 80px rgb(4 14 9 / 0.26);
   --shadow-up: 0 -4px 16px rgb(8 20 14 / 0.06);
-  --shadow-accent: 0 6px 16px rgb(14 129 89 / 0.35);
+  --shadow-accent: 0 8px 20px -6px rgb(12 124 87 / 0.42);
+  --shadow-glow: 0 0 0 1px var(--accent-line), 0 12px 26px -14px rgb(12 124 87 / 0.4);
   --canvas: #10233f;
   --canvas-dot: #203a5e;
   --canvas-ink: #e9f0f8;
@@ -71,13 +72,13 @@
     --ink: #e5ede8;
     --ink-2: #bfcbc4;
     --muted: #96a59d;
-    --line: #27322c;
-    --soft: #425049;
-    --page: #0c110f;
-    --surface: #131a16;
-    --surface-2: #19221d;
-    --surface-3: #202b25;
-    --accent: #3ccb8b;
+    --line: #252c29;
+    --soft: #404a45;
+    --page: #0a0d0c;
+    --surface: #111514;
+    --surface-2: #161b19;
+    --surface-3: #1d2421;
+    --accent: #3fcf93;
     --accent-strong: #62d9a3;
     --accent-ink: #5fd7a0;
     --accent-soft: #12302a;
@@ -111,15 +112,16 @@
     --chip-ink-s: 60%;
     --chip-ink-l: 76%;
     --tile-l: 14%;
-    --radius-xs: 5px;
-    --radius-sm: 7px;
-    --radius: 9px;
-    --radius-lg: 12px;
+    --radius-xs: 6px;
+    --radius-sm: 8px;
+    --radius: 10px;
+    --radius-lg: 14px;
     --shadow-1: 0 1px 2px rgb(0 0 0 / 0.45);
     --shadow-2: 0 12px 28px -10px rgb(0 0 0 / 0.65), 0 2px 4px rgb(0 0 0 / 0.3);
     --shadow-3: 0 24px 80px rgb(0 0 0 / 0.6);
     --shadow-up: 0 -4px 16px rgb(0 0 0 / 0.4);
-    --shadow-accent: 0 6px 16px rgb(60 203 139 / 0.3);
+    --shadow-accent: 0 8px 22px -6px rgb(63 207 147 / 0.35);
+    --shadow-glow: 0 0 0 1px var(--accent-line), 0 12px 28px -14px rgb(63 207 147 / 0.35);
     --canvas: #0b1a30;
     --canvas-dot: #1b3150;
     --canvas-ink: #e9f0f8;
@@ -136,13 +138,13 @@
   --ink: #e5ede8;
   --ink-2: #bfcbc4;
   --muted: #96a59d;
-  --line: #27322c;
-  --soft: #425049;
-  --page: #0c110f;
-  --surface: #131a16;
-  --surface-2: #19221d;
-  --surface-3: #202b25;
-  --accent: #3ccb8b;
+  --line: #252c29;
+  --soft: #404a45;
+  --page: #0a0d0c;
+  --surface: #111514;
+  --surface-2: #161b19;
+  --surface-3: #1d2421;
+  --accent: #3fcf93;
   --accent-strong: #62d9a3;
   --accent-ink: #5fd7a0;
   --accent-soft: #12302a;
@@ -176,15 +178,16 @@
   --chip-ink-s: 60%;
   --chip-ink-l: 76%;
   --tile-l: 14%;
-  --radius-xs: 5px;
-  --radius-sm: 7px;
-  --radius: 9px;
-  --radius-lg: 12px;
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius: 10px;
+  --radius-lg: 14px;
   --shadow-1: 0 1px 2px rgb(0 0 0 / 0.45);
   --shadow-2: 0 12px 28px -10px rgb(0 0 0 / 0.65), 0 2px 4px rgb(0 0 0 / 0.3);
   --shadow-3: 0 24px 80px rgb(0 0 0 / 0.6);
   --shadow-up: 0 -4px 16px rgb(0 0 0 / 0.4);
-  --shadow-accent: 0 6px 16px rgb(60 203 139 / 0.3);
+  --shadow-accent: 0 8px 22px -6px rgb(63 207 147 / 0.35);
+  --shadow-glow: 0 0 0 1px var(--accent-line), 0 12px 28px -14px rgb(63 207 147 / 0.35);
   --canvas: #0b1a30;
   --canvas-dot: #1b3150;
   --canvas-ink: #e9f0f8;
@@ -195,13 +198,57 @@
   --edge-highlight: #5fe0a6;
   --key-glow: #f2c14e;
 }
+/* Scales that do not change with the theme: a 4px spacing grid, a 1.2 type scale, and motion.
+   Entrances ease out, direct manipulation springs, and every animation moves only transform,
+   opacity, filter, clip-path, or a background position; reduced motion turns all of it off. */
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 14px;
+  --text-lg: 17px;
+  --text-xl: 20px;
+  --text-2xl: 28px;
+  --text-3xl: 36px;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: linear(0, 0.12 3%, 0.52 11%, 0.86 20%, 1.03 30%, 1.07 38%, 1.05 47%, 1.01 60%, 0.996 75%, 1);
+  --dur-1: 120ms;
+  --dur-2: 220ms;
+  --dur-3: 360ms;
+  --dur-4: 620ms;
+  --stagger: 28ms;
+  /* The glass top bar stays in view on wide screens; anything else that sticks, and anything
+     scrolled into view, sits below it. Phones have no sticky bar. */
+  --topbar-h: 56px;
+  --sticky-top: var(--topbar-h);
+}
+html {
+  scroll-padding-top: calc(var(--sticky-top) + 12px);
+}
+html.mobile {
+  --sticky-top: 0px;
+}
 * {
   box-sizing: border-box;
 }
 body {
   margin: 0;
-  background: var(--page);
+  background:
+    radial-gradient(1100px 480px at 88% -12%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 62%),
+    var(--page);
+  background-attachment: fixed;
   color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
   font:
     14px/1.5 -apple-system,
     BlinkMacSystemFont,
@@ -243,7 +290,9 @@ a {
   width: 215px;
   position: fixed;
   inset: 0 auto 0 0;
-  background: var(--sidebar);
+  background:
+    radial-gradient(360px 260px at 0% 0%, color-mix(in srgb, var(--sidebar-accent) 14%, transparent), transparent 70%),
+    linear-gradient(180deg, var(--sidebar) 0%, var(--sidebar-2) 100%);
   color: var(--sidebar-ink);
   padding: 31px 22px;
   display: flex;
@@ -261,11 +310,12 @@ a {
   height: 33px;
   display: grid;
   place-items: center;
-  background: var(--accent);
+  background: linear-gradient(140deg, var(--sidebar-accent), var(--accent));
   border-radius: var(--radius);
   margin-right: 9px;
   font-size: 28px;
   color: var(--on-accent);
+  animation: mark-in var(--dur-4) var(--ease-spring) backwards;
 }
 .brand-dot {
   color: var(--sidebar-accent);
@@ -284,7 +334,8 @@ a {
 .nav-item {
   padding: 12px;
   border-radius: var(--radius-sm);
-  background: var(--sidebar-2);
+  background: color-mix(in srgb, var(--sidebar-accent) 9%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sidebar-accent) 16%, transparent);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -301,6 +352,7 @@ a {
   border-radius: 50%;
   background: var(--sidebar-accent);
   margin-left: auto;
+  animation: live-pulse 2.6s var(--ease-in-out) infinite;
 }
 .sidebar-note {
   margin-top: auto;
@@ -338,8 +390,15 @@ main {
   padding: 0 38px;
   min-width: 0;
 }
+/* A slim glass bar that stays in view; it gains a shadow once the page scrolls under it. */
 .topbar {
-  height: 73px;
+  height: var(--topbar-h);
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  background: color-mix(in srgb, var(--page) 78%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  backdrop-filter: blur(14px) saturate(1.5);
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
@@ -368,6 +427,9 @@ main {
   border-radius: 50%;
   background: currentColor;
 }
+.connection:not(.offline):before {
+  animation: live-pulse 2.6s var(--ease-in-out) infinite;
+}
 .connection.offline {
   color: var(--amber);
 }
@@ -385,17 +447,19 @@ main {
   color: var(--muted);
 }
 h1 {
-  font-size: 32px;
-  line-height: 1.2;
-  letter-spacing: -1.2px;
-  font-weight: 640;
+  font-size: var(--text-3xl);
+  line-height: 1.15;
+  letter-spacing: -0.035em;
+  font-weight: 660;
   margin: 10px 0 10px;
+  text-wrap: balance;
 }
 .heading-dot {
   font-size: 9px;
   color: var(--accent);
   vertical-align: middle;
   margin-left: 12px;
+  animation: breathe 2.6s var(--ease-in-out) infinite;
 }
 .page-heading p {
   color: var(--muted);
@@ -416,11 +480,11 @@ button {
   font-size: 12px;
   font-weight: 550;
   transition:
-    background-color 0.12s,
-    border-color 0.12s,
-    color 0.12s,
-    box-shadow 0.12s,
-    transform 0.12s;
+    background-color var(--dur-1),
+    border-color var(--dur-1),
+    color var(--dur-1),
+    box-shadow var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
 }
 /* Hover and press feedback at element specificity, so every class rule (tabs, link buttons, the
    phone navigation, primary actions) keeps its own look. Reduced motion turns transitions off. */
@@ -435,12 +499,16 @@ button:where(:active:not(:disabled)) {
   margin-left: 5px;
 }
 .primary {
-  background: var(--accent);
+  background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 86%, black));
   border-color: var(--accent);
   color: var(--on-accent);
 }
 .primary:hover {
   background: var(--accent-strong);
+}
+.primary:hover:not(:disabled) {
+  box-shadow: var(--shadow-accent);
+  transform: translateY(-1px);
 }
 .stats {
   display: grid;
@@ -451,8 +519,27 @@ button:where(:active:not(:disabled)) {
   overflow: hidden;
 }
 .stat {
+  position: relative;
   padding: 18px 23px;
   border-right: 1px solid var(--line);
+  transition: background-color var(--dur-2);
+}
+.stat:hover {
+  background: var(--surface-2);
+}
+/* A metric strip: the accent rule draws in under the figure being read. */
+.stat::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 2px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform var(--dur-3) var(--ease-out);
+}
+.stat:hover::after {
+  transform: scaleX(1);
 }
 .stat:last-child {
   border: 0;
@@ -463,11 +550,15 @@ button:where(:active:not(:disabled)) {
 }
 .stat strong {
   display: block;
-  font-size: 30px;
-  font-weight: 610;
-  line-height: 1.2;
+  font-size: var(--text-3xl);
+  font-weight: 620;
+  line-height: 1.15;
   margin: 9px 0 6px;
-  letter-spacing: -0.8px;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+}
+.stat strong[data-tick] {
+  animation: stat-tick var(--dur-3) var(--ease-out);
 }
 .stat small {
   font-size: 11px;
@@ -485,7 +576,7 @@ button:where(:active:not(:disabled)) {
 .run-badge {
   background: var(--accent-soft);
   color: var(--accent-ink);
-  border-radius: var(--radius-xs);
+  border-radius: 999px;
   padding: 5px 9px;
   flex-shrink: 0;
   font-weight: 550;
@@ -549,6 +640,13 @@ button:where(:active:not(:disabled)) {
   padding: 0 12px;
   flex: 0 1 340px;
   min-width: 140px;
+  transition:
+    border-color var(--dur-1),
+    box-shadow var(--dur-2) var(--ease-out);
+}
+.search:focus-within {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 .search > span {
   font-size: 23px;
@@ -602,7 +700,7 @@ button:where(:active:not(:disabled)) {
   scrollbar-color: var(--soft) transparent;
 }
 .column {
-  background: var(--surface-3);
+  background: color-mix(in srgb, var(--surface-3) 62%, transparent);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   padding: 12px;
@@ -616,25 +714,39 @@ button:where(:active:not(:disabled)) {
   font-weight: 620;
   padding: 3px 2px 14px;
 }
+/* Status glyphs drawn in CSS: an open ring waits, a half ring is under way and breathes, a
+   diamond is blocked, a dashed ring is a proposal, and a full disc is settled. */
 .column-dot {
-  width: 7px;
-  height: 7px;
-  background: var(--muted);
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--muted);
   border-radius: 50%;
 }
 .column[data-status="in_progress"] .column-dot {
-  background: var(--accent);
+  border-color: var(--accent);
+  background: conic-gradient(var(--accent) 0 50%, transparent 0);
+  animation: live-pulse 2.6s var(--ease-in-out) infinite;
 }
 .column[data-status="done"] .column-dot {
+  border-color: var(--green);
   background: var(--green);
 }
 .column[data-status="blocked"] .column-dot {
+  width: 10px;
+  height: 10px;
+  margin: 1px;
+  border-color: var(--amber);
+  border-radius: 2px;
   background: var(--amber);
+  transform: rotate(45deg);
 }
 .column[data-status="proposed"] .column-dot {
-  background: var(--blue);
+  border-color: var(--blue);
+  border-style: dashed;
 }
 .column[data-status="rejected"] .column-dot {
+  border-color: var(--red);
   background: var(--red);
 }
 .column-count {
@@ -664,13 +776,13 @@ button:where(:active:not(:disabled)) {
   box-shadow: var(--shadow-1);
   color: var(--ink);
   transition:
-    border-color 0.15s,
-    box-shadow 0.15s,
-    transform 0.15s;
+    border-color var(--dur-1),
+    box-shadow var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
 }
 .task-card:hover {
   border-color: var(--accent-line);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
   box-shadow: var(--shadow-2);
 }
 .column[data-status="in_progress"] .task-card {
@@ -686,6 +798,8 @@ button:where(:active:not(:disabled)) {
   margin-bottom: 9px;
 }
 .task-id {
+  font-family: var(--font-mono);
+  letter-spacing: -0.01em;
   max-width: 65%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -831,6 +945,12 @@ dialog::backdrop {
   background: rgb(6 14 10 / 0.5);
   backdrop-filter: blur(3px);
 }
+dialog[open] {
+  animation: dialog-in var(--dur-2) var(--ease-out);
+}
+dialog[open]::backdrop {
+  animation: fade-in var(--dur-2) ease-out;
+}
 .dialog-top {
   display: flex;
   justify-content: space-between;
@@ -938,8 +1058,9 @@ dialog h2 {
     max-width: 45%;
     font-size: 12px;
   }
-  .topbar {
-    height: 52px;
+  /* The bar is shorter here; everything that sticks below it follows the token. */
+  :root {
+    --topbar-h: 52px;
   }
   main {
     margin: 0;
@@ -1015,9 +1136,17 @@ dialog h2 {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  * {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;
+  }
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
   }
 }
 .stat-action {
@@ -1029,11 +1158,30 @@ dialog h2 {
   text-align: left;
 }
 .view-tabs {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
   border-bottom: 1px solid var(--line);
   margin-bottom: 20px;
+}
+/* One indicator slides between tabs (motion.js measures the selected tab); until it has been
+   placed, the selected tab keeps its own underline. */
+.view-tabs::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 2px;
+  background: var(--accent);
+  transform-origin: left;
+  transform: translate(var(--tab-x, 0), var(--tab-y, 0)) scaleX(var(--tab-w, 0));
+  transition: transform var(--dur-3) var(--ease-spring);
+  pointer-events: none;
+}
+.view-tabs[data-indicator] [aria-selected="true"] {
+  border-bottom-color: transparent;
 }
 .view-tabs [role="tab"] {
   display: flex;
@@ -1046,6 +1194,12 @@ dialog h2 {
   background: transparent;
   color: var(--muted);
   font-size: 13px;
+}
+.view-tabs [role="tab"]:hover {
+  color: var(--ink);
+}
+[role="tabpanel"]:not([hidden]) {
+  animation: view-in var(--dur-3) var(--ease-out) backwards;
 }
 .view-tabs [aria-selected="true"] {
   border-bottom-color: var(--accent);
@@ -1483,7 +1637,7 @@ dialog h2 {
 }
 .history-pagination {
   position: sticky;
-  top: 0;
+  top: var(--sticky-top);
   z-index: 2;
   background: var(--page);
   display: flex;
@@ -2319,6 +2473,10 @@ button.danger {
 }
 .mobile .topbar {
   height: 40px;
+  position: static;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 .mobile .stats {
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2596,6 +2754,7 @@ button.danger {
 .category-tile[aria-pressed="true"] .category-glyph {
   background: hsl(var(--hue) 55% 50%);
   color: white;
+  animation: pop var(--dur-3) var(--ease-spring);
 }
 .category-tile[aria-pressed="true"]::after {
   content: "✓";
@@ -2605,6 +2764,7 @@ button.danger {
   font-size: 12px;
   font-weight: 700;
   color: hsl(var(--hue) 55% 42%);
+  animation: pop var(--dur-3) var(--ease-spring);
 }
 .focus-fine-tune {
   margin-top: 16px;
@@ -3463,7 +3623,7 @@ summary:focus-visible {
 }
 .wiki-pages {
   position: sticky;
-  top: 16px;
+  top: calc(var(--sticky-top) + 16px);
 }
 .wiki-page-list {
   display: grid;
@@ -3750,3 +3910,506 @@ summary:focus-visible {
   min-height: 44px;
 }
 /* End knowledge wiki */
+/* Motion. Each animation says that something happened: a card arrived, a task changed state, a
+   figure changed, a view opened. motion.js marks only what changed, so a quiet poll moves
+   nothing. Keyframes animate transform, opacity, filter, clip-path, a background position, or a
+   ring; never layout. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+    filter: blur(4px);
+  }
+}
+@keyframes view-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+}
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+}
+@keyframes mark-in {
+  from {
+    opacity: 0;
+    transform: rotate(-45deg) scale(0.6);
+  }
+}
+@keyframes stat-tick {
+  from {
+    opacity: 0;
+    transform: translateY(45%);
+    filter: blur(3px);
+  }
+}
+@keyframes breathe {
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 45%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+}
+@keyframes sweep {
+  from {
+    background-position: 130% 0;
+    opacity: 1;
+  }
+  to {
+    background-position: -30% 0;
+    opacity: 0;
+  }
+}
+@keyframes node-in {
+  from {
+    opacity: 0;
+    transform: scale(0.2);
+  }
+}
+@keyframes key-breathe {
+  50% {
+    filter: drop-shadow(0 0 4px var(--key-glow)) drop-shadow(0 0 12px var(--key-glow));
+  }
+}
+@keyframes theme-reveal {
+  from {
+    clip-path: circle(0 at var(--reveal-x, 50%) var(--reveal-y, 100%));
+  }
+  to {
+    clip-path: circle(150vmax at var(--reveal-x, 50%) var(--reveal-y, 100%));
+  }
+}
+@keyframes topbar-settle {
+  to {
+    box-shadow: var(--shadow-1);
+  }
+}
+/* New cards and rows rise in, a few at a time; ones already on screen do not move. */
+.task-card[data-enter],
+.task-row[data-enter] {
+  animation: rise-in var(--dur-3) var(--ease-out) backwards;
+  animation-delay: calc(var(--i, 0) * var(--stagger));
+}
+/* A task whose state just changed is swept once by the accent. */
+.task-card[data-moved]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius);
+  background: linear-gradient(
+    105deg,
+    transparent 35%,
+    color-mix(in srgb, var(--accent) 26%, transparent) 50%,
+    transparent 65%
+  );
+  background-size: 260% 100%;
+  background-repeat: no-repeat;
+  animation: sweep 900ms var(--ease-out) both;
+  pointer-events: none;
+}
+/* The pulse ring takes the colour of the dot it surrounds. */
+.column-dot {
+  color: var(--accent);
+}
+.connection:not(.offline):before {
+  color: var(--green);
+}
+.nav-dot {
+  color: var(--sidebar-accent);
+}
+/* A graph node grows in the first time it is drawn; key knowledge breathes slowly. */
+.graph-node[data-enter] circle {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: node-in var(--dur-3) var(--ease-spring) backwards;
+  animation-delay: calc(var(--i, 0) * 12ms);
+}
+.graph-node.key circle {
+  animation: key-breathe 6s var(--ease-in-out) infinite;
+}
+.graph-node.key[data-enter] circle {
+  animation:
+    node-in var(--dur-3) var(--ease-spring) backwards,
+    key-breathe 6s var(--ease-in-out) infinite;
+  animation-delay: calc(var(--i, 0) * 12ms), 0s;
+}
+/* Changing the theme opens the new palette in a circle from the toggle. */
+:root[data-theme-reveal]::view-transition-old(root) {
+  animation: none;
+}
+:root[data-theme-reveal]::view-transition-new(root) {
+  animation: theme-reveal var(--dur-4) var(--ease-out);
+}
+@supports (animation-timeline: scroll()) {
+  html:not(.mobile) .topbar {
+    animation: topbar-settle linear both;
+    animation-timeline: scroll(root block);
+    animation-range: 0 96px;
+  }
+}
+/* Parallel helpers: a switch and a slider whose track is the team. Ten seats sit on the rail;
+   the lit ones are the helpers, and they bob in a slow wave while the setting is on. The thumb
+   carries the count. Only transforms, opacity, and rings animate. */
+.agents-control {
+  --thumb: 28px;
+  display: grid;
+  grid-template-columns: minmax(230px, auto) minmax(240px, 360px) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3) var(--space-6);
+  padding: var(--space-3) var(--space-4);
+  margin: var(--space-4) 0 var(--space-5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  transition:
+    border-color var(--dur-2),
+    box-shadow var(--dur-3) var(--ease-out);
+}
+.agents-control[data-on="true"] {
+  border-color: var(--accent-line);
+  box-shadow: var(--shadow-glow);
+}
+.agents-switch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  cursor: pointer;
+}
+.agents-switch input {
+  -webkit-appearance: none;
+  appearance: none;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  border: 1.5px solid var(--soft);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-1),
+    border-color var(--dur-1),
+    transform var(--dur-2) var(--ease-spring);
+}
+/* The check is two borders of a small box; it springs out from nothing when ticked. */
+.agents-switch input::after {
+  content: "";
+  width: 10px;
+  height: 5px;
+  border-left: 2px solid var(--on-accent);
+  border-bottom: 2px solid var(--on-accent);
+  transform: translateY(-1px) rotate(-45deg) scale(0);
+  transition: transform var(--dur-3) var(--ease-spring);
+}
+.agents-switch input:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.agents-switch input:checked::after {
+  transform: translateY(-1px) rotate(-45deg) scale(1);
+}
+.agents-switch input:active:not(:disabled) {
+  transform: scale(0.88);
+}
+.agents-switch input:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.agents-copy {
+  display: grid;
+  gap: 1px;
+}
+.agents-copy strong {
+  font-size: var(--text-sm);
+  font-weight: 650;
+}
+.agents-copy small {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.agents-slider {
+  position: relative;
+  display: grid;
+  align-items: center;
+  height: 44px;
+  transition:
+    opacity var(--dur-2),
+    filter var(--dur-2);
+}
+.agents-control[data-on="false"] .agents-slider {
+  opacity: 0.5;
+  filter: saturate(0.15);
+}
+/* The rail, and over it the fill, which springs to the chosen share of the rail. */
+.agents-slider::before,
+.agents-slider::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--thumb) / 2);
+  right: calc(var(--thumb) / 2);
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+}
+.agents-slider::after {
+  background: linear-gradient(90deg, var(--accent-strong), var(--accent) 60%, var(--edge-accent));
+  transform-origin: left;
+  transform: scaleX(var(--ratio, 0.444));
+  /* No overshoot here: at ten the fill ends exactly at the rail's end. */
+  transition: transform var(--dur-3) var(--ease-out);
+}
+.agents-control[data-on="false"] .agents-slider::after {
+  transform: scaleX(0);
+}
+.agents-track {
+  position: absolute;
+  z-index: 1;
+  left: calc(var(--thumb) / 2);
+  right: calc(var(--thumb) / 2);
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+}
+/* A zero-width box per seat keeps every dot centred on its stop. */
+.agents-track i {
+  width: 4px;
+  height: 4px;
+  margin: 0 -2px;
+  border-radius: 50%;
+  background: var(--soft);
+  transition:
+    transform var(--dur-3) var(--ease-spring),
+    background-color var(--dur-2);
+  transition-delay: calc(var(--i, 0) * 24ms);
+}
+.agents-track i[data-lit] {
+  background: var(--on-accent);
+  transform: scale(1.4);
+  animation: swarm 2.4s var(--ease-in-out) infinite;
+  animation-delay: calc(var(--i, 0) * 150ms);
+}
+.agents-slider input {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  height: 44px;
+  margin: 0;
+  background: transparent;
+  cursor: grab;
+}
+.agents-slider input:active:not(:disabled) {
+  cursor: grabbing;
+}
+.agents-slider input:disabled {
+  cursor: default;
+}
+.agents-slider input::-webkit-slider-runnable-track {
+  height: 44px;
+  background: transparent;
+}
+.agents-slider input::-moz-range-track {
+  height: 44px;
+  background: transparent;
+}
+.agents-slider input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: var(--thumb);
+  height: var(--thumb);
+  margin-top: 8px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+  transition:
+    transform var(--dur-2) var(--ease-spring),
+    box-shadow var(--dur-2) var(--ease-out);
+}
+.agents-slider input::-moz-range-thumb {
+  box-sizing: border-box;
+  width: var(--thumb);
+  height: var(--thumb);
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+  transition:
+    transform var(--dur-2) var(--ease-spring),
+    box-shadow var(--dur-2) var(--ease-out);
+}
+.agents-slider input:hover:not(:disabled)::-webkit-slider-thumb {
+  transform: scale(1.08);
+}
+.agents-slider input:hover:not(:disabled)::-moz-range-thumb {
+  transform: scale(1.08);
+}
+.agents-slider input:active:not(:disabled)::-webkit-slider-thumb {
+  transform: scale(1.22);
+  box-shadow: var(--shadow-2), 0 0 0 9px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.agents-slider input:active:not(:disabled)::-moz-range-thumb {
+  transform: scale(1.22);
+  box-shadow: var(--shadow-2), 0 0 0 9px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.agents-slider input:focus-visible {
+  outline: none;
+}
+.agents-slider input:focus-visible::-webkit-slider-thumb {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+.agents-slider input:focus-visible::-moz-range-thumb {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+/* The count rides on the thumb. `translate` places it, so `transform` is free for the flip. */
+.agents-value {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  left: calc(var(--thumb) / 2 + var(--ratio, 0.444) * (100% - var(--thumb)));
+  translate: -50% -50%;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-ink);
+  pointer-events: none;
+  transition: scale var(--dur-2) var(--ease-spring);
+}
+.agents-slider:has(input:active:not(:disabled)) .agents-value {
+  scale: 1.22;
+}
+.agents-value[data-tick] {
+  animation: count-flip var(--dur-3) var(--ease-spring);
+}
+.agents-note {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+/* The global reduced-motion rule cannot reach a range input's thumb. */
+@media (prefers-reduced-motion: reduce) {
+  .agents-slider input::-webkit-slider-thumb {
+    transition: none;
+  }
+  .agents-slider input::-moz-range-thumb {
+    transition: none;
+  }
+}
+@keyframes swarm {
+  50% {
+    transform: scale(1.9) translateY(-2.5px);
+    opacity: 0.75;
+  }
+}
+@keyframes count-flip {
+  from {
+    opacity: 0;
+    transform: translateY(70%) scale(0.5);
+    filter: blur(2px);
+  }
+}
+@media (max-width: 1180px) {
+  .agents-control {
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+  }
+  .agents-note {
+    grid-column: 1 / -1;
+  }
+}
+.mobile .agents-control {
+  grid-template-columns: minmax(0, 1fr);
+}
+/* On a phone the whole label is the 44px target; the box itself stays square. */
+.mobile .agents-switch {
+  min-height: 44px;
+}
+.mobile .agents-switch input {
+  width: 26px;
+  height: 26px;
+  min-height: 0;
+}
+/* Other codebases. Each has its own board, graph, and wiki; these only lead to them. */
+.active-board {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: var(--text-sm);
+  animation: rise-in var(--dur-3) var(--ease-out) backwards;
+}
+.active-board a {
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.other-boards {
+  margin: calc(var(--space-2) * -1) 0 var(--space-5);
+}
+.other-boards .workspace-label {
+  margin-top: 0;
+  margin-bottom: var(--space-2);
+}
+.other-board {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--sidebar-ink);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+  transition: background-color var(--dur-1);
+}
+.other-board:hover {
+  background: color-mix(in srgb, var(--sidebar-accent) 12%, transparent);
+}
+/* An open ring is a codebase at rest; a filled, pulsing dot is one being improved now. */
+.other-board::before {
+  content: "";
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--sidebar-muted);
+  border-radius: 50%;
+  color: var(--sidebar-accent);
+}
+.other-board[data-live="true"]::before {
+  border-color: var(--sidebar-accent);
+  background: var(--sidebar-accent);
+  animation: live-pulse 2.6s var(--ease-in-out) infinite;
+}
+.mobile .other-boards {
+  display: none;
+}

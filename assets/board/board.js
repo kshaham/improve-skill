@@ -400,6 +400,7 @@ function replaceRows(id, tasks) {
       return item;
     }),
   );
+  markEntrances(id, [...$(id).querySelectorAll(".task-row")]);
   if (focus)
     [...$(id).querySelectorAll(focusSelector)]
       .find((row) => row.dataset.key === focus)
@@ -452,6 +453,9 @@ function renderBoard(tasks) {
     }),
   );
   $("board").scrollLeft = scrollLeft;
+  const cards = [...$("board").querySelectorAll(".task-card")];
+  markEntrances("board", cards);
+  markMoves(cards, tasks);
   if (focus)
     [...document.querySelectorAll(".task-card, .show-more")]
       .find((card) => card.dataset.key === focus || card.dataset.column === focus)
@@ -561,6 +565,7 @@ function renderCards() {
     $(view + "-tab").setAttribute("aria-selected", String(activeView === view));
     $(view + "-tab").tabIndex = activeView === view ? 0 : -1;
   }
+  positionTabIndicator();
   if (activeView === "board") {
     $("history-list").replaceChildren();
     historySignature = "";
@@ -722,6 +727,7 @@ function render(data) {
   }
   snapshot = data;
   $("repo").textContent = data.repo;
+  renderBoards(data);
   document.title =
     (healthAlert(data.current) ? "⚠ " : "") + data.repo + " · Improve board";
   options($("run"), [
@@ -735,12 +741,10 @@ function render(data) {
       .map((area) => [area, area]),
   ]);
   finishViewRestore();
-  $("total").textContent = countText(data.tasks.length);
-  $("working").textContent = countText(data.counts.in_progress);
-  $("completed").textContent = countText(data.counts.done);
-  $("blocked").textContent = countText(
-    data.counts.blocked + data.counts.proposed,
-  );
+  tickText($("total"), countText(data.tasks.length));
+  tickText($("working"), countText(data.counts.in_progress));
+  tickText($("completed"), countText(data.counts.done));
+  tickText($("blocked"), countText(data.counts.blocked + data.counts.proposed));
   $("run-count").textContent =
     data.selected_run === "all"
       ? "Across " +
@@ -1031,6 +1035,8 @@ window.addEventListener("offline", () => {
 });
 setInterval(tickClock, 1000);
 initTheme();
+initMotion();
+initBoards();
 initControls();
 initHealth();
 initWorkflow();

@@ -26,6 +26,24 @@ port or `--port 9000` for a specific port. An occupied explicit port is an error
 an existing service's port, stop it first. Omitting `--start` runs the server in the
 foreground until Ctrl-C. All modes require the Git repository root.
 
+**One board per codebase.** A board shows only its own repository: its tasks, its knowledge
+graph (`.improve/graph.db`), and its wiki (`.improve/wiki/`); nothing is shared between
+repositories. Running boards record themselves in `boards.json` beside the global learning
+store (`~/.config/improve`, or `IMPROVE_LEARNING_HOME`), so they can lead to each other:
+
+- **The usual address follows the work.** The board on the preferred port (8765) sends its
+  page to the board of the codebase being improved now (a live run first, otherwise the
+  latest start), on the same tab, when its own run is finished or older. That board says
+  where the reader came from and links back.
+- **Any other address stays put.** A board on another port was opened for its own codebase;
+  it shows a notice with a link to the active one and never redirects.
+- The sidebar lists the other codebases' boards. Those links add `?stay=1`, which keeps that
+  tab on the chosen codebase for the rest of the browser session.
+- A board whose own run is live never sends its page away, and a page opened through a phone
+  host is never redirected to `127.0.0.1`.
+
+Always report the URL that `--start` or `--status` printed for this repository.
+
 For foreground/scheduler runs, start it after intake and repo selection. Daemon runs
 auto-start it after preparing valid run state, using either Codex or Claude. Daemon
 `--board-port` controls the port; `--no-board` skips automatic startup without stopping an

@@ -23,6 +23,13 @@ FOCUS_LEVELS = ("prefer", "normal", "skip")
 THEMES = ("ux", "animation", "security", "scale", "performance", "accessibility", "reliability",
           "observability", "tests", "features", "mobile", "dx", "docs", "api", "code-health",
           "assets", "privacy", "i18n", "seo", "concurrency")
+# The most parallel helpers (subagents, or agents in one workflow) a focus request may ask for.
+MAX_AGENTS = 10
+
+
+def agent_count(value):
+    """A requested number of parallel helpers, or 0 when the value is not a whole 1 to MAX_AGENTS."""
+    return value if type(value) is int and 1 <= value <= MAX_AGENTS else 0
 
 
 def focus_areas(value):
@@ -160,7 +167,7 @@ def request_view_at(directory):
     receipts = local_json(directory / "board-receipts.json")
     result = []
     fields = ("id", "type", "created_at", "title", "text", "area", "priority",
-              "task_key", "task_title", "decision", "run_id", "expected_status", "areas", "themes", "target_id")
+              "task_key", "task_title", "decision", "run_id", "expected_status", "areas", "themes", "agents", "target_id")
     # A pending request the user withdrew leaves the worker's queue without a worker response.
     withdrawn = {row.get("target_id"): row for row in value["requests"]
                  if row.get("type") == "withdraw" and isinstance(row.get("target_id"), str)}
@@ -212,6 +219,11 @@ def prepare_request(data, tasks, value, receipts=None):
             raise StateError("unknown improvement category")
         if themes:
             request["themes"] = [theme for theme in THEMES if theme in themes]
+        agents = data.get("agents", 0)
+        if type(agents) is not int or not 0 <= agents <= MAX_AGENTS:
+            raise StateError(f"parallel agents must be a whole number from 0 to {MAX_AGENTS}")
+        if agents:
+            request["agents"] = agents
     if kind in ("task", "priority"):
         request["priority"] = data.get("priority", "normal")
         if request["priority"] not in ("high", "normal", "low"):

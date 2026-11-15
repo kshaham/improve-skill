@@ -1,6 +1,8 @@
 "use strict";
 // Knowledge view: the cross-run knowledge graph, its curation, and the
 // "what the graph knows" section of the task dialog.
+// The last node to start growing in waits this many stagger steps.
+const GRAPH_ENTER_STAGGER_LIMIT = 24;
 const GRAPH_TYPES = [
   ["insight", "Knowledge", "#0e8159"],
   ["file", "Files", "#2f7fb8"],
@@ -440,7 +442,11 @@ function drawGraph() {
     edgeLayer.append(line);
     return { edge, line };
   });
-  for (const node of nodes) {
+  // Only nodes this graph has not drawn before grow in; a redraw after a knowledge write or a
+  // new focus leaves the ones already on screen still.
+  const entering = new Set(newEntries("graph", nodes.map((node) => node.id)));
+  let enterOrder = 0;
+  for (const [index, node] of nodes.entries()) {
     const group = svg("g", {
       class:
         "graph-node" +
@@ -455,6 +461,10 @@ function drawGraph() {
       "aria-label": `${graphTypeLabel(node)}: ${node.label}`,
     });
     group.dataset.id = node.id;
+    if (entering.has(index)) {
+      group.dataset.enter = "";
+      group.style.setProperty("--i", Math.min(enterOrder++, GRAPH_ENTER_STAGGER_LIMIT));
+    }
     // Sized by sizeGraphNodes in screen pixels.
     const circle = svg("circle", { r: "4", fill: graphColor(node.type) });
     if (node.type === "task" && STATUS_COLORS[node.status])

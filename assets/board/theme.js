@@ -2,7 +2,8 @@
 // Colour theme: follows the system by default, with a per-browser override from the footer.
 const THEME_KEY = "improve-board-theme";
 const THEME_CYCLE = ["auto", "light", "dark"];
-let themePreference = "auto";
+let themePreference = "auto",
+  themeReveal = null;
 
 function readThemePreference() {
   try {
@@ -40,9 +41,26 @@ function setThemePreference(preference) {
   applyTheme();
 }
 
-function cycleTheme() {
+// The new palette opens in a circle from the toggle where the browser can do it; reduced motion
+// and older browsers switch at once.
+function cycleTheme(event) {
   const next = THEME_CYCLE[(THEME_CYCLE.indexOf(themePreference) + 1) % THEME_CYCLE.length];
-  setThemePreference(next);
+  const root = document.documentElement;
+  const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!document.startViewTransition || still) {
+    setThemePreference(next);
+    return;
+  }
+  const box = event?.currentTarget?.getBoundingClientRect();
+  root.style.setProperty("--reveal-x", (box ? box.left + box.width / 2 : window.innerWidth / 2) + "px");
+  root.style.setProperty("--reveal-y", (box ? box.top + box.height / 2 : window.innerHeight) + "px");
+  root.dataset.themeReveal = "";
+  const transition = document.startViewTransition(() => setThemePreference(next));
+  themeReveal = transition;
+  // A second click replaces the first transition; only the latest one may clear the mark.
+  transition.finished.finally(() => {
+    if (themeReveal === transition) delete root.dataset.themeReveal;
+  });
 }
 
 // Runs before the board renders so a dark preference never flashes the light palette.

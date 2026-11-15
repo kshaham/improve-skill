@@ -27,16 +27,18 @@ function areaHue(area) {
   return FOCUS_AREAS.find((row) => row[0] === area)?.[3] ?? 100;
 }
 
-function focusSummary(areas = {}, themes = []) {
+function focusSummary(areas = {}, themes = [], agents = 0) {
   const pick = (level) =>
     FOCUS_AREAS.filter((row) => areas[row[0]] === level).map((row) => row[1]);
   const prefer = pick("prefer"),
     skip = pick("skip");
-  if (!prefer.length && !skip.length && !themes.length) return "Balanced across all areas";
+  const balanced = !prefer.length && !skip.length && !themes.length;
   return [
+    balanced ? "Balanced across all areas" : "",
     themes.length ? "Categories: " + themes.map(categoryName).join(", ") : "",
     prefer.length ? "Prefer " + prefer.join(", ") : "",
     skip.length ? "Skip " + skip.join(", ") : "",
+    agents ? "In parallel: " + agentsLabel(agents) : "",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -51,8 +53,8 @@ function savedFocus() {
   const latest = rows[rows.length - 1];
   const applied = snapshot?.current?.focus || {};
   if (latest && (latest.status === "pending" || !applied.request_id))
-    return { areas: latest.areas || {}, themes: latest.themes || [], request: latest };
-  return { areas: applied.areas || {}, themes: applied.themes || [], request: null, applied };
+    return { areas: latest.areas || {}, themes: latest.themes || [], agents: latest.agents || 0, request: latest };
+  return { areas: applied.areas || {}, themes: applied.themes || [], agents: applied.agents || 0, request: null, applied };
 }
 
 function sameFocus(left, right) {
@@ -139,6 +141,7 @@ function renderFocus() {
   if (!focusDirty) {
     focusSelection = { ...saved.areas };
     focusThemes = [...saved.themes];
+    focusAgents = saved.agents;
   }
   const counts = focusCounts(),
     live = ["current", "all"].includes(snapshot.selected_run);
@@ -162,7 +165,9 @@ function renderFocus() {
         : "No tasks yet";
   }
   const changed =
-    !sameFocus(focusSelection, saved.areas) || !sameThemes(focusThemes, saved.themes);
+    !sameFocus(focusSelection, saved.areas) ||
+    !sameThemes(focusThemes, saved.themes) ||
+    focusAgents !== saved.agents;
   if (focusDirty && !changed) focusDirty = false;
   const allowed =
     connected && !focusSending && !!snapshot.controls?.requests_available;
@@ -171,6 +176,7 @@ function renderFocus() {
   for (const input of $("focus-grid").querySelectorAll("input"))
     input.disabled = !allowed;
   renderCategories(allowed);
+  renderAgents(allowed);
   const state = $("focus-state");
   state.className = "focus-state";
   if (changed) {
@@ -186,7 +192,7 @@ function renderFocus() {
   $("focus-summary").textContent =
     skipped === FOCUS_AREAS.length
       ? "Leave at least one area available for work."
-      : focusSummary(focusSelection, focusThemes) +
+      : focusSummary(focusSelection, focusThemes, focusAgents) +
         (saved.applied?.excluded?.length
           ? ` · Run scope still excludes: ${saved.applied.excluded.join("; ")}`
           : "");
@@ -208,6 +214,7 @@ async function saveFocus() {
     themes: [...focusThemes],
     text: $("focus-note").value,
   };
+  if (focusAgents) payload.agents = focusAgents;
   const signature = JSON.stringify(payload);
   if (focusRetry?.signature !== signature)
     focusRetry = { signature, id: crypto.randomUUID() };
@@ -233,6 +240,7 @@ async function saveFocus() {
 
 function initFocus() {
   buildFocusGrid();
+  buildAgents();
   $("focus-save").addEventListener("click", saveFocus);
   $("focus-reset").addEventListener("click", () => {
     focusDirty = false;

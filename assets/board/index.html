@@ -11,10 +11,13 @@
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/board.css" />
     <script src="/theme.js" defer></script>
+    <script src="/motion.js" defer></script>
+    <script src="/boards.js" defer></script>
     <script src="/controls.js" defer></script>
     <script src="/workflow.js" defer></script>
     <script src="/drafts.js" defer></script>
     <script src="/triage.js" defer></script>
+    <script src="/agents.js" defer></script>
     <script src="/focus.js" defer></script>
     <script src="/categories.js" defer></script>
     <script src="/voice-intent.js" defer></script>
@@ -37,6 +40,10 @@
       >
       <div class="workspace-label">YOUR WORKSPACE</div>
       <div id="repo" class="repo-name">Local project</div>
+      <nav id="other-boards" class="other-boards" aria-label="Other codebases" hidden>
+        <div class="workspace-label">OTHER CODEBASES</div>
+        <div id="other-boards-list"></div>
+      </nav>
       <div class="nav-item">
         <span aria-hidden="true">▥</span> Task board
         <span class="nav-dot"></span>
@@ -53,6 +60,14 @@
           >Connecting…</span
         >
       </header>
+      <div id="active-board" class="active-board" role="status" hidden>
+        <span>improve is running in <strong id="active-board-name"></strong>. This board shows this codebase only.</span>
+        <a id="active-board-link" href="/">Open its board ↗</a>
+      </div>
+      <div id="arrived-board" class="active-board" role="status" hidden>
+        <span>This is <strong id="arrived-board-name"></strong>, the codebase improve is working on now or worked on last. You were brought here from <strong id="arrived-board-from"></strong>.</span>
+        <a id="arrived-board-link" href="/">Back to that board ↗</a>
+      </div>
       <section class="page-heading">
         <div>
           <div class="eyebrow">CONTINUOUS IMPROVEMENT</div>
@@ -162,6 +177,21 @@
           </div>
         </div>
         <div id="focus-body">
+          <div id="agents-control" class="agents-control" data-on="false">
+            <label class="agents-switch">
+              <input id="agents-enabled" type="checkbox" />
+              <span class="agents-copy">
+                <strong>Work in parallel</strong>
+                <small>Let Claude Code or Codex use workflows and subagents</small>
+              </span>
+            </label>
+            <div class="agents-slider">
+              <div id="agents-track" class="agents-track" aria-hidden="true"></div>
+              <input id="agents-count" type="range" min="1" max="10" step="1" value="5" aria-label="How many agents work in parallel" disabled />
+              <output id="agents-value" class="agents-value" for="agents-count" aria-hidden="true">5</output>
+            </div>
+            <p id="agents-note" class="agents-note"></p>
+          </div>
           <div class="focus-subheading">
             <h3>Improvement categories</h3>
             <span id="focus-category-count">Pick one or more</span>

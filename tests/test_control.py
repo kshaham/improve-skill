@@ -192,6 +192,29 @@ class ControlTests(LedgerFixture):
             self.rejected("/api/requests", self.request_data("focus", areas=areas))
         self.assertEqual((self.state / "operator.json").read_bytes(), before)
 
+    def test_focus_requests_carry_a_parallel_agent_count(self):
+        # The board's "work in parallel" switch: 1 to 10 helpers; absent or 0 means the default.
+        self.http("/api/requests", self.request_data("focus", areas={"ui": "prefer"}, agents=5))
+        self.assertEqual(control.request_view(self.repo)[-1]["agents"], 5)
+        self.http("/api/requests", self.request_data("focus", areas={"ui": "prefer"}))
+        self.assertNotIn("agents", control.request_view(self.repo)[-1], "off is stored as no field")
+        self.http("/api/requests", self.request_data("focus", areas={}, agents=0))
+        self.assertNotIn("agents", control.request_view(self.repo)[-1])
+        self.http("/api/requests", self.request_data("focus", areas={}, agents=control.MAX_AGENTS))
+        self.assertEqual(control.request_view(self.repo)[-1]["agents"], 10)
+        before = (self.state / "operator.json").read_bytes()
+        for agents in (11, -1, 2.5, "5", True, [5], None):
+            self.rejected("/api/requests", self.request_data("focus", areas={}, agents=agents))
+        self.assertEqual((self.state / "operator.json").read_bytes(), before)
+
+    def test_snapshot_exposes_the_recorded_agent_count_defensively(self):
+        for recorded, shown in ((5, 5), (10, 10), (0, 0), (11, 0), (-2, 0), ("5", 0), (True, 0), (2.5, 0), (None, 0)):
+            run = {"focus": {"board_areas": {"prefer": ["ui"], "agents": recorded}}}
+            (self.state / "run.json").write_text(json.dumps(run))
+            self.assertEqual(board.board_snapshot(self.repo)["current"]["focus"]["agents"], shown, recorded)
+        (self.state / "run.json").write_text(json.dumps({}))
+        self.assertEqual(board.board_snapshot(self.repo)["current"]["focus"].get("agents", 0), 0)
+
     def test_snapshot_exposes_worker_recorded_focus_defensively(self):
         run = {}
         run["focus"] = {"excluded": ["payments"], "board_areas": {

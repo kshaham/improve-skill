@@ -306,6 +306,8 @@ Check the count after every item. Start one refill generation when fewer than fi
 are ready **and no refill is already active**. The launch queue is not a discovery pass.
 Use the intake priorities and the persisted next scope to give up to four read-only finders
 distinct assignments; respect actual agent availability, or run the briefs serially yourself.
+When `run.json.focus.board_areas.agents` is set, the user asked on the board for that many
+parallel helpers: follow "Parallel agents" in `references/board-control.md`.
 See `references/continuation.md` for rotation, deduplication, and checkpoint rules, and
 `references/finder-briefs.md` for lane-specific evidence.
 
