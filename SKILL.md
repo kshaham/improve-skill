@@ -5,8 +5,9 @@ license: MIT
 metadata:
   author: Kamal Shaham
   created: 2026-09-05
-  version: 1.19.0
+  version: 1.19.1
   changelog: |
+    1.19.1 (2026-11-14) - a smaller package (45 files) for marketplaces with a file cap: adjacent board scripts, the board and request references, intake and work selection, and the code-layer helper modules are each one file; the dated review write-ups are gone from docs
     1.19.0 (2026-11-14) - a redesigned board (warmer palette, glass top bar, status glyphs, and motion that plays only for what changed: new cards, changed statuses and figures, a sliding tab indicator, a theme reveal; all off under reduced motion), a Work in parallel switch with a 1 to 10 slider that tells Claude Code or Codex how many subagents or workflow agents to use for finding and reviewing work, and boards that know of each other: every codebase keeps its own board, graph, and wiki, and the usual address follows the codebase being improved
     1.18.0 (2026-11-14) - a knowledge wiki rebuilt from the graph when a session finishes (index, knowledge, areas, topics dreaming discovers, changes, dreams, sessions; TOON with token budgets; Knowledge > Wiki on the board, with a filter and bookmarks; foreground runs finish with improve_ledger.py finish), a green board with importance-sized graph nodes, key knowledge, and Show filters, budgeted answers that keep their top row, and dreaming that never proposes merging notes that contradict
     1.17.0 (2026-11-12) - recovery and queued writes that never lose curated knowledge, path-escape and secret-redaction fixes, linear token budgets, a complete run view with run-set and discovery-add, focus-aware queue ranking, recency-weighted verdicts, a scope-aware code layer (instance, inherited, and super() calls, references, re-exports, package roots, more languages), change-set impact and test selection, code search and coverage, supervisor fixes for long unattended runs (stop and outcome repair, dirty relaunch, disk-full parking, final-report recovery), board fixes (drafts, new graph signals, pause polling), and CI on macOS and Python 3.9
