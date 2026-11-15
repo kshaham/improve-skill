@@ -249,7 +249,6 @@ its intake, state, daemon, and board.
 | [Request protocol](references/board-control.md) | How the skill applies and acknowledges board requests |
 | [State schema](references/ledger.md) | Durable run, task, and discovery records |
 | [Knowledge graph](references/knowledge-graph.md) | Graph contents, queries, the code layer (impact, test selection, code search), dreaming, history, and restore |
-| [Reviews and plans](docs/reviews/) | The 2026-11-08 architecture review and remediation plan, the TOON plan, the 2026-11-10 graph review and plan, and the 2026-11-12 full-codebase review and implementation plan |
 
 ## Development
 
