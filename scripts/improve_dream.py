@@ -64,7 +64,7 @@ MAX_REJECTED = 2000
 MAX_DIFF_EXAMPLES = 10
 # Bumped when inference rules change, so the first dream after an upgrade re-derives links
 # from evidence instead of keeping them by hysteresis.
-RULES_VERSION = 2
+RULES_VERSION = 3
 
 
 def outcome(status):

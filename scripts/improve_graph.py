@@ -512,6 +512,7 @@ CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u200b-\u200f\u202a-
 # Scripts written without spaces between words are indexed as character pairs.
 UNSPACED = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]")
 NEGATION = re.compile(r"\b(?:not|no|never|none|nothing|nor|neither|cannot|avoid|avoids|avoided|avoiding|without|"
+                      r"lack|lacks|lacked|lacking|missing|"
                       r"forbid|forbids|forbidden|disallow|disallowed|prohibit|prohibited|mustnt|dont|doesnt|didnt|isnt|"
                       r"arent|wasnt|werent|wont|wouldnt|shouldnt|cant|couldnt)\b|n[\'\u2019]t\b", re.IGNORECASE)
 NUMBER = re.compile(r"\d+(?:\.\d+)?")

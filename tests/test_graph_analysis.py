@@ -223,6 +223,14 @@ class DreamAnalysisTests(AnalysisCase):
         dreaming.propose(pair, {})
         self.assertEqual(pair["dream"]["proposals"], [], "a similar pair that contradicts is not proposed")
 
+    def test_should_not_read_lacking_as_the_opposite_of_needing(self):
+        # "Lacking jitter" negates as "without jitter" does; counting only one of them invented a
+        # contradiction between notes that agree, and that blocked their consolidation.
+        self.assertFalse(graph.opposed("Upload retries need jitter to avoid thundering herds",
+                                       "Upload retries lacking jitter make thundering herds"))
+        self.assertTrue(graph.opposed("Always clear the cache before the integration tests",
+                                      "Never clear the cache before the integration tests"))
+
     def test_should_group_files_deterministically_with_stable_ids(self):
         rows = []
         for index in range(4):
