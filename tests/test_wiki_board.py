@@ -168,6 +168,12 @@ class WikiWordingTests(unittest.TestCase):
         self.assertNotIn("attempts verified", script, "attempts go through wikiPlural")
         self.assertNotIn("verdicts changed", script, "verdict counts go through wikiPlural")
 
+    def test_an_untried_area_says_so_instead_of_0_of_0(self):
+        script = (ASSETS / "wiki.js").read_text()
+        self.assertIn('row.attempts ? `${row.done || 0}/${wikiPlural(row.attempts, "attempt")} verified` : "no attempts yet"', script)
+        self.assertIn('`${wikiPlural(row.notes, "note")} · ${wikiAttempts(row)}`', script)
+        self.assertIn("${wikiAttempts(page).replace(", script)
+
 class WikiAnnouncementTests(unittest.TestCase):
     def test_the_page_is_not_a_live_region_but_the_filter_count_is(self):
         # A live page would be read out in full on every filter keystroke.

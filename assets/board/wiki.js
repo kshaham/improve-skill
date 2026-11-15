@@ -253,7 +253,7 @@ function wikiIndexPage(page) {
     const button = element("button", "link-button", row.name);
     button.type = "button";
     button.addEventListener("click", () => openWikiPage(row.page));
-    item.append(button, element("small", "", `${wikiPlural(row.notes, "note")} · ${row.done}/${row.attempts} verified`));
+    item.append(button, element("small", "", `${wikiPlural(row.notes, "note")} · ${wikiAttempts(row)}`));
     areas.append(item);
   }
   return [
@@ -343,11 +343,16 @@ function wikiDreamsPage(page) {
   ];
 }
 
+// How an area's attempts went, or that none were made (never "0/0").
+function wikiAttempts(row) {
+  return row.attempts ? `${row.done || 0}/${wikiPlural(row.attempts, "attempt")} verified` : "no attempts yet";
+}
+
 // An area page carries note ids; the rows live on the knowledge page (and its `more` table).
 function wikiAreaPage(page, pages) {
   const rows = new Map(wikiAllNotes(pages).map((row) => [row.id, row]));
   return [
-    element("p", "", `${page.done || 0}/${wikiPlural(page.attempts || 0, "attempt")} verified${typeof page.success === "number" ? ` · success ${Math.round(page.success * 100)}%` : ""}`),
+    element("p", "", `${wikiAttempts(page).replace(/^./, (letter) => letter.toUpperCase())}${typeof page.success === "number" ? ` · success ${Math.round(page.success * 100)}%` : ""}`),
     wikiSection("Knowledge", [
       ...wikiCapped((page.knowledge || []).length, page.total),
       ...wikiNoteRows((page.knowledge || []).map((id) => rows.get(id)).filter(Boolean)),

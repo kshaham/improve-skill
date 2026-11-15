@@ -139,6 +139,73 @@ class WikiCommandTests(unittest.TestCase):
         self.assertTrue(all(isinstance(key, str) for key in stored["pages"]["areas/ui"]["knowledge"]),
                         "the stored document keeps ids only")
 
+    def test_a_budget_trims_a_topic_note_by_note_and_keeps_the_topic(self):
+        # Topic notes sit inside each topic; a budget used to drop the whole topic instead.
+        with graph.locked(self.repo) as value:
+            for index in range(8):
+                graph.add_insight(value, f"Topic note {index}: keep the upload retry loop bounded and logged",
+                                  kind="technique", about=["file:src/app.py"], repo=self.repo)
+            value["communities"] = {"tick": 1, "groups": [
+                {"id": "group:c1", "label": "src/app.py", "hub": "file:src/app.py", "size": 1, "cohesion": 0.5,
+                 "members": ["file:src/app.py"]}]}
+        run_file(self.repo, "completed")
+        self.assertEqual(cli(self.repo, "wiki", "build").returncode, 0)
+        full = cli(self.repo, "wiki", "topics", "--budget", "100000")
+        self.assertEqual(full.returncode, 0, full.stderr)
+        self.assertEqual(full.stdout.count("Topic note"), 8)
+        budget = max(60, len(full.stdout) // 4 - 40)
+        small = cli(self.repo, "wiki", "topics", "--budget", str(budget))
+        self.assertEqual(small.returncode, 0, small.stderr)
+        self.assertIn("group:c1", small.stdout, "the topic itself stays")
+        self.assertIn("TRUNCATED", small.stdout)
+        self.assertGreater(small.stdout.count("Topic note"), 0, "only the weakest notes are cut")
+        self.assertLess(small.stdout.count("Topic note"), 8)
+
+    def test_through_the_cli_no_kept_note_names_a_topic_the_budget_cut(self):
+        files = [f"src/m{index}.py" for index in range(10)]
+        repo = make_repo(self.tmp.name + "/many", files)
+        with graph.locked(repo) as value:
+            for index in range(2):
+                graph.add_insight(value, f"Last module note {index}: keep its cache keys stable",
+                                  kind="fact", about=["file:src/m9.py"], repo=repo)
+            value["communities"] = {"tick": 1, "groups": [
+                {"id": f"group:m{index}", "label": path, "hub": f"file:{path}", "size": 1, "cohesion": 0.5,
+                 "members": [f"file:{path}"]} for index, path in enumerate(files)]}
+        run_file(repo, "completed")
+        self.assertEqual(cli(repo, "wiki", "build").returncode, 0)
+        full = cli(repo, "wiki", "topics", "--budget", "100000").stdout
+        self.assertIn("group:m9", full)
+        small = cli(repo, "wiki", "topics", "--budget", str(int(len(full) / 3.5) - 25))
+        self.assertEqual(small.returncode, 0, small.stderr)
+        self.assertIn("TRUNCATED", small.stdout)
+        self.assertEqual(small.stdout.count('  "group:m'), 10, "every topic stays; the notes go first")
+        narrow = cli(repo, "wiki", "topics", "--budget", "100000", "--width", "5")
+        self.assertEqual(narrow.returncode, 0, narrow.stderr)
+        self.assertEqual(narrow.stdout.count('"group:m9"'), 3, "a note's topic id is never shortened")
+
+    def test_with_more_topics_than_notes_a_budget_cuts_notes_before_topics(self):
+        # The longest list used to go first: topics, leaving notes that named dropped topics.
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import improve_graph_cli
+        topics = [{"id": f"group:c{index}", "label": f"src/c{index}.py", "size": 3, "cohesion": 0.4,
+                   "files": f"src/c{index}.py src/d{index}.py src/e{index}.py", "total": 1}
+                  for index in range(20)]
+        notes = [{"topic": f"group:c{index}", "id": f"insight:{index}", "kind": "fact", "verdict": "",
+                  "text": "A note about this topic"} for index in range(15, 20)]
+        page = {"title": "Topics", "total": 20, "groups": topics, "notes": notes}
+        draw = lambda value: improve_graph_cli.render(value)  # noqa: E731
+        full = int(len(draw(page)) / improve_graph_cli.CHARS_PER_TOKEN)
+        for budget in (full - 8, full - 30, full // 2, full // 4):
+            text = improve_graph_cli.budgeted(page, budget, draw, order=("notes", "groups"))
+            self.assertIn("TRUNCATED", text, budget)
+            shown = {line.split(",")[0].strip().strip('"') for line in text.splitlines() if line.startswith('  "group:')}
+            kept_notes = [line for line in text.splitlines() if "insight:" in line]
+            self.assertIn("group:c0", shown, f"{budget}: the strongest topics stay")
+            if len(shown) < 20:
+                self.assertEqual(kept_notes, [], f"{budget}: a topic is cut only once every note is")
+        text = improve_graph_cli.budgeted(page, full - 8, draw, order=("notes", "groups"))
+        self.assertIn("insight:", text, "a small cut keeps some notes")
+
     def test_an_unknown_page_is_not_read_from_disk(self):
         run_file(self.repo, "completed")
         cli(self.repo, "wiki", "build")

@@ -31,7 +31,7 @@ BUDGET_PASSES = 12
 EXIT_AMBIGUOUS = 4
 EXIT_NOT_FOUND = 5
 # Never shortened by --width: a cut identifier or path cannot be used.
-KEEP = frozenset(("id", "ids", "file", "files", "src", "dst", "from", "to", "seeds", "node_id", "path", "paths", "commit",
+KEEP = frozenset(("id", "ids", "topic", "file", "files", "src", "dst", "from", "to", "seeds", "node_id", "path", "paths", "commit",
                   "site", "target", "key", "superseded_by", "run_id", "task_id", "hub", "members", "label", "about",
                   "code_changed", "contradicted_by", "imports", "rule", "proposal", "other", "consolidated_from",
                   "run", "tests", "symbols", "lines", "changed"))  # Commands and names an agent runs as given.
@@ -96,9 +96,10 @@ def cut(result, key):
         result[key].pop()
 
 
-def budgeted(result, budget, draw):
+def budgeted(result, budget, draw, order=None):
     """Graphify's token-budgeted answer: drop the lowest-ranked rows of the longest lists until
     the rendering fits, then say exactly what was left out and what budget shows it all.
+    `order` names lists to empty one after another instead (rows that others refer to last).
 
     Each row's cost is estimated once (its share of the rendered size, scaled from its JSON
     size), the cut is planned from those estimates, and the result is rendered only a few
@@ -123,7 +124,8 @@ def budgeted(result, budget, draw):
             lists = [(key, rows) for key, rows in row_lists(trimmed) if rows]
             if not lists:
                 break
-            key, rows = max(lists, key=lambda item: (len(item[1]), str(item[0])))
+            ordered = [item for name in (order or ()) for item in lists if item[0] == name]
+            key, rows = ordered[0] if ordered else max(lists, key=lambda item: (len(item[1]), str(item[0])))
             saved += scale * (len(json.dumps(rows[-1], separators=(",", ":"))) + 1)
             cut(trimmed, key)
         text = draw(trimmed)
@@ -348,7 +350,9 @@ def main(argv=None):
                     # bring the rest back, so say so before any budget note.
                     print(f"[!] The wiki lists {listed} of {result['total']} notes (the strongest of each kind); "
                           "`search` the graph for the rest")
-                print(budgeted(bounded(result, args), args.budget, draw))
+                # A topic's notes go before any topic, so no note names a topic left out.
+                order = ("notes", "groups") if args.page == "topics" else None
+                print(budgeted(bounded(result, args), args.budget, draw, order=order))
                 return 0
         elif args.action == "history":
             result = graph_module.history(repo, args.limit, max(0, args.offset), args.type, args.query, args.all, args.id)
@@ -502,6 +506,15 @@ def wiki_command(args, repo):
     if args.page == "knowledge":
         # `more` only lets area pages resolve their ids inside the wiki document.
         page = {key: value for key, value in page.items() if key != "more"}
+    if args.budget and args.page == "topics":
+        # A budget cuts top-level lists only: lift the notes out of their topics, interleaved so
+        # the weakest note of every topic goes first, and each topic keeps its row.
+        topics = page.get("groups", [])
+        notes = [{"topic": topic["id"], **topic["knowledge"][rank]}
+                 for rank in range(max((len(topic["knowledge"]) for topic in topics), default=0))
+                 for topic in topics if rank < len(topic["knowledge"])]
+        return {**page, "groups": [{key: value for key, value in topic.items() if key != "knowledge"}
+                                   for topic in topics], "notes": notes}
     if args.budget and args.page == "knowledge":
         # One list, strongest first across kinds, so a budget drops the weakest notes first.
         notes = [row for group in page.get("groups", []) for row in group["notes"]]

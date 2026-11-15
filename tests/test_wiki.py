@@ -398,6 +398,22 @@ class WordingTests(unittest.TestCase):
         for right in ("1 note recorded", "1 live note", "1 area", "1/1 attempt verified"):
             self.assertIn(right, text)
 
+class UntriedAreaTests(unittest.TestCase):
+    def test_an_area_with_no_attempts_shows_no_success_rate(self):
+        # The graph starts every area at a smoothed 0.5; with no attempts that is not evidence.
+        value = wiki_graph(areas=["coverage", "ui"])
+        value["nodes"]["area:coverage"]["stats"] = {"attempts": 0, "done": 0, "success": 0.5}
+        pages, _ = wiki.pages(value, None, "t1", "run-1")
+        self.assertIsNone(pages["areas/coverage"]["success"])
+        self.assertEqual(pages["areas/ui"]["success"], 0.7, "an area with attempts keeps its rate")
+        text = wiki.render(pages)
+        self.assertIn("No attempts yet.", text["areas/coverage"])
+        self.assertNotIn("success", text["areas/coverage"])
+        self.assertNotIn("0/0", text["areas/coverage"])
+        self.assertIn("coverage](areas/coverage.md): 0 notes, no attempts yet", text["index"])
+        self.assertIn("3/4 attempts verified (success 0.70)", text["areas/ui"])
+
+
 class AreaSlugTests(unittest.TestCase):
     def test_areas_whose_names_share_a_slug_keep_separate_pages(self):
         value = wiki_graph(areas=["UI", "ui", "Docs & Guides", "docs-guides"])

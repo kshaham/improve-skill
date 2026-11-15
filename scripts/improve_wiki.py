@@ -250,7 +250,9 @@ def area_pages(nodes, rows, by_file):
                        "success": ratio(as_dict(node.get("stats")).get("success"))} for node in in_area[:FILES_PER_AREA]]
         summary = {"name": name, "page": page_name, "attempts": stats.get("attempts", 0),
                    "done": stats.get("done", 0), "rejected": stats.get("rejected", 0),
-                   "success": ratio(stats.get("success")), "notes": len(in_notes)}
+                   # The graph starts every area at a smoothed rate; untried, that is not evidence.
+                   "success": ratio(stats.get("success")) if as_count(stats.get("attempts")) else None,
+                   "notes": len(in_notes)}
         summaries.append(summary)
         # Note ids only: the rows live once, on the knowledge page, so the TOON document stays small.
         result[summary["page"]] = {"title": f"Area: {name}", **summary, "total": len(in_notes),
@@ -446,8 +448,8 @@ def md_index(page):
               "## Key knowledge", ""]
     lines += [f"- **{row['kind']}**: {md(row['text'])}" for row in page["key"]] or ["- None recorded yet."]
     lines += ["", "## Areas", ""]
-    lines += [f"- [{md(row['name'])}]({row['page']}.md): {plural(row['notes'], 'note')}, {row['done']}/"
-              f"{plural(row['attempts'], 'attempt')} verified" for row in page["areas"]] or ["- None yet."]
+    lines += [f"- [{md(row['name'])}]({row['page']}.md): {plural(row['notes'], 'note')}, {attempts_text(row)}"
+              for row in page["areas"]] or ["- None yet."]
     lines += ["", "## Files that resist change", ""]
     lines += [f"- `{row['file']}`: {row['done']}/{plural(row['attempts'], 'attempt')} verified"
               for row in page.get("hotspots", [])] or ["- None: no file keeps failing."]
@@ -511,11 +513,19 @@ def md_dreams(page):
     return lines
 
 
+def attempts_text(row):
+    """How an area's attempts went, or that none were made (never "0/0")."""
+    if not as_count(row.get("attempts")):
+        return "no attempts yet"
+    return f"{row['done']}/{plural(row['attempts'], 'attempt')} verified"
+
+
 def md_area(page, rows):
     """One area: its notes (ids resolved against `rows`) and files."""
     lines = []
     success = page.get("success")
-    lines += [f"{page['done']}/{plural(page['attempts'], 'attempt')} verified"
+    tried = attempts_text(page)
+    lines += [tried[:1].upper() + tried[1:]
               + (f" (success {success:.2f})" if isinstance(success, (int, float)) else "") + ".", "",
               "[Back to the index](../index.md)", "", "## Knowledge", ""]
     lines += capped_line(len(page["knowledge"]), page.get("total"))
