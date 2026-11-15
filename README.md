@@ -96,9 +96,11 @@ git log --oneline "$baseline_commit..improve/$date"
 ## The board
 
 The board is a local web app served from `127.0.0.1`. It reads the run's ledgers directly,
-stays available after the run ends, and includes archived runs.
+stays available after the run ends, and includes archived runs. Every codebase has its own
+board, knowledge graph, and wiki; when improve moves to another codebase, a page left open
+on an older board follows it there, and the sidebar links back.
 
-![Local board showing run controls and the working columns with queued board tasks and proposals](docs/screenshots/board.png)
+![Local board showing the working columns, each with a status glyph, and task cards with their evidence](docs/screenshots/board.png)
 
 **Work in progress.** Four working columns or a compact worklist; sort and filter by
 priority; select up to fifty tasks for a bulk priority change; open any task for its
@@ -123,8 +125,11 @@ browsable activity log, all exportable as JSON.
 
 **Steering.** New tasks and guidance, priorities, proposal decisions, notes, per-area focus
 (prefer, normal, skip), twenty improvement-category tiles such as UI polish, security
-hardening, scaling, accessibility, or SEO, pause, resume, and stop. Pending requests can be
-withdrawn. Drafts survive reloads; task links and views are bookmarkable.
+hardening, scaling, accessibility, or SEO, pause, resume, and stop. A **Work in parallel**
+switch with a 1 to 10 slider says how many subagents or workflow agents Claude Code or Codex
+may use for finding and reviewing work. Pending requests can be withdrawn. Drafts survive reloads; task links and views are bookmarkable.
+
+![Focus areas with the Work in parallel slider set to five agents and four improvement categories chosen](docs/screenshots/focus.png)
 
 **Knowledge.** The Knowledge tab draws the cross-run graph: files, areas, tasks, gates,
 blockers, and recorded knowledge, on a deep-blue canvas. Show only the most important nodes or

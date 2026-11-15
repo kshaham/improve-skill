@@ -2,29 +2,28 @@
 
 [← Back to the project README](../../README.md#local-board)
 
-These are browser captures of this repository's own task ledger, taken on 2026-11-14 UTC
-during a timed improvement run of the board UI. The UI is from commit `62bbe79` on
-`improve/2026-11-14`, served by `scripts/improve_board.py` from that checkout against a copy
-of the run's `.improve` ledger (its tasks, discovery notes, and run state). The live board was
-serving the installed copy of the skill at the time, so the copy let the captures show the
-updated UI without disturbing it. The images contain recorded work, not demo fixtures or
-generated mockups.
+These are browser captures of this repository's own task ledger, retaken on 2026-11-14 for the
+1.19.0 board (the `design/award-board` branch), served by `scripts/improve_board.py` from that
+checkout against a copy of this repository's `.improve` state, so the live board was not
+disturbed. The tasks, knowledge, wiki, and history shown are this repository's own records.
 
-| Image                        | View                                               |
-| ---------------------------- | -------------------------------------------------- |
-| [board.png](board.png)       | Run controls and the current run's working columns |
-| [history.png](history.png)   | Current run's completed work in compact rows       |
-| [overview.png](overview.png) | Current run's area totals and recorded activity    |
-| [wiki.png](wiki.png)         | Knowledge > Wiki overview built at session end      |
+Two things in the copy were staged for the captures, and are not how the real run stood:
 
-No background improvement daemon was running, so the run controls are unavailable. The
-Knowledge tab shows 0 because the copy has no knowledge graph. Screenshots are a snapshot:
-their counts and task statuses will differ from the live board as work continues.
+- Seven finished tasks were set back to queued, in progress, and blocked, so the working
+  columns show cards. In the real ledger they are done.
+- The run's deadline was moved forward and its outcome cleared, so the board shows a live run.
 
-wiki.png was captured the same way from `improve/2026-11-14-2` at commit `bd6f2eb`. The
-copy also held this repository's knowledge graph and its run was marked finished, then the
-documented `improve_graph.py sync --dream` built the wiki from it. The notes, areas and
-session shown are this repository's own.
+| Image                        | View                                                              |
+| ---------------------------- | ----------------------------------------------------------------- |
+| [focus.png](focus.png)       | Focus areas: the Work in parallel slider and improvement categories (an unsaved choice) |
+| [board.png](board.png)       | The working columns with their status glyphs                      |
+| [history.png](history.png)   | Completed and rejected work in compact rows                       |
+| [overview.png](overview.png) | Area totals and recorded activity                                 |
+| [wiki.png](wiki.png)         | Knowledge > Wiki overview built at session end                    |
+
+No background improvement daemon was running, so the run controls are unavailable.
+Screenshots are a snapshot: their counts and task statuses will differ from the live board as
+work continues.
 
 To refresh them:
 
