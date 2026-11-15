@@ -194,6 +194,35 @@ class DreamAnalysisTests(AnalysisCase):
         dreaming.propose(value, report)
         self.assertIn(["insight:a", "insight:b", "insight:c"], [row["members"] for row in value["dream"]["proposals"]])
 
+    def test_should_never_propose_merging_notes_that_contradict(self):
+        # Two notes that say opposite things are a question for the user, not one note to write.
+        left = self.note("Always run the payment migrations before the seed data loads in staging", "technique")
+        right = self.note("Never run the payment migrations before the seed data loads in staging", "technique")
+        with graph.locked(self.repo) as value:
+            dreaming.dream(value, self.repo)
+        value = load(self.repo)
+        self.assertTrue(any(edge["rel"] == "contradicts" for edge in value["edges"].values()))
+        for proposal in value["dream"]["proposals"]:
+            self.assertFalse({left, right} <= set(proposal["members"]), proposal)
+        # Nor may a third note pull both into one clique.
+        state = graph.GraphState(graph.empty_graph())
+        for node_id in ("insight:a", "insight:b", "insight:c"):
+            graph.upsert(state, node_id, "insight", node_id, kind="fact", summary=node_id, source="agent")
+        for pair in (("insight:a", "insight:b"), ("insight:a", "insight:c"), ("insight:b", "insight:c")):
+            graph.link(state, *pair[:1], "similar_to", pair[1], inferred=True, confidence=0.9)
+        graph.link(state, "insight:b", "contradicts", "insight:c", inferred=True, confidence=0.7)
+        dreaming.propose(state, {})
+        for proposal in state["dream"]["proposals"]:
+            self.assertFalse({"insight:b", "insight:c"} <= set(proposal["members"]), proposal)
+        self.assertTrue(state["dream"]["proposals"], "the notes that agree are still proposed")
+        pair = graph.GraphState(graph.empty_graph())
+        for node_id in ("insight:x", "insight:y"):
+            graph.upsert(pair, node_id, "insight", node_id, kind="fact", summary=node_id, source="agent")
+        graph.link(pair, "insight:x", "similar_to", "insight:y", inferred=True, confidence=0.9)
+        graph.link(pair, "insight:x", "contradicts", "insight:y", inferred=True, confidence=0.7)
+        dreaming.propose(pair, {})
+        self.assertEqual(pair["dream"]["proposals"], [], "a similar pair that contradicts is not proposed")
+
     def test_should_group_files_deterministically_with_stable_ids(self):
         rows = []
         for index in range(4):

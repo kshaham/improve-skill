@@ -487,9 +487,11 @@ def propose(graph, report):
                     if edge["rel"] in UNDIRECTED and edge["rel"] != "contradicts" and edge.get("inferred")
                     and float(edge.get("confidence", 0)) >= 0.6 and edge["src"] in eligible and edge["dst"] in eligible),
                    key=lambda item: (-item[0], item[1], item[2]))
+    # Notes that contradict each other are a question for the user, never one note to write.
+    opposed = {frozenset((edge["src"], edge["dst"])) for edge in graph["edges"].values() if edge["rel"] == "contradicts"}
     seen, clusters = set(), []
     for _, left, right in pairs:
-        if left in seen or right in seen:
+        if left in seen or right in seen or frozenset((left, right)) in opposed:
             continue
         members = {left, right}
         candidates = sorted((adjacent.get(left, set()) & adjacent.get(right, set())) - seen,
@@ -497,7 +499,8 @@ def propose(graph, report):
         for candidate in candidates:
             if len(members) >= CLUSTER_MAX:
                 break
-            if members <= adjacent.get(candidate, set()):
+            if members <= adjacent.get(candidate, set()) and \
+                    not any(frozenset((candidate, member)) in opposed for member in members):
                 members.add(candidate)
         seen |= members
         clusters.append(sorted(members))

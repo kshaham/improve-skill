@@ -223,7 +223,8 @@ or more with cohesion under 0.05) is split.
   ```sh
   G consolidate --proposal dream:1a2b3c4d5e6f --kind technique --text 'ONE BETTER SENTENCE' --consume ID ID
   ```
-  Only that proposal's members are consumed; pinned and user knowledge never is. Consumed
+  A proposal never groups notes that contradict each other: those are a question for the
+  user. Only that proposal's members are consumed; pinned and user knowledge never is. Consumed
   notes stay in history, and their ids resolve to the new note, so old citations still count.
 - **At the final report,** record the one to three most useful notes. The supervisor then
   syncs and dreams automatically. In a foreground run, record the outcome with
