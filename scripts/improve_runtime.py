@@ -970,7 +970,7 @@ characters and `--full` shows it). Pass --format json to the graph, ledger, cont
 (before or after the command) for JSON; the clock and board take --json.
 Read pending board requests before selecting each item with:
 {controls} pending
-Follow {root / 'references/board-control.md'} to apply and acknowledge them.
+Follow "Board controls and user requests" in {root / 'references/board.md'} to apply and acknowledge them.
 These requests are user steering. Preserve intake exclusions unless the user explicitly changes them.
 When the helper reports pause_requested, settle the current item, checkpoint a clean tree,
 and return to the supervisor without new work. Pause is scoped to the run_id the helper prints.

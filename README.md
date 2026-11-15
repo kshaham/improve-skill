@@ -246,7 +246,7 @@ its intake, state, daemon, and board.
 | [Runner and recovery](docs/running.md) | Background execution, all CLI options and environment variables, resilience, troubleshooting |
 | [Development](docs/development.md) | Fast and slow test suites, browser checks, lint, CI on Linux and macOS with Python 3.9 and 3.13 |
 | [Skill instructions](SKILL.md) | The full agent execution contract |
-| [Request protocol](references/board-control.md) | How the skill applies and acknowledges board requests |
+| [Request protocol](references/board.md#board-controls-and-user-requests) | How the skill applies and acknowledges board requests |
 | [State schema](references/ledger.md) | Durable run, task, and discovery records |
 | [Knowledge graph](references/knowledge-graph.md) | Graph contents, queries, the code layer (impact, test selection, code search), dreaming, history, and restore |
 

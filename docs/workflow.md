@@ -56,7 +56,7 @@ Each cycle reads the clock and durable state, then:
 No scheduling tool is assumed to exist. Foreground mode does not send its final response
 just because a batch or report finished. The execution contract is in
 [references/continuation.md](../references/continuation.md). The
-[work-selection guide](../references/work-selection.md) turns priorities into acceptance checks,
+[work-selection guide](../references/intake.md#selecting-work-that-advances-the-users-goals) turns priorities into acceptance checks,
 confirms findings before fixes, and budgets editing plus verification rather than coding alone.
 
 ## When the queue runs dry

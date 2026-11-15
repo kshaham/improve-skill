@@ -54,8 +54,8 @@ The focus plan controls which lanes, features, screens, assets, and journeys rec
 most effort. Technical cleanup supports that plan; it must not quietly replace it. Read
 [references/continuation.md](references/continuation.md) before launching to select a real
 continuation mechanism and checkpoint the next action. Foreground continuation is the
-default when no scheduler is available. Use `references/work-selection.md` to turn the
-answers into observable goals, prioritize discovery fairly, and budget verification.
+default when no scheduler is available. Use the work-selection part of `references/intake.md`
+to turn the answers into observable goals, prioritize discovery fairly, and budget verification.
 
 ## Live task board
 
@@ -77,8 +77,8 @@ for lifecycle, task fields, and local commands.
 Before selecting work and after each settled item, read pending board requests with the
 installed `scripts/improve_control.py --repo <repo> pending` helper. Apply user task,
 priority, guidance, task notes, and proposal decisions at checkpoints; acknowledge only after saving
-the resulting plan/ledger change. Follow [references/board-control.md](references/board-control.md)
-for request handling, idempotent recovery, and cooperative pause/resume. If pause is
+the resulting plan/ledger change. Follow "Board controls and user requests" in
+[references/board.md](references/board.md) for request handling, idempotent recovery, and cooperative pause/resume. If pause is
 requested during a supervised cycle, settle current work and return a clean checkpoint;
 the supervisor waits without resetting the deadline.
 
@@ -308,7 +308,7 @@ are ready **and no refill is already active**. The launch queue is not a discove
 Use the intake priorities and the persisted next scope to give up to four read-only finders
 distinct assignments; respect actual agent availability, or run the briefs serially yourself.
 When `run.json.focus.board_areas.agents` is set, the user asked on the board for that many
-parallel helpers: follow "Parallel agents" in `references/board-control.md`.
+parallel helpers: follow "Parallel agents" in `references/board.md`.
 See `references/continuation.md` for rotation, deduplication, and checkpoint rules, and
 `references/finder-briefs.md` for lane-specific evidence.
 
@@ -333,7 +333,7 @@ new evidence, linking the previous item in `reopens`. Never rename a rejected id
 
 Reproduce or trace each claim before accepting it for implementation; inspect upstream
 guards and documented behavior that could disprove it. For visual/feature work, compare
-against the user’s acceptance checks. Use `references/work-selection.md` when estimating
+against the user’s acceptance checks. Use the work-selection part of `references/intake.md` when estimating
 work or deciding whether a priority is met, blocked, or still active.
 
 Filter by user scope and guardrails first. A confirmed critical vulnerability in scope
@@ -662,13 +662,12 @@ build a real coverage profile) can miss the deadline entirely. So:
 
 ## References
 
-- `references/intake.md` - the ten questions and persistent focus plan
-- `references/work-selection.md` - acceptance goals, evidence, scope, and verification budgets
+- `references/intake.md` - the ten questions, the persistent focus plan, and selecting work: acceptance
+  goals, evidence, scope, and verification budgets
 - `references/continuation.md` - execution modes, discovery checkpoints, recovery
-- `references/board.md` - local Kanban board, task history, startup and shutdown
-- `references/board-control.md` - run controls, user requests, and saved responses
+- `references/board.md` - local Kanban board, task history, startup and shutdown, run controls,
+  user requests and saved responses, and what to look for in each improvement category
 - `references/knowledge-graph.md` - querying and growing the cross-run knowledge graph
-- `references/categories.md` - what to look for in each board improvement category
 - `references/performance.md` - journey harnesses and profiling when performance is active
 
 - `scripts/improve-clock.sh` - elapsed, remaining, hour label, report due, deadline passed

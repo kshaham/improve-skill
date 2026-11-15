@@ -223,7 +223,7 @@ without changing evidence-based severity. The board never writes worker-owned le
 Append each request UUID once, preserving the task's original `note`, status, verification,
 and evidence. User context and priority edits do not satisfy the daemon's progress check.
 `pause.json` belongs to the user and is scoped to the supervisor's immutable `run_id`;
-the supervisor alone writes its `paused` phase. See [board-control.md](board-control.md).
+the supervisor alone writes its `paused` phase. See "Board controls and user requests" in [board.md](board.md).
 
 `discovery.jsonl` records one row per scan:
 

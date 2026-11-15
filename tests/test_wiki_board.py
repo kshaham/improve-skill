@@ -100,7 +100,7 @@ class WikiModeTests(unittest.TestCase):
         graph_js = (ASSETS / "graph.js").read_text()
         opener = graph_js[graph_js.index("function openGraphNode(id) {"):]
         self.assertIn("showGraphMode();", opener[:opener.index("\n}")])
-        location = (ASSETS / "workflow.js").read_text()
+        location = (ASSETS / "controls.js").read_text()
         reader = location[location.index("function readViewLocation"):]
         self.assertIn("showGraphMode();", reader[:reader.index("loadNodeDetail(node, true);")])
 
@@ -216,7 +216,7 @@ class WikiLocationTests(unittest.TestCase):
         self.assertIn("wikiOnScreen = wikiPage;", script[script.index("function renderWiki() {"):])
 
     def test_wiki_pages_are_bookmarkable(self):
-        location = (ASSETS / "workflow.js").read_text()
+        location = (ASSETS / "controls.js").read_text()
         writer = location[location.index("function writeViewLocation() {"):location.index("function readViewLocation() {")]
         self.assertIn('if (activeView === "graph" && wikiMode) params.set("wiki", wikiPage);', writer)
         reader = location[location.index("function readViewLocation() {"):]

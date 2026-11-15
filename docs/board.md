@@ -128,7 +128,7 @@ The board includes:
 - **Improvement categories:** tap one or more of twenty tiles such as UI/UX polish,
   Animation & transitions, Security hardening, Scaling & production, Logging & monitoring,
   Mobile & responsive, Privacy, Internationalization, or SEO. Each tile prefers its task
-  areas and tells the skill exactly what to hunt for (see `references/categories.md`).
+  areas and tells the skill exactly what to hunt for (see "Improvement categories" in `references/board.md`).
   Voice works too: “focus on animations and scaling”.
 - **Focus areas:** under **Fine-tune by area**, choose Prefer, Normal, or Skip for each task
   area (features, UI, security, performance, tests, docs, and more). Each tile shows open and finished work in that area and
@@ -210,7 +210,7 @@ Archived pending requests stay in history and are never automatically applied to
 Submitting a task or guidance while browsing an archive saves it to the current run and
 returns the Requests view there. Search includes receipt text as well as request details.
 The worker reads its pending requests and run identity together under the archival lock.
-See [request handling and controls](../references/board-control.md) for the checkpoint contract.
+See [request handling and controls](../references/board.md#board-controls-and-user-requests) for the checkpoint contract.
 
 ## Using the board from a phone
 

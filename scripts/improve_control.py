@@ -19,7 +19,7 @@ AREAS = ("general", "features", "ui", "assets", "performance", "quality", "secur
          "coverage", "concurrency", "resilience", "gate-speed", "docs", "accessibility", "contracts")
 REQUEST_TYPES = {"task", "guidance", "priority", "decision", "note", "focus", "retry", "withdraw"}
 FOCUS_LEVELS = ("prefer", "normal", "skip")
-# Improvement categories chosen from board tiles; references/categories.md defines each one.
+# Improvement categories chosen from board tiles; references/board.md ("Improvement categories") defines each one.
 THEMES = ("ux", "animation", "security", "scale", "performance", "accessibility", "reliability",
           "observability", "tests", "features", "mobile", "dx", "docs", "api", "code-health",
           "assets", "privacy", "i18n", "seo", "concurrency")

@@ -12,8 +12,9 @@ import improve_control as control  # noqa: E402
 
 PAGE = (BOARD / "index.html").read_text()
 CSS = (BOARD / "board.css").read_text()
-AGENTS = (BOARD / "agents.js").read_text()
 FOCUS = (BOARD / "focus.js").read_text()
+# The switch and slider live at the top of focus.js, ahead of the focus panel code.
+AGENTS = FOCUS[:FOCUS.index("const FOCUS_AREAS")]
 
 
 class MarkupTests(unittest.TestCase):
@@ -31,10 +32,10 @@ class MarkupTests(unittest.TestCase):
         self.assertIn("const AGENTS_DEFAULT = 5;", AGENTS)
 
     def test_the_script_is_loaded_before_the_focus_panel_and_served(self):
-        self.assertLess(PAGE.index('src="/motion.js"'), PAGE.index('src="/agents.js"'))
-        self.assertLess(PAGE.index('src="/agents.js"'), PAGE.index('src="/focus.js"'))
+        self.assertLess(PAGE.index('src="/motion.js"'), PAGE.index('src="/focus.js"'))
+        self.assertLess(FOCUS.index("const AGENTS_MAX"), FOCUS.index("const FOCUS_AREAS"))
         server = (ROOT / "scripts" / "improve_board.py").read_text()
-        self.assertIn('"/agents.js": ("agents.js", "text/javascript; charset=utf-8")', server)
+        self.assertIn('"/focus.js": ("focus.js", "text/javascript; charset=utf-8")', server)
 
 
 class BehaviourPins(unittest.TestCase):
@@ -88,7 +89,7 @@ class StyleTests(unittest.TestCase):
 
 class GuidanceTests(unittest.TestCase):
     def test_the_skill_is_told_what_the_setting_means(self):
-        guide = (ROOT / "references" / "board-control.md").read_text()
+        guide = (ROOT / "references" / "board.md").read_text()
         section = guide[guide.index("## Parallel agents"):]
         for phrase in ("Never run more than N at once", "Helpers never edit", "one item at a time",
                        "read-only assignment", "No helpers available?", "turns it off"):

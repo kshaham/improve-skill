@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from support import budget  # noqa: E402  (also points IMPROVE_LEARNING_HOME at a temporary folder)
 import improve_board as board  # noqa: E402
-import improve_boards as boards  # noqa: E402
+import improve_board as boards  # noqa: E402
 from graph_support import graph, make_repo  # noqa: E402
 
 BOARD = ROOT / "assets" / "board"
@@ -44,32 +44,32 @@ class RegistryCase(unittest.TestCase):
 
 class RegistryTests(RegistryCase):
     def test_boards_are_recorded_and_forgotten(self):
-        boards.record(self.alpha, 8765, "one")
-        boards.record(self.beta, 50123, "two")
-        self.assertEqual({path: entry["port"] for path, entry in boards.load().items()},
+        boards.record_board(self.alpha, 8765, "one")
+        boards.record_board(self.beta, 50123, "two")
+        self.assertEqual({path: entry["port"] for path, entry in boards.load_boards().items()},
                          {str(self.alpha): 8765, str(self.beta): 50123})
-        boards.forget(self.alpha, "someone-else")
-        self.assertIn(str(self.alpha), boards.load(), "only the recorded board may remove its entry")
-        boards.forget(self.alpha, "one")
-        self.assertEqual(list(boards.load()), [str(self.beta)])
+        boards.forget_board(self.alpha, "someone-else")
+        self.assertIn(str(self.alpha), boards.load_boards(), "only the recorded board may remove its entry")
+        boards.forget_board(self.alpha, "one")
+        self.assertEqual(list(boards.load_boards()), [str(self.beta)])
 
     def test_damage_reads_as_empty_and_is_repaired_by_the_next_board(self):
         self.home.mkdir(parents=True)
         for text in ("{not json", "[]", '{"boards": [1]}', '{"boards": {"/x": {"port": "80", "instance": "a"}}}',
                      '{"boards": {"/x": {"port": 0, "instance": "a"}}}', '{"boards": {"/x": {"port": 80}}}'):
             (self.home / "boards.json").write_text(text)
-            self.assertEqual(boards.load(), {}, text)
-        boards.record(self.alpha, 8765, "one")
-        self.assertEqual(list(boards.load()), [str(self.alpha)])
+            self.assertEqual(boards.load_boards(), {}, text)
+        boards.record_board(self.alpha, 8765, "one")
+        self.assertEqual(list(boards.load_boards()), [str(self.alpha)])
 
     def test_a_symlinked_registry_is_never_written_through(self):
         self.home.mkdir(parents=True)
         target = Path(self.tmp.name) / "elsewhere.json"
         target.write_text("keep")
         (self.home / "boards.json").symlink_to(target)
-        boards.record(self.alpha, 8765, "one")
+        boards.record_board(self.alpha, 8765, "one")
         self.assertEqual(target.read_text(), "keep")
-        self.assertEqual(boards.load(), {})
+        self.assertEqual(boards.load_boards(), {})
 
 
 class RankTests(RegistryCase):
@@ -113,18 +113,18 @@ class RankTests(RegistryCase):
 class ViewTests(RegistryCase):
     def setUp(self):
         super().setUp()
-        boards.record(self.alpha, 8765, "one")
-        boards.record(self.beta, 50123, "two")
+        boards.record_board(self.alpha, 8765, "one")
+        boards.record_board(self.beta, 50123, "two")
         self.up = lambda path, entry: True
 
     def test_a_finished_codebase_points_to_the_one_being_improved_and_follows(self):
         write_run(self.alpha, "2026-11-14T10:00:00Z", "2026-11-14T13:00:00Z", "completed")
         write_run(self.beta, "2026-11-14T14:00:00Z", "2999-01-01T00:00:00Z")
-        view = boards.view(self.alpha, self.up)
+        view = boards.boards_view(self.alpha, self.up)
         self.assertEqual(view["active"], {"repo": "beta", "url": "http://127.0.0.1:50123"})
         self.assertTrue(view["follow"])
         self.assertEqual(view["others"], [{"repo": "beta", "url": "http://127.0.0.1:50123", "live": True}])
-        mine = boards.view(self.beta, self.up)
+        mine = boards.boards_view(self.beta, self.up)
         self.assertIsNone(mine["active"], "the codebase being improved leads nowhere")
         self.assertFalse(mine["follow"])
         self.assertEqual(mine["others"], [{"repo": "alpha", "url": "http://127.0.0.1:8765", "live": False}])
@@ -132,50 +132,50 @@ class ViewTests(RegistryCase):
     def test_with_both_finished_the_one_run_last_is_shown(self):
         write_run(self.alpha, "2026-11-14T10:00:00Z", "2026-11-14T13:00:00Z", "completed")
         write_run(self.beta, "2026-11-12T10:00:00Z", "2026-11-12T13:00:00Z", "completed")
-        self.assertIsNone(boards.view(self.alpha, self.up)["active"])
-        view = boards.view(self.beta, self.up)
+        self.assertIsNone(boards.boards_view(self.alpha, self.up)["active"])
+        view = boards.boards_view(self.beta, self.up)
         self.assertEqual(view["active"]["repo"], "alpha")
         self.assertTrue(view["follow"])
 
     def test_a_board_whose_own_run_is_live_never_sends_its_page_away(self):
         write_run(self.alpha, "2026-11-14T10:00:00Z", "2999-01-01T00:00:00Z")
         write_run(self.beta, "2026-11-14T14:00:00Z", "2999-01-01T00:00:00Z")
-        view = boards.view(self.alpha, self.up)
+        view = boards.boards_view(self.alpha, self.up)
         self.assertEqual(view["active"]["repo"], "beta", "the later run is offered")
         self.assertFalse(view["follow"])
 
     def test_a_board_that_no_longer_answers_is_left_out_and_forgotten(self):
         write_run(self.beta, "2026-11-14T14:00:00Z", "2999-01-01T00:00:00Z")
-        view = boards.view(self.alpha, lambda path, entry: False)
+        view = boards.boards_view(self.alpha, lambda path, entry: False)
         self.assertEqual(view, {"others": [], "active": None, "follow": False})
-        self.assertEqual(list(boards.load()), [str(self.alpha)])
+        self.assertEqual(list(boards.load_boards()), [str(self.alpha)])
 
     def test_a_slow_board_is_left_out_but_not_forgotten(self):
         # One slow health answer deleted a running board for good: nothing recorded it again.
         write_run(self.beta, "2026-11-14T14:00:00Z", "2999-01-01T00:00:00Z")
-        view = boards.view(self.alpha, lambda path, entry: None)
+        view = boards.boards_view(self.alpha, lambda path, entry: None)
         self.assertEqual(view["others"], [])
-        self.assertEqual(set(boards.load()), {str(self.alpha), str(self.beta)})
+        self.assertEqual(set(boards.load_boards()), {str(self.alpha), str(self.beta)})
 
     def test_a_board_records_itself_again_without_rewriting_an_unchanged_entry(self):
-        boards.forget(self.beta)
-        boards.record(self.beta, 50123, "two")
-        self.assertIn(str(self.beta), boards.load())
+        boards.forget_board(self.beta)
+        boards.record_board(self.beta, 50123, "two")
+        self.assertIn(str(self.beta), boards.load_boards())
         before = boards.registry_path().stat().st_mtime_ns
-        boards.record(self.beta, 50123, "two")
+        boards.record_board(self.beta, 50123, "two")
         self.assertEqual(boards.registry_path().stat().st_mtime_ns, before)
 
     def test_only_the_usual_address_sends_its_page_on(self):
         write_run(self.alpha, "2026-11-14T10:00:00Z", "2026-11-14T13:00:00Z", "completed")
         write_run(self.beta, "2026-11-14T14:00:00Z", "2999-01-01T00:00:00Z")
-        elsewhere = boards.view(self.alpha, self.up, usual_address=False)
+        elsewhere = boards.boards_view(self.alpha, self.up, usual_address=False)
         self.assertEqual(elsewhere["active"]["repo"], "beta", "the link is still offered")
         self.assertFalse(elsewhere["follow"], "a board opened at its own address stays on its codebase")
-        self.assertTrue(boards.view(self.alpha, self.up, usual_address=True)["follow"])
+        self.assertTrue(boards.boards_view(self.alpha, self.up, usual_address=True)["follow"])
 
     def test_the_page_is_never_given_a_full_path(self):
         write_run(self.beta, "2026-11-14T14:00:00Z", "2999-01-01T00:00:00Z")
-        self.assertNotIn(self.tmp.name, json.dumps(boards.view(self.alpha, self.up)))
+        self.assertNotIn(self.tmp.name, json.dumps(boards.boards_view(self.alpha, self.up)))
 
 
 class TwoBoardsTests(unittest.TestCase):
@@ -230,9 +230,9 @@ class TwoBoardsTests(unittest.TestCase):
 
     def test_a_stopped_board_leaves_the_registry(self):
         (alpha, _), (beta, beta_info) = self.started
-        self.assertEqual(set(boards.load()), {str(alpha), str(beta)})
+        self.assertEqual(set(boards.load_boards()), {str(alpha), str(beta)})
         board.stop_board(alpha)
-        self.assertEqual(set(boards.load()), {str(beta)})
+        self.assertEqual(set(boards.load_boards()), {str(beta)})
         self.assertEqual(self.get(beta_info, "/api/board")["boards"]["others"], [])
 
 
@@ -240,11 +240,11 @@ class UsualAddressTests(unittest.TestCase):
     def test_the_server_follows_only_from_the_preferred_port(self):
         server = (ROOT / "scripts" / "improve_board.py").read_text()
         self.assertIn("usual_address=server.server_port == preferred_port()", server)
-        self.assertIn("improve_boards.record(server.repo, server.server_port, server.instance)", server)
+        self.assertIn("record_board(server.repo, server.server_port, server.instance)", server)
 
     def test_a_refused_connection_is_gone_and_anything_else_is_unknown(self):
         entry = {"port": 1, "instance": "x"}  # Nothing listens on port 1.
-        self.assertIs(boards.running("/nowhere", entry), False)
+        self.assertIs(boards.board_running("/nowhere", entry), False)
 
 
 class PageTests(unittest.TestCase):

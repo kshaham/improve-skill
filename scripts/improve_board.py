@@ -29,8 +29,8 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
 from improve_runtime import StateError, atomic_json, epoch, git, lock_active, read_json, recorded_timing, repo_lock, stamp
-import improve_boards
 import improve_control
+from improve_learning import global_home
 from improve_control import AREAS, THEMES, agent_count, operator_lock, pause_requested, queue_request, queue_submission, read_local, request_view, request_view_at, require_run, set_pause
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets/board"
@@ -844,8 +844,8 @@ def other_boards(server):
     if cached and time.monotonic() - cached[0] < BOARDS_TTL_SECONDS:
         return cached[1]
     try:
-        improve_boards.record(server.repo, server.server_port, server.instance)
-        value = improve_boards.view(server.repo, usual_address=server.server_port == preferred_port())
+        record_board(server.repo, server.server_port, server.instance)
+        value = boards_view(server.repo, usual_address=server.server_port == preferred_port())
     except Exception:  # The registry is a convenience; the board itself must keep answering.
         value = {"others": [], "active": None, "follow": False}
     server.boards_cache = (time.monotonic(), value)
@@ -1041,17 +1041,11 @@ class BoardHandler(BaseHTTPRequestHandler):
                   "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
                   "/motion.js": ("motion.js", "text/javascript; charset=utf-8"),
                   "/boards.js": ("boards.js", "text/javascript; charset=utf-8"),
-                  "/health.js": ("health.js", "text/javascript; charset=utf-8"),
                   "/controls.js": ("controls.js", "text/javascript; charset=utf-8"),
-                  "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),
                   "/drafts.js": ("drafts.js", "text/javascript; charset=utf-8"),
                   "/triage.js": ("triage.js", "text/javascript; charset=utf-8"),
-                  "/agents.js": ("agents.js", "text/javascript; charset=utf-8"),
                   "/focus.js": ("focus.js", "text/javascript; charset=utf-8"),
-                  "/categories.js": ("categories.js", "text/javascript; charset=utf-8"),
-                  "/voice-intent.js": ("voice-intent.js", "text/javascript; charset=utf-8"),
                   "/voice.js": ("voice.js", "text/javascript; charset=utf-8"),
-                  "/mobile.js": ("mobile.js", "text/javascript; charset=utf-8"),
                   "/overview.js": ("overview.js", "text/javascript; charset=utf-8"),
                   "/graph.js": ("graph.js", "text/javascript; charset=utf-8"),
                   "/graph-layout.js": ("graph-layout.js", "text/javascript; charset=utf-8"),
@@ -1188,7 +1182,7 @@ def serve(repo, port=None, allowed_hosts=()):
                     allowed_hosts=sorted(server.allowed_hosts),
                     phone_urls=[f"https://{host}" for host in sorted(server.allowed_hosts)])
         atomic_json(state / "board.json", info)
-        improve_boards.record(repo, server.server_port, server.instance)
+        record_board(repo, server.server_port, server.instance)
         def stop(*_):
             threading.Thread(target=server.shutdown, daemon=True).start()
         for sig in (signal.SIGTERM, signal.SIGINT):
@@ -1197,7 +1191,7 @@ def serve(repo, port=None, allowed_hosts=()):
         try:
             server.serve_forever(poll_interval=0.2)
         finally:
-            improve_boards.forget(repo, server.instance)
+            forget_board(repo, server.instance)
             server.server_close()
 
 
@@ -1274,6 +1268,174 @@ def port_number(value):
         raise argparse.ArgumentTypeError("port must be 0 through 65535 (0 chooses a free port)")
     return value
 
+
+# ---------------------------------------------------------------------------------------------
+# Which improve boards are running on this machine, and which codebase the user wants to see.
+#
+# Every repository keeps its own board, knowledge graph, and wiki under its own `.improve/`;
+# nothing here moves knowledge between repositories. A running board records itself in a small
+# per-user registry (beside the global learning store) so that the board of a finished or older
+# run can point to the board of the codebase being improved now. The registry is a convenience:
+# every function here fails soft, and a board works without it. Standard library only.
+
+BOARDS_REGISTRY = "boards.json"
+MAX_BOARDS = 50
+PROBE_SECONDS = 1
+
+
+def registry_path():
+    return global_home() / BOARDS_REGISTRY
+
+
+@contextlib.contextmanager
+def registry_lock():
+    """One writer at a time; boards start and stop independently."""
+    home = global_home()
+    home.mkdir(parents=True, exist_ok=True)
+    fd = os.open(home / "boards.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise StateError("boards.lock must be a regular file")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def load_boards():
+    """Registered boards as {repository path: {port, instance, started_at}}; damage reads as empty."""
+    try:
+        raw = read_local(registry_path())
+        value = json.loads(raw) if raw else {}
+    except (StateError, OSError, ValueError, RecursionError):
+        return {}
+    boards = value.get("boards") if isinstance(value, dict) else None
+    if not isinstance(boards, dict):
+        return {}
+    return {path: entry for path, entry in boards.items()
+            if isinstance(path, str) and isinstance(entry, dict)
+            and type(entry.get("port")) is int and 1 <= entry["port"] <= 65535
+            and isinstance(entry.get("instance"), str)}
+
+
+def save_boards(boards):
+    path = registry_path()
+    if path.is_symlink():
+        raise StateError("boards.json must not be a symlink")
+    # Newest first, bounded: a machine that has run many boards does not grow the file forever.
+    kept = sorted(boards.items(), key=lambda item: str(item[1].get("started_at") or ""), reverse=True)[:MAX_BOARDS]
+    atomic_json(path, {"boards": dict(kept)})
+
+
+def record_board(repo, port, instance):
+    """Remember that `repo`'s board is serving on `port`. Never raises. A board calls this when
+    it starts and again whenever it looks at the registry, so an entry lost to damage or to
+    another board's cleanup comes back; an unchanged entry is not rewritten."""
+    try:
+        entry = load_boards().get(str(repo))
+        if entry and entry.get("port") == int(port) and entry.get("instance") == str(instance):
+            return
+        with registry_lock():
+            boards = load_boards()
+            boards[str(repo)] = {"port": int(port), "instance": str(instance), "started_at": stamp()}
+            save_boards(boards)
+    except (StateError, OSError, ValueError):
+        pass
+
+
+def forget_board(repo, instance=None):
+    """Drop `repo`'s entry; with `instance`, only if that board is still the one recorded."""
+    try:
+        with registry_lock():
+            boards = load_boards()
+            entry = boards.get(str(repo))
+            if entry is None or (instance is not None and entry.get("instance") != instance):
+                return
+            del boards[str(repo)]
+            save_boards(boards)
+    except (StateError, OSError, ValueError):
+        pass
+
+
+def board_url(entry):
+    return f"http://127.0.0.1:{entry['port']}"
+
+
+def board_running(path, entry):
+    """True when the recorded board answers as that repository's board, False when it is gone
+    (nothing listens there, or something else does), and None when it cannot be told: a slow
+    answer is not a stopped board."""
+    try:
+        # Local board traffic must not be sent through configured HTTP proxies.
+        with build_opener(ProxyHandler({})).open(Request(board_url(entry) + "/api/health"), timeout=PROBE_SECONDS) as response:
+            health = json.load(response)
+    except URLError as exc:
+        return False if isinstance(exc.reason, ConnectionRefusedError) else None
+    except ConnectionRefusedError:
+        return False
+    except (OSError, ValueError):
+        return None
+    return (isinstance(health, dict) and health.get("service") == "improve-board"
+            and health.get("instance") == entry.get("instance") and health.get("repo") == path)
+
+
+def board_state_file(repo, name):
+    try:
+        raw = read_local(Path(repo) / ".improve" / name)
+        value = json.loads(raw) if raw else {}
+    except (StateError, OSError, ValueError, RecursionError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def run_rank(repo):
+    """(live, started_at) for a repository's latest run. A run still inside its deadline
+    outranks a finished one; among equals the later start wins. No run ranks last."""
+    run, control = board_state_file(repo, "run.json"), board_state_file(repo, "supervisor.json")
+    source = control or run
+    started = source.get("started_at") if isinstance(source.get("started_at"), str) else ""
+    if not started:
+        return False, ""
+    try:
+        remaining = recorded_timing(run, control or None)["remaining_seconds"]
+    except (StateError, ValueError, TypeError, KeyError):
+        return False, started
+    outcome = source.get("outcome")
+    # As the board itself reads it: without a supervisor, "completed" before the deadline is
+    # premature and the run is still live.
+    if not control and outcome == "completed" and remaining > 0:
+        outcome = None
+    return outcome is None and remaining > 0, started
+
+
+def boards_view(repo, probe=board_running, usual_address=True):
+    """What `repo`'s board shows about the others: every other running board, the one whose
+    codebase outranks this one (if any), and whether an open page should follow it. Only the
+    board at the usual address sends its page on, and never while its own run is live; a board
+    at any other address was opened for its own codebase, so it only offers the link."""
+    repo = str(repo)
+    mine = run_rank(repo)
+    others, stale = [], []
+    for path, entry in sorted(load_boards().items()):
+        if path == repo:
+            continue
+        answer = probe(path, entry)
+        if answer is False:
+            stale.append((path, entry["instance"]))
+        if not answer:
+            continue
+        live, started = run_rank(path)
+        others.append({"repo": Path(path).name, "url": board_url(entry), "live": live, "started_at": started})
+    for path, instance in stale:
+        forget_board(path, instance)
+    others.sort(key=lambda row: (row["live"], row["started_at"]), reverse=True)
+    best = others[0] if others and (others[0]["live"], others[0]["started_at"]) > mine else None
+    return {"others": [{"repo": row["repo"], "url": row["url"], "live": row["live"]} for row in others],
+            "active": {"repo": best["repo"], "url": best["url"]} if best else None,
+            "follow": bool(best) and not mine[0] and bool(usual_address)}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
