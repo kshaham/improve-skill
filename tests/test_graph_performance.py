@@ -25,8 +25,20 @@ MEASURE = (
     "    runpy.run_path(sys.argv[0], run_name='__main__')\n"
     "except SystemExit as stop:\n"
     "    code = stop.code or 0\n"
-    "scale = 1 if sys.platform == 'darwin' else 1024\n"
-    "print('RSS', resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * scale, file=sys.stderr)\n"
+    # On Linux a child's ru_maxrss starts at its parent's size when it was forked, so a test
+    # process that has grown would report its own memory for every command. VmHWM is this
+    # process's own peak.
+    "def peak():\n"
+    "    try:\n"
+    "        with open('/proc/self/status') as status:\n"
+    "            for line in status:\n"
+    "                if line.startswith('VmHWM:'):\n"
+    "                    return int(line.split()[1]) * 1024\n"
+    "    except OSError:\n"
+    "        pass\n"
+    "    scale = 1 if sys.platform == 'darwin' else 1024\n"
+    "    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * scale\n"
+    "print('RSS', peak(), file=sys.stderr)\n"
     "sys.exit(code)\n")
 
 
@@ -67,17 +79,29 @@ class LongRunScale(unittest.TestCase):
         restore_environment(cls.previous)
         cls.temp.cleanup()
 
+    def once(self, *args):
+        """Wall time (ms) and peak memory (MB) of one real CLI process."""
+        started = time.perf_counter()
+        result = subprocess.run([sys.executable, "-c", MEASURE, SCRIPT, "--repo", str(self.repo), *args],
+                                capture_output=True, text=True, timeout=budget(60))
+        wall = (time.perf_counter() - started) * 1000
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return wall, int(result.stderr.rsplit("RSS", 1)[1]) / 2 ** 20
+
     def cli(self, *args, runs=7):
         """Median wall time (ms) and peak memory (MB) of a real CLI process."""
-        times, peak = [], 0
+        samples = [self.once(*args) for _ in range(runs)]
+        return statistics.median(wall for wall, _ in samples), max(peak for _, peak in samples)
+
+    def cli_in_turn(self, commands, runs=7):
+        """Median and best wall time (ms) and peak memory (MB) per command, with the commands
+        taking turns each round so a busy moment on the machine falls on all of them alike."""
+        samples = {name: [] for name in commands}
         for _ in range(runs):
-            started = time.perf_counter()
-            result = subprocess.run([sys.executable, "-c", MEASURE, SCRIPT, "--repo", str(self.repo), *args],
-                                    capture_output=True, text=True, timeout=budget(60))
-            times.append((time.perf_counter() - started) * 1000)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            peak = max(peak, int(result.stderr.rsplit("RSS", 1)[1]) / 2 ** 20)
-        return statistics.median(times), peak
+            for name, args in commands.items():
+                samples[name].append(self.once(*args))
+        return {name: (statistics.median(wall for wall, _ in rows), min(wall for wall, _ in rows),
+                       max(peak for _, peak in rows)) for name, rows in samples.items()}
 
     def test_scale_is_what_a_long_run_produces(self):
         tasks = sum(node["type"] == "task" for node in self.value["nodes"].values())
@@ -89,16 +113,19 @@ class LongRunScale(unittest.TestCase):
 
     def test_agent_reads_are_fast_lean_and_beat_loading_everything(self):
         file_path = self.files[3]
-        context, context_rss = self.cli("context", "--files", file_path)
-        with_area, area_rss = self.cli("context", "--files", file_path, "--area", "ui")
-        search, search_rss = self.cli("search", "fixture module")
-        node, node_rss = self.cli("node", "file:" + file_path)
-        whole, whole_rss = self.cli("stats")
-        for name, wall, rss in (("context", context, context_rss), ("context with area", with_area, area_rss),
-                                ("search", search, search_rss), ("node", node, node_rss)):
+        reads = self.cli_in_turn({"context": ("context", "--files", file_path),
+                                  "context with area": ("context", "--files", file_path, "--area", "ui"),
+                                  "search": ("search", "fixture module"),
+                                  "node": ("node", "file:" + file_path),
+                                  "whole": ("stats",)})
+        for name in ("context", "context with area", "search", "node"):
             with self.subTest(command=name):
+                wall, _, rss = reads[name]
                 self.assertLess(wall, budget(400), f"{name} median {wall:.0f} ms")
                 self.assertLess(rss, budget(90), f"{name} peak {rss:.0f} MB")
+        # Compare designs on each command's best time: noise only ever adds to a run.
+        context, node, with_area, whole = (reads[name][1] for name in ("context", "node", "context with area", "whole"))
+        context_rss, whole_rss = reads["context"][2], reads["whole"][2]
         # A file's context and a node read a neighborhood; an area walks all of its tasks by design.
         self.assertLess(context, whole * 0.8, f"context {context:.0f} ms vs whole-graph read {whole:.0f} ms")
         self.assertLess(node, whole * 0.8, f"node {node:.0f} ms vs whole-graph read {whole:.0f} ms")
