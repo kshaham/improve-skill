@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 from playwright.sync_api import expect, sync_playwright
 
@@ -123,7 +124,11 @@ def check_graph(page, repo, tasks, write_tasks, artifacts):
 
     page.set_viewport_size({"width": 390, "height": 844})
     page.locator("#graph-fit").click()
-    overflow = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+    # The layout switch and the fit animate; measure the settled page, not a frame in between.
+    measure = "document.documentElement.scrollWidth - document.documentElement.clientWidth"
+    settle_by = time.monotonic() + 5
+    while (overflow := page.evaluate(measure)) > 1 and time.monotonic() < settle_by:
+        page.wait_for_timeout(100)
     assert overflow <= 1, f"knowledge view overflows a phone by {overflow}px"
     page.screenshot(path=str(artifacts / "graph-mobile.png"), full_page=True)
     page.set_viewport_size({"width": 1500, "height": 1000})

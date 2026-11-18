@@ -237,7 +237,10 @@ def main():
                 expect(page.locator("#detail-blocked")).to_contain_text("(2 times): Runner offline since 02:00")
                 expect(page.locator(".task-card .card-note")).to_contain_text("Runner offline since 02:00")
                 page.locator("#close-dialog").click()
+                # Closing hands focus back to the card a moment later; typing before that would miss the search box.
+                expect(page.locator(".task-card")).to_be_focused()
                 page.locator("#search").fill("")
+                expect(page.locator(".task-card")).to_have_count(3)
 
                 # Connection to the viewer is separate from daemon liveness and report completion.
                 now = time.time()
@@ -321,7 +324,7 @@ def main():
                 expect(page.locator("#theme-toggle")).to_have_text("Theme: light")
                 page.locator("#theme-toggle").click()
                 expect(page.locator("html")).to_have_attribute("data-theme", "dark")
-                assert page.evaluate("getComputedStyle(document.body).backgroundColor") == "rgb(21, 22, 28)"
+                assert page.evaluate("getComputedStyle(document.body).backgroundColor") == "rgb(10, 13, 12)"
                 page.screenshot(path=str(artifacts / "dark-mobile.png"), full_page=True)
                 page.locator("#theme-toggle").click()
                 expect(page.locator("#theme-toggle")).to_have_text("Theme: auto")
