@@ -472,7 +472,7 @@ class ScaleTests(unittest.TestCase):
 
     def test_every_query_is_fast_at_scale(self):
         value, files = self.value, self.files
-        budget = {
+        queries = {
             "context file": lambda: graph.context(value, files[:5], "ui", repo=self.repo),
             "context directory": lambda: graph.context(value, ["src/m3"], repo=self.repo),
             "context text": lambda: graph.context(value, text="fixture flag needs"),
@@ -487,7 +487,7 @@ class ScaleTests(unittest.TestCase):
             "board focus": lambda: graph.board_view(value, focus="area:ui", depth=3, limit=800),
             "board query": lambda: graph.board_view(value, query="timed out", limit=800),
         }
-        for name, query in budget.items():
+        for name, query in queries.items():
             with self.subTest(query=name):
                 started = time.perf_counter()
                 result = query()
