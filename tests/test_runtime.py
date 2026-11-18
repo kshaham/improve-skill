@@ -1068,7 +1068,9 @@ class DaemonTests(unittest.TestCase):
 
     def test_deadline_grace_bounds_long_cycle(self):
         self.env.update(IMPROVE_FINISH_GRACE="1", IMPROVE_CYCLE_TIMEOUT="3600")
-        result = self.invoke("overrun", duration="1s")
+        # Deadlines are whole seconds, so "1s" can leave no time at all to launch the
+        # cycle this test is about; three seconds always leaves at least two.
+        result = self.invoke("overrun", duration=f"{max(3, round(budget(3)))}s")
         self.assertEqual(result.returncode, 0, result.stderr)
         run = self.load()
         # Bound cleanup against the saved deadline, excluding Python/git startup.
