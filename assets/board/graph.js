@@ -332,12 +332,16 @@ function renderKnowledgeMetrics() {
   $("graph-refined").textContent = relativeTime(summary?.last_refine);
 }
 
-function renderGraphView() {
-  const summary = snapshot?.graph;
-  renderKnowledgeMetrics();
+function renderGraphCount() {
   $("visible-count").textContent = graphData
     ? `${countText(graphData.nodes.length)} of ${countText(graphData.total_nodes)} nodes shown`
     : "Loading knowledge…";
+}
+
+function renderGraphView() {
+  const summary = snapshot?.graph;
+  renderKnowledgeMetrics();
+  renderGraphCount();
   if (graphQueryKey() !== graphKey || (summary && summary.revision !== graphRevision))
     loadGraph();
   else if (graphData && !graphFrame) animateGraph();
@@ -368,6 +372,8 @@ async function loadGraph() {
     graphKey = key;
     graphRevision = data.revision;
     if (changedScope) graphFitPending = true;
+    // An unchanged snapshot is not rendered again, so the count must follow the load itself.
+    if (activeView === "graph" && !wikiMode) renderGraphCount();
     drawGraph();
     renderGraphLists();
     // A refresh after a save keeps that confirmation; only a new scope is described,
