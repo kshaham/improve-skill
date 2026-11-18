@@ -1,6 +1,6 @@
 """Ledger writes that do not lose data: citations accumulate, concurrent writers queue on a
 lock, damaged and id-less lines survive, and starting a task without a graph lookup earns an
-advisory hint (review 2026-11-10, sections 2.5, 2.6, 3.3, and Graphify's always-on nudge)."""
+advisory hint (Graphify's always-on nudge)."""
 import json
 from pathlib import Path
 import subprocess

@@ -1,6 +1,6 @@
 // Self-checking harness for assets/board/drafts.js, run by tests/test_board_js.py.
 // It loads the real drafts.js into a sandbox with a stub DOM and localStorage, then replays
-// the review's failure (a cancelled Retry/Withdraw form made every saved draft unreadable)
+// an earlier failure (a cancelled Retry/Withdraw form made every saved draft unreadable)
 // and the rules that replace it. Usage: node drafts_check.mjs <path to drafts.js>
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";

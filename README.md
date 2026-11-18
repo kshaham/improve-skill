@@ -150,9 +150,8 @@ that follows the system, and voice steering ("focus on security and skip docs", 
 add offline mode, high priority", "pause the run"). For phone access put the board behind a
 private HTTPS tunnel and pass `--allow-host`.
 
-The screenshots are real captures of this repository's board; the UI has gained the run
-health panel, notifications, and dark theme since they were taken. Open a board by hand for
-any repository with an improvement ledger:
+The screenshots are real captures of this repository's board. Open a board by hand for any
+repository with an improvement ledger:
 
 ```sh
 improve_board="$HOME/Code/improve-skill/scripts/improve-board.sh"

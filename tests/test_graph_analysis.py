@@ -1,6 +1,6 @@
 """Query quality and whole-graph analysis: context weighting, resolved blockers, retrieval,
 code fingerprints, paths that avoid hubs, contradictions, clique proposals, module groups,
-surprises, questions, reports, and export (review 2026-11-10, sections 4 and 8)."""
+surprises, questions, reports, and export."""
 import json
 import os
 from pathlib import Path

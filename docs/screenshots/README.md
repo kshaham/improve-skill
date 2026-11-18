@@ -1,11 +1,10 @@
 # Board screenshots
 
-[← Back to the project README](../../README.md#local-board)
+[← Back to the project README](../../README.md#the-board)
 
 These are browser captures of this repository's own task ledger, retaken on 2026-11-14 for the
-1.19.0 board (the `design/award-board` branch), served by `scripts/improve_board.py` from that
-checkout against a copy of this repository's `.improve` state, so the live board was not
-disturbed. The tasks, knowledge, wiki, and history shown are this repository's own records.
+1.19.0 board, served by `scripts/improve_board.py` against a copy of this repository's
+`.improve` state, so the live board was not disturbed. The tasks, knowledge, wiki, and history shown are this repository's own records.
 
 Two things in the copy were staged for the captures, and are not how the real run stood:
 

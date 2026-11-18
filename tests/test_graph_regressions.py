@@ -1,4 +1,4 @@
-"""Regressions from the 2026-11-12 full-codebase review, stream G: queued and replayed writes
+"""Graph regressions: queued and replayed writes
 are never lost, paths cannot leave the repository, budgets stay linear, odd input never
 breaks an answer, and the maintenance passes stay correct at their bounds."""
 import contextlib

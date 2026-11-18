@@ -1,5 +1,5 @@
 """Knowledge integrity: what counts as the same knowledge, whose wording wins, and that proof
-and evidence are neither lost nor counted twice (review 2026-11-10, section 1 and 5)."""
+and evidence are neither lost nor counted twice."""
 from pathlib import Path
 import sqlite3
 import sys

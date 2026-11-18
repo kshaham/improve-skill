@@ -1,5 +1,4 @@
-"""Code-layer features from the second Graphify pass (review 2026-11-12, sections 3.5, 3.6, 6):
-change-set impact, test selection, code search and dotted lookup, the last-good-parse and
+"""Code-layer features: change-set impact, test selection, code search and dotted lookup, the last-good-parse and
 shrink guards, bounded cycle search, code-only and split module groups, schema upgrades, and
 their command lines."""
 import json

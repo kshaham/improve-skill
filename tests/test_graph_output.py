@@ -1,6 +1,6 @@
 """Helper output for the agent: TOON never costs more than JSON, switches work in any
 position, text is bounded without cutting identifiers, budgets say what they left out, and
-the brief keeps its short sections (review 2026-11-10, sections 3 and 4.1)."""
+the brief keeps its short sections."""
 import io
 import json
 import os

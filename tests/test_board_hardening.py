@@ -1,4 +1,4 @@
-"""Board server fixes from the 2026-11-12 review: liveness outside the snapshot ETag, quarantine
+"""Board server hardening: liveness outside the snapshot ETag, quarantine
 commands safe to paste, a parse cache that fits every run, cross-site reads refused, and a
 report endpoint that cannot wait forever on the operator lock."""
 import contextlib

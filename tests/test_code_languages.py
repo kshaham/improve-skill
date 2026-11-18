@@ -1,4 +1,4 @@
-"""Languages besides Python in the code layer (review 2026-11-12, section 6): JavaScript and
+"""Languages besides Python in the code layer: JavaScript and
 TypeScript resolution (tsconfig paths, workspaces, barrels, named-import calls, comments and
 strings ignored), imports for Go, Java/Kotlin, Ruby and C/C++, generated and vendored code,
 and coverage reporting so an unindexed language never reads as "nothing depends on this"."""

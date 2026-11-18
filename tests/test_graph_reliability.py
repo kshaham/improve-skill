@@ -1,5 +1,5 @@
 """Reliability: curated knowledge survives recovery, busy writes are queued, co-change and
-renamed files keep their history (review 2026-11-10, section 2)."""
+renamed files keep their history."""
 import fcntl
 import json
 import os

@@ -164,7 +164,7 @@ class DocumentedSettingsTests(unittest.TestCase):
 
 
 class ContinuousIntegrationTests(unittest.TestCase):
-    """The workflow must keep exercising what the review found untested: macOS, Python 3.9 for
+    """The workflow must keep exercising what once went untested: macOS, Python 3.9 for
     every suite, lint, bounded jobs, and test-order independence."""
 
     def setUp(self):

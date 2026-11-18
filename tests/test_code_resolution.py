@@ -1,8 +1,6 @@
-"""Python resolution in the code layer never guesses (review 2026-11-12, sections 3.5 and 6):
+"""Python resolution in the code layer never guesses:
 scoped bindings, builtins, star imports, package roots, re-exports, inheritance, instance /
-inherited / super() calls, symbol references, overrides in impact, and every call site.
-Each case from the review's probes (graphify-probes/probe_calls.py, probe_more.py,
-probe_roots.py; graph-probes/p3_resolver.py) is a test here."""
+inherited / super() calls, symbol references, overrides in impact, and every call site."""
 from pathlib import Path
 import sqlite3
 import subprocess

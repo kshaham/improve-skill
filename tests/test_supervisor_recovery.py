@@ -1,4 +1,4 @@
-"""Supervisor recovery paths from the 2026-11-12 review (section 2), in process and through the daemon.
+"""Supervisor recovery paths, in process and through the daemon.
 
 The in-process tests drive improve_runtime.Supervisor with a stubbed launch, so a persistent
 error, a full disk, or a clock jump can be staged exactly. The daemon tests reuse the fake CLI
@@ -99,7 +99,7 @@ class SupervisorFixture(unittest.TestCase):
 
 
 class StateErrorRecoveryTests(SupervisorFixture):
-    """Section 2.1: a state error at the top of the loop must not stop every cycle."""
+    """A state error at the top of the loop must not stop every cycle."""
 
     def test_unauthorized_target_reached_is_cleared_and_the_next_cycle_launches(self):
         sup = self.supervisor()
@@ -119,7 +119,7 @@ class StateErrorRecoveryTests(SupervisorFixture):
         self.assertEqual(runtime.read_json(sup.control_path)["outcome"], "target reached")
 
     def test_stop_with_a_bad_outcome_returns_at_once_with_a_small_journal(self):
-        # The review's probe: this spun for good and wrote 2.5 MB of tracebacks in 3 seconds.
+        # This spun for good and wrote 2.5 MB of tracebacks in 3 seconds.
         sup = self.supervisor()
         self.write_run(sup, outcome="target reached")
         sup.stop_path.touch()
@@ -194,7 +194,7 @@ class StateErrorRecoveryTests(SupervisorFixture):
 
 
 class PromptTests(SupervisorFixture):
-    """Section 5.2/5.3: one source for state reads and the TOON grammar."""
+    """One source for state reads and the TOON grammar."""
 
     def test_prompt_reads_state_through_helpers_and_names_the_write_commands(self):
         prompt = self.supervisor().prompt()
@@ -215,7 +215,7 @@ class PromptTests(SupervisorFixture):
 
 
 class DiskFullTests(SupervisorFixture):
-    """Section 2.3: ENOSPC anywhere in an iteration parks instead of halting."""
+    """ENOSPC anywhere in an iteration parks instead of halting."""
 
     def test_disk_full_is_recognized_through_wrapping_errors(self):
         try:
@@ -274,7 +274,7 @@ class DiskFullTests(SupervisorFixture):
 
 
 class ClockJumpTests(SupervisorFixture):
-    """Section 2.4: a laptop asleep past the deadline must not let the cycle keep working."""
+    """A laptop asleep past the deadline must not let the cycle keep working."""
 
     class JumpingClock:
         """time.time() jumps forward once the cycle has started; the monotonic clock does not."""
@@ -311,7 +311,7 @@ class ClockJumpTests(SupervisorFixture):
 
 
 class LimitDetectionTests(unittest.TestCase):
-    """Section 2.5: a limit is read from the end of the output, not from echoed tool output."""
+    """A limit is read from the end of the output, not from echoed tool output."""
 
     def test_limit_in_the_closing_message_counts(self):
         self.assertTrue(runtime.limit_hit("work output\n" * 100 + "You've hit your usage limit. Try again at 5pm."))
@@ -322,7 +322,7 @@ class LimitDetectionTests(unittest.TestCase):
 
 
 class BriefIsolationTests(SupervisorFixture):
-    """Section 2.5: one bad store costs only its own part of the cycle brief."""
+    """One bad store costs only its own part of the cycle brief."""
 
     def test_learning_failure_keeps_the_recovery_brief(self):
         import improve_learning
@@ -346,7 +346,7 @@ class BriefIsolationTests(SupervisorFixture):
 
 
 class RecoveryDaemonTests(daemon_tests.ResilienceTests):
-    """The section 2 recovery paths end to end, in the default resilient configuration."""
+    """The recovery paths end to end, in the default resilient configuration."""
 
     def journal(self):
         path = self.state / "journal.md"
@@ -647,7 +647,7 @@ for _name in [name for name in dir(daemon_tests.ResilienceTests) if name.startsw
 
 
 class WrapperTests(unittest.TestCase):
-    """Section 2.5: the shell wrappers work through a symlink and with CDPATH set (bash 3.2 too)."""
+    """The shell wrappers work through a symlink and with CDPATH set (bash 3.2 too)."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="improve wrappers ")
